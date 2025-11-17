@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "cf-opus-proxy",
+	"name": "opus-transcriber-proxy",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-09-18",
 	"compatibility_flags": [
