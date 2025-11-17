@@ -33,7 +33,6 @@ export class Transcriptionator extends DurableObject<Env> {
 
 	// RPC method to broadcast messages to all observers
 	broadcastMessage(data: string): void {
-		console.log(`Broadcasting message to ${this.observers.size} observers`);
 		this.observers.forEach((observer) => {
 			try {
 				observer.send(data);
