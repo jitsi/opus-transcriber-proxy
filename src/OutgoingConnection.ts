@@ -1,4 +1,5 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
+import type { TranscriptionMessage } from './transcriberproxy';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -89,8 +90,8 @@ export class OutgoingConnection {
 
 	private lastTranscriptTime?: number = undefined;
 
-	onInterimTranscription?: (message: string) => void = undefined;
-	onCompleteTranscription?: (message: string) => void = undefined;
+	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
+	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
 
 	constructor(tag: string, env: Env) {
@@ -374,16 +375,15 @@ export class OutgoingConnection {
 		}
 	}
 
-	private getTranscriptionMessage(transcript: string, timestamp: number, isInterim: boolean): any {
-		const message = {
+	private getTranscriptionMessage(transcript: string, timestamp: number, isInterim: boolean): TranscriptionMessage {
+		const message: TranscriptionMessage = {
 			transcript: [{ text: transcript }],
 			is_interim: isInterim,
-			event: 'SPEECH',
 			type: 'transcription-result',
 			participant: this.participant,
 			timestamp,
 		};
-		return JSON.stringify(message);
+		return message;
 	}
 
 	private async handleOpenAIMessage(data: any): Promise<void> {

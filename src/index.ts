@@ -1,5 +1,5 @@
 import { extractSessionParameters } from './utils';
-import { TranscriberProxy } from './transcriberproxy';
+import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { Transcriptionator } from './transcriptionator';
 
 export default {
@@ -29,7 +29,7 @@ export default {
 			const session = new TranscriberProxy(server, env);
 
 			let outbound: WebSocket | undefined;
-			let stub: DurableObjectStub<Transcriptionator> | undefined;
+			let transcriptionator: DurableObjectStub<Transcriptionator> | undefined;
 
 			if (connect) {
 				try {
@@ -47,25 +47,27 @@ export default {
 
 			if (sessionId) {
 				// Connect to transcriptionator durable object to relay messages
-				stub = env.TRANSCRIPTIONATOR.getByName(sessionId);
+				transcriptionator = env.TRANSCRIPTIONATOR.getByName(sessionId);
 			}
 
 			session.on('closed', () => {
 				outbound?.close();
-				stub?.notifySessionClosed();
+				transcriptionator?.notifySessionClosed();
 				server.close();
 			});
 
-			session.on('interim_transcription', (data: any) => {
-				outbound?.send(data);
-				stub?.broadcastMessage(data);
-				server.send(data);
+			session.on('interim_transcription', (data: TranscriptionMessage) => {
+				const message = JSON.stringify(data);
+				outbound?.send(message);
+				transcriptionator?.broadcastMessage(message);
+				server.send(message);
 			});
 
-			session.on('transcription', (data: any) => {
-				outbound?.send(data);
-				stub?.broadcastMessage(data);
-				server.send(data);
+			session.on('transcription', (data: TranscriptionMessage) => {
+				const message = JSON.stringify(data);
+				outbound?.send(message);
+				transcriptionator?.broadcastMessage(message);
+				server.send(message);
 			});
 
 			// Accept the connection and return immediately

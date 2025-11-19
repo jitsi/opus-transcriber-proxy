@@ -1,6 +1,14 @@
 import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 
+export interface TranscriptionMessage {
+	transcript: Array<{ text: string }>;
+	is_interim: boolean;
+	type: 'transcription-result';
+	participant: { id: string; ssrc?: string };
+	timestamp: number;
+}
+
 export class TranscriberProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
