@@ -42,7 +42,7 @@
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
-	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+	"services": [{ "binding": "TRANSCRIPTION_DISPATCHER", "service": "transcription-dispatcher" }],
 	"durable_objects": {
         "bindings": [
             {
