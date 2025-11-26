@@ -416,7 +416,7 @@ export class OutgoingConnection {
 			// Reset completed
 			this.setTag(this.pendingTags.shift()!);
 		} else if (parsedMessage.type === 'error') {
-			console.error(`OpenAI sent error message for ${this._tag}: ${parsedMessage}`);
+			console.error(`OpenAI sent error message for ${this._tag}: ${data}`);
 			this.doClose(true);
 		}
 		// TODO: are there any other messages we care about?
