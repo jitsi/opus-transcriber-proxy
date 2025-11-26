@@ -124,23 +124,25 @@ export default {
 						text: data.transcript.map((t) => t.text).join(' '),
 						timestamp: data.timestamp,
 					};
-					ctx.waitUntil(
-						dispatcher
-							?.dispatch(dispatcherMessage)
-							.then((response) => {
-								if (!response.success || response.errors) {
-									console.error('Dispatcher error:', {
-										message: response.message,
-										errors: response.errors,
-										dispatcherMessage,
-									});
-								}
-							})
-							.catch((error) => {
-								const message = error instanceof Error ? error.message : String(error);
-								console.error('Dispatcher RPC failed:', message, dispatcherMessage);
-							}),
-					);
+					// Note: We intentionally don't use ctx.waitUntil() here because the
+					// ExecutionContext from the initial WebSocket upgrade request becomes
+					// stale after the response is sent. Using it would cause "IoContext
+					// timed out due to inactivity" errors when transcription events fire.
+					dispatcher
+						?.dispatch(dispatcherMessage)
+						.then((response) => {
+							if (!response.success || response.errors) {
+								console.error('Dispatcher error:', {
+									message: response.message,
+									errors: response.errors,
+									dispatcherMessage,
+								});
+							}
+						})
+						.catch((error) => {
+							const message = error instanceof Error ? error.message : String(error);
+							console.error('Dispatcher RPC failed:', message, dispatcherMessage);
+						});
 				}
 			});
 
