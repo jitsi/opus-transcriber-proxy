@@ -136,6 +136,8 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 		const wasmInstance = await OpusDecoder.opusModule;
 		this.wasm = wasmInstance;
 
+		console.log('OpusDecoder WASM module loaded');
+
 		this._input = this.allocateTypedArray(this._inputSize, Uint8Array);
 
 		this._output = this.allocateTypedArray(this._channels * this._outputChannelSize, Int16Array);
