@@ -83,14 +83,16 @@ jobs:
                 ./emsdk install ${{ inputs.emsdk_version }}
                 ./emsdk activate ${{ inputs.emsdk_version }}
                 source ./emsdk_env.sh
+                cd ..
+                npm run build
                 echo "EMSDK=$EMSDK" >> $GITHUB_ENV
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
                 echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
 
-            - name: Build ts app
-              run: |
-                source "$EMSDK/emsdk_env.sh"
-                npm run build
+            # - name: Build ts app
+            #   run: |
+            #     source "$EMSDK/emsdk_env.sh"
+            #     npm run build
 
             - name: Wrangler Deploy
               uses: cloudflare/wrangler-action@v3
