@@ -110,7 +110,6 @@ export default {
 			}
 
 			session.on('transcription', (data: TranscriptionMessage) => {
-				console.log('Transcription event:', JSON.stringify(data));
 				const message = outbound || transcriptionator || sendBack ? JSON.stringify(data) : '';
 				outbound?.send(message);
 				transcriptionator?.broadcastMessage(message);
@@ -139,7 +138,6 @@ export default {
 									dispatcherMessage,
 								});
 							}
-							console.log('Sent to dispatcher: ', JSON.stringify(dispatcherMessage), '; Response:', JSON.stringify(response));
 						})
 						.catch((error) => {
 							const message = error instanceof Error ? error.message : String(error);

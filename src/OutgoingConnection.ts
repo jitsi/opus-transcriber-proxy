@@ -284,8 +284,14 @@ export class OutgoingConnection {
 
 		try {
 			// Decode the Opus audio data
+			console.log(`Decoding opus frame of size ${opusFrame.length} for tag: ${this._tag}`);
 			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
+			if (decodedAudio.errors.length > 0) {
+				console.error(`Opus decoding errors for tag ${this._tag}:`, decodedAudio.errors);
+				return;
+			}
 			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
+			console.log(`Decoded opus frame to ${decodedAudio.pcmData.length} samples for tag: ${this._tag}`);
 			this.sendOrEnqueueDecodedAudio(decodedAudio.pcmData);
 		} catch (error) {
 			console.error(`Error processing audio data for tag ${this._tag}:`, error);
