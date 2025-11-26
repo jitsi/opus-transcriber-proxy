@@ -63,7 +63,7 @@ jobs:
             - name: Install Linux deps
               run: |
                 sudo apt update
-                sudo apt -y install wget unzip
+                sudo apt -y install wget unzip libopus-dev
 
             - name: Setup Emscripten SDK
               run: |
@@ -76,11 +76,6 @@ jobs:
                 echo "EMSDK=$EMSDK" >> $GITHUB_ENV
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
                 echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
-
-            - uses: actions/setup-node@v4
-              with:
-                  node-version: 22
-                  cache: npm
 
             - name: Install dependencies
               run: |
