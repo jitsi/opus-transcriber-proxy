@@ -68,9 +68,14 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 	static opusModule = new Promise<OpusWasmInstance>((resolve, reject) => {
 		OpusDecoderModule({
 			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				let instance = new WebAssembly.Instance(wasm, info);
-				receive(instance);
-				return instance.exports;
+				try {
+					let instance = new WebAssembly.Instance(wasm, info);
+					receive(instance);
+					return instance.exports;
+				} catch (error) {
+					reject(error);
+					throw error;
+				}
 			},
 		}).then((module: any) => {
 			resolve({
@@ -83,6 +88,8 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 				HEAP: module.wasmMemory.buffer,
 				module,
 			});
+		}).catch((error) => {
+			reject(error);
 		});
 	});
 
