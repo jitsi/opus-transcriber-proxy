@@ -21,10 +21,10 @@ on:
                 required: true
                 default: main
             emsdk_version:
-                description: Emscripten SDK version, defaults to latest
+                description: Emscripten SDK version, defaults to 4.0.15
                 type: string
                 required: false
-                default: latest
+                default: "4.0.15"
             preCommand:
                 description: Provide a bash script to execute before running wrangler
                 type: string
@@ -83,21 +83,19 @@ jobs:
                 ./emsdk install ${{ inputs.emsdk_version }}
                 ./emsdk activate ${{ inputs.emsdk_version }}
                 source ./emsdk_env.sh
-                cd ..
-                npm run build
                 echo "EMSDK=$EMSDK" >> $GITHUB_ENV
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
                 echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
 
-            # - name: Build ts app
-            #   run: |
-            #     source "$EMSDK/emsdk_env.sh"
-            #     npm run build
+            - name: Build TS App
+              run: |
+                source "$EMSDK/emsdk_env.sh"
+                npm run build
 
             - name: Wrangler Deploy
               uses: cloudflare/wrangler-action@v3
               with:
-                  wranglerVersion: "4.40.2"
+                  wranglerVersion: "4.51.0"
                   apiToken: ${{ secrets[env.CF_TOKEN] }}
                   accountId: ${{ secrets[env.CF_ACCOUNT] }}
                   preCommands: ${{ inputs.preCommand }}
