@@ -5,6 +5,14 @@
 // submodules and compiled into the dist files, may have different
 // licensing terms."
 
+// Provide Node.js globals for emscripten module.  HACK.
+if (typeof globalThis.__filename === 'undefined') {
+	globalThis.__filename = './opus-decoder.js';
+}
+if (typeof globalThis.__dirname === 'undefined') {
+	globalThis.__dirname = '.'
+}
+
 import OpusDecoderModule from '../../dist/opus-decoder.js';
 // @ts-ignore
 import wasm from '../../dist/opus-decoder.wasm';

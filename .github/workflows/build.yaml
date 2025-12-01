@@ -21,10 +21,10 @@ on:
                 required: true
                 default: main
             emsdk_version:
-                description: Emscripten SDK version, defaults to 4.0.15
+                description: Emscripten SDK version, defaults to 4.0.20
                 type: string
                 required: false
-                default: "4.0.15"
+                default: "4.0.20"
             preCommand:
                 description: Provide a bash script to execute before running wrangler
                 type: string

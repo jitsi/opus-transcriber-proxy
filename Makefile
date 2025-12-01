@@ -7,15 +7,17 @@ OPUS_DECODER_DIST=./dist
 
 OPUS_DECODER_EMSCRIPTEN_BUILD=$(OPUS_DECODER_BUILD)/EmscriptenWasm.tmp.js
 OPUS_DECODER_EMSCRIPTEN_WASM=$(OPUS_DECODER_BUILD)/EmscriptenWasm.tmp.wasm
+OPUS_DECODER_EMSCRIPTEN_WASM_MAP=$(OPUS_DECODER_BUILD)/EmscriptenWasm.tmp.wasm.map
 OPUS_DECODER_MODULE=$(OPUS_DECODER_DIST)/opus-decoder.js
 OPUS_DECODER_WASM=$(OPUS_DECODER_DIST)/opus-decoder.wasm
+OPUS_DECODER_WASM_MAP=$(OPUS_DECODER_DIST)/opus-decoder.wasm.map
 
 LIBOPUS_SRC=$(OPUS_DECODER_SRC)/opus
 LIBOPUS_BUILD=$(OPUS_DECODER_BUILD)/build-opus-wasm
 LIBOPUS_WASM_LIB=$(OPUS_DECODER_BUILD)/libopus.a
 
 clean:
-	rm -rf $(OPUS_DECODER_EMSCRIPTEN_BUILD) $(OPUS_DECODER_EMSCRIPTEN_WASM) $(OPUS_DECODER_MODULE) $(OPUS_DECODER_WASM) $(LIBOPUS_WASM_LIB)
+	rm -rf $(OPUS_DECODER_EMSCRIPTEN_BUILD) $(OPUS_DECODER_EMSCRIPTEN_WASM) $(OPUS_DECODER_EMSCRIPTEN_WASM_MAP) $(OPUS_DECODER_MODULE) $(OPUS_DECODER_WASM) $(OPUS_DECODER_WASM_MAP) $(LIBOPUS_WASM_LIB)
 	+emmake $(MAKE) -C $(LIBOPUS_BUILD) clean
 
 configure: libopus-configure
@@ -35,6 +37,10 @@ opus-decoder: opus-wasmlib $(OPUS_DECODER_EMSCRIPTEN_BUILD)
 	else \
 		echo "Warning: WASM file not found, you may need to adjust emscripten settings"; \
 	fi
+	@if [ -f "$(OPUS_DECODER_EMSCRIPTEN_WASM_MAP)" ]; then \
+		cp $(OPUS_DECODER_EMSCRIPTEN_WASM_MAP) $(OPUS_DECODER_WASM_MAP); \
+		echo "Copied WASM source map to $(OPUS_DECODER_WASM_MAP)"; \
+	fi
 
 # libopus
 opus-wasmlib: $(LIBOPUS_WASM_LIB)
@@ -44,12 +50,13 @@ define EMCC_OPTS
 -O2 \
 -msimd128 \
 --minify 0 \
+-gsource-map \
 -s WASM=1 \
 -s TEXTDECODER=2 \
 -s SINGLE_FILE=0 \
 -s MALLOC="emmalloc" \
 -s NO_FILESYSTEM=1 \
--s ENVIRONMENT=web \
+-s ENVIRONMENT=node \
 -s ASSERTIONS=1 \
 -s ABORTING_MALLOC=0 \
 -s EXIT_RUNTIME=0 \
