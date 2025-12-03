@@ -10,7 +10,7 @@ if (typeof globalThis.__filename === 'undefined') {
 	globalThis.__filename = './opus-decoder.js';
 }
 if (typeof globalThis.__dirname === 'undefined') {
-	globalThis.__dirname = '.'
+	globalThis.__dirname = '.';
 }
 
 import OpusDecoderModule from '../../dist/opus-decoder.js';
@@ -85,20 +85,22 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 					throw error;
 				}
 			},
-		}).then((module: any) => {
-			resolve({
-				opus_frame_decoder_create: module._opus_frame_decoder_create,
-				opus_frame_decoder_destroy: module._opus_frame_decoder_destroy,
-				opus_frame_decoder_reset: module._opus_frame_decoder_reset,
-				opus_frame_decode: module._opus_frame_decode,
-				malloc: module._malloc,
-				free: module._free,
-				HEAP: module.wasmMemory.buffer,
-				module,
+		})
+			.then((module: any) => {
+				resolve({
+					opus_frame_decoder_create: module._opus_frame_decoder_create,
+					opus_frame_decoder_destroy: module._opus_frame_decoder_destroy,
+					opus_frame_decoder_reset: module._opus_frame_decoder_reset,
+					opus_frame_decode: module._opus_frame_decode,
+					malloc: module._malloc,
+					free: module._free,
+					HEAP: module.wasmMemory.buffer,
+					module,
+				});
+			})
+			.catch((error) => {
+				reject(error);
 			});
-		}).catch((error) => {
-			reject(error);
-		});
 	});
 
 	private _sampleRate: OpusDecoderSampleRate;
