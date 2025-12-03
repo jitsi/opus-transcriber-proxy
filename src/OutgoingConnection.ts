@@ -172,6 +172,7 @@ export class OutgoingConnection {
 								},
 							},
 						},
+						include: ['item.input_audio_transcription.logprobs'],
 					},
 				};
 
@@ -379,10 +380,22 @@ export class OutgoingConnection {
 		}
 	}
 
-	private getTranscriptionMessage(transcript: string, timestamp: number, isInterim: boolean): TranscriptionMessage {
+	private getTranscriptionMessage(
+		transcript: string,
+		confidence: number | undefined,
+		timestamp: number,
+		message_id: string,
+		isInterim: boolean,
+	): TranscriptionMessage {
 		const message: TranscriptionMessage = {
-			transcript: [{ text: transcript }],
+			transcript: [
+				{
+					...(confidence !== undefined && { confidence }),
+					text: transcript,
+				},
+			],
 			is_interim: isInterim,
+			message_id,
 			type: 'transcription-result',
 			participant: this.participant,
 			timestamp,
@@ -404,7 +417,8 @@ export class OutgoingConnection {
 			if (this.lastTranscriptTime !== undefined) {
 				this.lastTranscriptTime = now;
 			}
-			const transcription = this.getTranscriptionMessage(parsedMessage.delta, now, true);
+			const confidence = parsedMessage.logprobs?.logprob !== undefined ? Math.exp(parsedMessage.logprobs.logprob) : undefined;
+			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.message_id, true);
 			this.onInterimTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.completed') {
 			let transcriptTime;
@@ -414,7 +428,14 @@ export class OutgoingConnection {
 			} else {
 				transcriptTime = Date.now();
 			}
-			const transcription = this.getTranscriptionMessage(parsedMessage.transcript, transcriptTime, false);
+			const confidence = parsedMessage.logprobs?.logprob !== undefined ? Math.exp(parsedMessage.logprobs.logprob) : undefined;
+			const transcription = this.getTranscriptionMessage(
+				parsedMessage.transcript,
+				confidence,
+				transcriptTime,
+				parsedMessage.message_id,
+				false,
+			);
 			this.onCompleteTranscription?.(transcription);
 		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
 			// Reset completed

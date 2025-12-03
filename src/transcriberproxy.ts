@@ -2,8 +2,10 @@ import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 
 export interface TranscriptionMessage {
-	transcript: Array<{ text: string }>;
+	transcript: Array<{ confidence?: number; text: string }>;
 	is_interim: boolean;
+	language?: string;
+	message_id: string;
 	type: 'transcription-result';
 	participant: { id: string; ssrc?: string };
 	timestamp: number;
