@@ -115,6 +115,10 @@ export class OutgoingConnection {
 		// Reset the pending audio buffer
 		this.pendingAudioFrames = [];
 		this.pendingAudioDataBuffer.resize(0);
+
+		this.lastChunkNo = -1;
+		this.lastTimestamp = -1;
+		this.lastOpusFrameSize = -1;
 	}
 
 	private async initializeOpusDecoder(): Promise<void> {
@@ -263,7 +267,7 @@ export class OutgoingConnection {
 		}
 
 		/* Make sure numbers make sense */
-		const chunkDeltaInSamples = chunkDelta * this.lastOpusFrameSize;
+		const chunkDeltaInSamples = this.lastOpusFrameSize > 0 ? chunkDelta * this.lastOpusFrameSize : Infinity;
 		const timestampDeltaInSamples = (timestampDelta / 48000) * 24000;
 		const maxConcealment = 120 * 24; /* 120 ms at 24 kHz */
 
