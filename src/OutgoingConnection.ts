@@ -421,8 +421,8 @@ export class OutgoingConnection {
 			if (this.lastTranscriptTime !== undefined) {
 				this.lastTranscriptTime = now;
 			}
-			const confidence = parsedMessage.logprobs?.logprob !== undefined ? Math.exp(parsedMessage.logprobs.logprob) : undefined;
-			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.message_id, true);
+			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
+			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.item_id, true);
 			this.onInterimTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.completed') {
 			let transcriptTime;
@@ -432,12 +432,12 @@ export class OutgoingConnection {
 			} else {
 				transcriptTime = Date.now();
 			}
-			const confidence = parsedMessage.logprobs?.logprob !== undefined ? Math.exp(parsedMessage.logprobs.logprob) : undefined;
+			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
 			const transcription = this.getTranscriptionMessage(
 				parsedMessage.transcript,
 				confidence,
 				transcriptTime,
-				parsedMessage.message_id,
+				parsedMessage.item_id,
 				false,
 			);
 			this.onCompleteTranscription?.(transcription);
