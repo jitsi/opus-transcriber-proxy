@@ -165,7 +165,7 @@ export class OutgoingConnection {
 									type: 'near_field',
 								},
 								transcription: {
-									model: 'gpt-4o-transcribe',
+									model: env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
 									language: 'en', // TODO parameterize this
 								},
 								turn_detection: {
