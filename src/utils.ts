@@ -27,3 +27,23 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		sendBack: !!sendBack,
 	};
 }
+
+export function getTurnDetectionConfig(env: Env) {
+	const defaultTurnDetection = {
+		type: 'server_vad',
+		threshold: 0.5,
+		prefix_padding_ms: 300,
+		silence_duration_ms: 500,
+	};
+
+	if (env.OPENAI_TURN_DETECTION) {
+		try {
+			return JSON.parse(env.OPENAI_TURN_DETECTION);
+		} catch (error) {
+			console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
+			return defaultTurnDetection;
+		}
+	}
+
+	return defaultTurnDetection;
+}

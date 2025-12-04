@@ -1,5 +1,6 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage } from './transcriberproxy';
+import { getTurnDetectionConfig } from './utils';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -168,12 +169,7 @@ export class OutgoingConnection {
 									model: env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
 									language: 'en', // TODO parameterize this
 								},
-								turn_detection: {
-									type: 'server_vad',
-									threshold: 0.5,
-									prefix_padding_ms: 300,
-									silence_duration_ms: 500,
-								},
+								turn_detection: getTurnDetectionConfig(env),
 							},
 						},
 						include: ['item.input_audio_transcription.logprobs'],
