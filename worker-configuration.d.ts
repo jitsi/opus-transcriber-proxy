@@ -9,6 +9,7 @@ declare namespace Cloudflare {
 	interface Env {
 		OPENAI_API_KEY: string;
 		OPENAI_MODEL?: string;
+		OPENAI_TURN_DETECTION?: string;
 		TRANSCRIPTIONATOR: DurableObjectNamespace<import("./src/index").Transcriptionator>;
 		TRANSCRIPTION_DISPATCHER: Fetcher /* transcription-dispatcher */;
 	}
