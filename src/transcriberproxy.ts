@@ -75,6 +75,9 @@ export class TranscriberProxy extends EventEmitter {
 			newConnection.onClosed = (tag) => {
 				this.outgoingConnections.delete(tag);
 			};
+			newConnection.onError = (tag, error) => {
+				this.emit('error', tag, error);
+			};
 
 			this.outgoingConnections.set(tag, newConnection);
 			console.log(`Created outgoing connection entry for tag: ${tag}`);

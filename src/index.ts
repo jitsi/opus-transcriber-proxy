@@ -99,6 +99,14 @@ export default {
 				server.close();
 			});
 
+			session.on('error', (tag, error) => {
+				const message = `Error in session ${tag}: ${error}`;
+				console.error(message);
+				outbound?.close(1001, message);
+				transcriptionator?.notifySessionClosed();
+				server.close(1011, message);
+			});
+
 			if (outbound || transcriptionator || sendBack) {
 				session.on('interim_transcription', (data: TranscriptionMessage) => {
 					const message = JSON.stringify(data);
