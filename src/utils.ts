@@ -24,10 +24,10 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		sessionId,
 		transcribe,
 		connect,
-		useTranscriptionator: !!useTranscriptionator,
-		useDispatcher: !!useDispatcher,
-		sendBack: !!sendBack,
-		sendBackInterim: !!sendBackInterim,
+		useTranscriptionator: useTranscriptionator === 'true',
+		useDispatcher: useDispatcher === 'true',
+		sendBack: sendBack === 'true',
+		sendBackInterim: sendBackInterim === 'true',
 	};
 }
 
