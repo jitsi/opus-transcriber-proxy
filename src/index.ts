@@ -45,7 +45,7 @@ export default {
 		}
 
 		if (transcribe) {
-			if (!useTranscriptionator && !useDispatcher && !sendBack && !connect) {
+			if (!useTranscriptionator && !useDispatcher && !sendBack && !sendBackInterim && !connect) {
 				return new Response('No transcription output method specified', { status: 400 });
 			}
 
