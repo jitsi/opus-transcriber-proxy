@@ -46,8 +46,6 @@ export function writeMetric(
     return;
   }
 
-  console.log('Writing metric:', event.name, event.sessionId);
-
   analytics.writeDataPoint({
     blobs: [
       event.name,
