@@ -96,6 +96,7 @@ export class OutgoingConnection {
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
 	onOpenAIError?: (errorType: string, errorMessage: string) => void = undefined;
+	onError?: (tag: string, error: any) => void = undefined;
 
 	private env: Env;
 
@@ -142,6 +143,8 @@ export class OutgoingConnection {
 		} catch (error) {
 			console.error(`Failed to create Opus decoder for tag ${this._tag}:`, error);
 			this.decoderStatus = 'failed';
+			this.doClose(true);
+			this.onError?.(this._tag, `Error initializing Opus decoder: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -204,6 +207,7 @@ export class OutgoingConnection {
 				this.onOpenAIError?.('websocket_error', 'WebSocket connection error');
 				this.doClose(true);
 				this.connectionStatus = 'failed';
+				this.onError?.(this._tag, `Error connecting to OpenAI service: ${error instanceof Error ? error.message : String(error)}`);
 			});
 
 			openaiWs.addEventListener('close', () => {
@@ -291,6 +295,7 @@ export class OutgoingConnection {
 			this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
 		} catch (error) {
 			console.error(`Error concealing ${samplesToConceal} samples for tag ${this._tag}:`, error);
+			// Don't call onError for concealment errors, as they may be transient
 		}
 	}
 
@@ -305,6 +310,7 @@ export class OutgoingConnection {
 			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
 			if (decodedAudio.errors.length > 0) {
 				console.error(`Opus decoding errors for tag ${this._tag}:`, decodedAudio.errors);
+				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
 			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
@@ -371,6 +377,7 @@ export class OutgoingConnection {
 			this.openaiWebSocket.send(audioMessageString);
 		} catch (error) {
 			console.error(`Failed to send audio to OpenAI for tag ${this._tag}`, error);
+			// TODO should this call onError?
 		}
 	}
 
@@ -466,6 +473,7 @@ export class OutgoingConnection {
 			});
 			this.onOpenAIError?.('api_error', parsedMessage.error?.message || data);
 			this.doClose(true);
+			this.onError?.(this._tag, `OpenAI service sent error message: ${data}`);
 		}
 		// TODO: are there any other messages we care about?
 	}
