@@ -1,6 +1,7 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage } from './transcriberproxy';
 import { getTurnDetectionConfig } from './utils';
+import { writeMetric } from './metrics';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -94,9 +95,13 @@ export class OutgoingConnection {
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
+	onOpenAIError?: (errorType: string, errorMessage: string) => void = undefined;
+
+	private env: Env;
 
 	constructor(tag: string, env: Env) {
 		this.setTag(tag);
+		this.env = env;
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
@@ -191,6 +196,12 @@ export class OutgoingConnection {
 
 			openaiWs.addEventListener('error', (error) => {
 				console.error(`OpenAI WebSocket error for tag ${this._tag}:`, error);
+				writeMetric(this.env.METRICS, {
+					name: 'openai_api_error',
+					worker: 'opus-transcriber-proxy',
+					errorType: 'websocket_error',
+				});
+				this.onOpenAIError?.('websocket_error', 'WebSocket connection error');
 				this.doClose(true);
 				this.connectionStatus = 'failed';
 			});
@@ -202,6 +213,12 @@ export class OutgoingConnection {
 			});
 		} catch (error) {
 			console.error(`Failed to create OpenAI WebSocket connection for tag ${this._tag}:`, error);
+			writeMetric(this.env.METRICS, {
+				name: 'openai_api_error',
+				worker: 'opus-transcriber-proxy',
+				errorType: 'connection_failed',
+			});
+			this.onOpenAIError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
 			this.connectionStatus = 'failed';
 		}
 	}
@@ -442,6 +459,12 @@ export class OutgoingConnection {
 			this.setTag(this.pendingTags.shift()!);
 		} else if (parsedMessage.type === 'error') {
 			console.error(`OpenAI sent error message for ${this._tag}: ${data}`);
+			writeMetric(this.env.METRICS, {
+				name: 'openai_api_error',
+				worker: 'opus-transcriber-proxy',
+				errorType: 'api_error',
+			});
+			this.onOpenAIError?.('api_error', parsedMessage.error?.message || data);
 			this.doClose(true);
 		}
 		// TODO: are there any other messages we care about?
