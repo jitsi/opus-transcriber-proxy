@@ -100,11 +100,16 @@ export default {
 			});
 
 			session.on('error', (tag, error) => {
-				const message = `Error in session ${tag}: ${error}`;
-				console.error(message);
-				outbound?.close(1001, message);
-				transcriptionator?.notifySessionClosed();
-				server.close(1011, message);
+				try {
+					const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+					console.error(message);
+					outbound?.close(1001, message);
+					transcriptionator?.notifySessionClosed();q
+					server.close(1011, message);
+				} catch (closeError) {
+					// Error handlers do not themselves catch errors, so log to console
+					console.error(`Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+				}
 			});
 
 			if (outbound || transcriptionator || sendBackInterim) {

@@ -22,7 +22,7 @@ export class TranscriberProxy extends EventEmitter {
 	private env: Env;
 
 	constructor(ws: WebSocket, env: Env) {
-		super();
+		super({captureRejections: true});
 		this.ws = ws;
 		this.env = env;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
