@@ -12,6 +12,7 @@ declare namespace Cloudflare {
 		OPENAI_TURN_DETECTION?: string;
 		TRANSCRIPTIONATOR: DurableObjectNamespace<import("./src/index").Transcriptionator>;
 		TRANSCRIPTION_DISPATCHER: Fetcher /* transcription-dispatcher */;
+		METRICS?: AnalyticsEngineDataset;
 	}
 }
 interface Env extends Cloudflare.Env {}

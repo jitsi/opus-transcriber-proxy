@@ -2,6 +2,7 @@ import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { Transcriptionator } from './transcriptionator';
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { writeMetric } from './metrics';
 
 export interface DispatcherTranscriptionMessage {
 	sessionId: string;
@@ -110,6 +111,13 @@ export default {
 			}
 
 			session.on('transcription', (data: TranscriptionMessage) => {
+				// Track successful transcription
+				writeMetric(env.METRICS, {
+					name: 'transcription_success',
+					worker: 'opus-transcriber-proxy',
+					sessionId: sessionId ?? undefined,
+				});
+
 				const message = outbound || transcriptionator || sendBack ? JSON.stringify(data) : '';
 				outbound?.send(message);
 				transcriptionator?.broadcastMessage(message);
