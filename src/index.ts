@@ -38,7 +38,7 @@ export default {
 		const parameters = extractSessionParameters(request.url);
 		console.log('Session parameters:', JSON.stringify(parameters));
 
-		const { url, sessionId, transcribe, connect, useTranscriptionator, useDispatcher, sendBack } = parameters;
+		const { url, sessionId, transcribe, connect, useTranscriptionator, useDispatcher, sendBack, sendBackInterim } = parameters;
 
 		if (!url.pathname.endsWith('/events') && !url.pathname.endsWith('/transcribe')) {
 			return new Response('Bad URL', { status: 400 });
@@ -107,7 +107,7 @@ export default {
 				server.close(1011, message);
 			});
 
-			if (outbound || transcriptionator || sendBack) {
+			if (outbound || transcriptionator || sendBackInterim) {
 				session.on('interim_transcription', (data: TranscriptionMessage) => {
 					const message = JSON.stringify(data);
 					outbound?.send(message);
