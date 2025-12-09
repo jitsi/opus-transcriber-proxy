@@ -11,6 +11,10 @@ export interface TranscriptionMessage {
 	timestamp: number;
 }
 
+export interface TranscriberProxyOptions {
+	language: string | null;
+}
+
 export class TranscriberProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
@@ -20,11 +24,13 @@ export class TranscriberProxy extends EventEmitter {
 	// three concurrent speakers.
 	private MAX_OUTGOING_CONNECTIONS = 4;
 	private env: Env;
+	private options: TranscriberProxyOptions;
 
-	constructor(ws: WebSocket, env: Env) {
+	constructor(ws: WebSocket, env: Env, options: TranscriberProxyOptions) {
 		super({captureRejections: true});
 		this.ws = ws;
 		this.env = env;
+		this.options = options;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
 
 		this.ws.addEventListener('close', () => {
@@ -64,7 +70,7 @@ export class TranscriberProxy extends EventEmitter {
 		}
 
 		if (this.outgoingConnections.size < this.MAX_OUTGOING_CONNECTIONS) {
-			const newConnection = new OutgoingConnection(tag, this.env);
+			const newConnection = new OutgoingConnection(tag, this.env, this.options);
 
 			newConnection.onInterimTranscription = (message) => {
 				this.emit('interim_transcription', message);
