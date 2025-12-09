@@ -1,5 +1,5 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
-import type { TranscriptionMessage } from './transcriberproxy';
+import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
 
@@ -99,10 +99,12 @@ export class OutgoingConnection {
 	onError?: (tag: string, error: any) => void = undefined;
 
 	private env: Env;
+	private options: TranscriberProxyOptions;
 
-	constructor(tag: string, env: Env) {
+	constructor(tag: string, env: Env, options: TranscriberProxyOptions) {
 		this.setTag(tag);
 		this.env = env;
+		this.options = options;
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
@@ -160,6 +162,13 @@ export class OutgoingConnection {
 				console.log(`OpenAI WebSocket connected for tag: ${this._tag}`);
 				this.connectionStatus = 'connected';
 
+				const transcriptionConfig: { model: string; language?: string } = {
+					model: env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
+				};
+				if (this.options.language !== null) {
+					transcriptionConfig.language = this.options.language;
+				}
+
 				const sessionConfig = {
 					type: 'session.update',
 					session: {
@@ -173,10 +182,7 @@ export class OutgoingConnection {
 								noise_reduction: {
 									type: 'near_field',
 								},
-								transcription: {
-									model: env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
-									language: 'en', // TODO parameterize this
-								},
+								transcription: transcriptionConfig,
 								turn_detection: getTurnDetectionConfig(env),
 							},
 						},

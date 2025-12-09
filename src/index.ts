@@ -38,7 +38,7 @@ export default {
 		const parameters = extractSessionParameters(request.url);
 		console.log('Session parameters:', JSON.stringify(parameters));
 
-		const { url, sessionId, transcribe, connect, useTranscriptionator, useDispatcher, sendBack, sendBackInterim } = parameters;
+		const { url, sessionId, transcribe, connect, useTranscriptionator, useDispatcher, sendBack, sendBackInterim, language } = parameters;
 
 		if (!url.pathname.endsWith('/events') && !url.pathname.endsWith('/transcribe')) {
 			return new Response('Bad URL', { status: 400 });
@@ -54,7 +54,7 @@ export default {
 
 			server.accept();
 
-			const session = new TranscriberProxy(server, env);
+			const session = new TranscriberProxy(server, env, { language });
 
 			let outbound: WebSocket | undefined;
 			let transcriptionator: DurableObjectStub<Transcriptionator> | undefined;
@@ -104,7 +104,7 @@ export default {
 					const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 					console.error(message);
 					outbound?.close(1001, message);
-					transcriptionator?.notifySessionClosed();q
+					transcriptionator?.notifySessionClosed();
 					server.close(1011, message);
 				} catch (closeError) {
 					// Error handlers do not themselves catch errors, so log to console

@@ -7,6 +7,7 @@ export interface ISessionParameters {
 	useDispatcher: boolean;
 	sendBack: boolean;
 	sendBackInterim: boolean;
+	language: string | null;
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -18,6 +19,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const useDispatcher = parsedUrl.searchParams.get('useDispatcher');
 	const sendBack = parsedUrl.searchParams.get('sendBack');
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
+	const lang = parsedUrl.searchParams.get('lang');
 
 	return {
 		url: parsedUrl,
@@ -28,6 +30,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		useDispatcher: useDispatcher === 'true',
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
+		language: lang
 	};
 }
 
