@@ -254,16 +254,21 @@ export class OutgoingConnection {
 		}
 
 		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
-			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo - 1) {
+			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
 				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
-				const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
-				if (chunkDelta <= 0 || timestampDelta <= 0) {
-					// Packets reordered, drop this packet
+				if (chunkDelta <= 0) {
+					// Packets reordered or replayed, drop this packet
+					writeMetric(this.env.METRICS, {
+						name: 'opus_packet_discarded',
+						worker: 'opus-transcriber-proxy',
+					});
+
 					return;
 				}
 
 				// Packets lost, do concealment
 				if (this.decoderStatus == 'ready') {
+					const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
 					// TODO: enqueue concealment actions?  Not sure this is needed in practice.
 					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
 				}
@@ -289,16 +294,36 @@ export class OutgoingConnection {
 			return;
 		}
 
+		const lostFrames = chunkDelta - 1;
+		if (lostFrames <= 0) {
+			return;
+		}
+		if (this.lastOpusFrameSize <= 0) {
+			// Not sure how we could have gotten here if we've never decoded anything
+			return;
+		}
+
 		/* Make sure numbers make sense */
-		const chunkDeltaInSamples = this.lastOpusFrameSize > 0 ? chunkDelta * this.lastOpusFrameSize : Infinity;
-		const timestampDeltaInSamples = (timestampDelta / 48000) * 24000;
+		const lostFramesInSamples = lostFrames * this.lastOpusFrameSize;
+		const timestampDeltaInSamples = timestampDelta > 0 ? (timestampDelta / 48000) * 24000 : Infinity;
 		const maxConcealment = 120 * 24; /* 120 ms at 24 kHz */
 
-		const samplesToConceal = Math.min(chunkDeltaInSamples, timestampDeltaInSamples, maxConcealment);
+		const samplesToConceal = Math.min(lostFramesInSamples, timestampDeltaInSamples, maxConcealment);
 
 		try {
 			const concealedAudio = this.opusDecoder.conceal(opusFrame, samplesToConceal);
-			this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
+			if (concealedAudio.errors.length > 0) {
+				writeMetric(this.env.METRICS, {
+					name: 'opus_decode_failure',
+					worker: 'opus-transcriber-proxy',
+				});
+			} else {
+				this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
+				writeMetric(this.env.METRICS, {
+					name: 'opus_loss_concealment',
+					worker: 'opus-transcriber-proxy',
+				});
+			}
 		} catch (error) {
 			console.error(`Error concealing ${samplesToConceal} samples for tag ${this._tag}:`, error);
 			// Don't call onError for concealment errors, as they may be transient
@@ -316,6 +341,11 @@ export class OutgoingConnection {
 			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
 			if (decodedAudio.errors.length > 0) {
 				console.error(`Opus decoding errors for tag ${this._tag}:`, decodedAudio.errors);
+				writeMetric(this.env.METRICS, {
+					name: 'opus_decode_failure',
+					worker: 'opus-transcriber-proxy',
+				});
+
 				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
