@@ -7,25 +7,24 @@
  */
 
 export type MetricName =
-  | 'ingester_success'
-  | 'ingester_failure'
-  | 'dispatcher_success'
-  | 'dispatcher_failure'
-  | 'transcription_success'
-  | 'transcription_failure'
-  | 'openai_api_error'
-  | 'opus_loss_concealment'
-  | 'opus_decode_failure'
-  | 'opus_packet_discarded';
-
+	| 'ingester_success'
+	| 'ingester_failure'
+	| 'dispatcher_success'
+	| 'dispatcher_failure'
+	| 'transcription_success'
+	| 'transcription_failure'
+	| 'openai_api_error'
+	| 'opus_loss_concealment'
+	| 'opus_decode_failure'
+	| 'opus_packet_discarded';
 
 export interface MetricEvent {
-  name: MetricName;
-  worker: 'webhook-ingester' | 'transcription-dispatcher' | 'opus-transcriber-proxy';
-  errorType?: string;
-  sessionId?: string;
-  targetName?: string;
-  latencyMs?: number;
+	name: MetricName;
+	worker: 'webhook-ingester' | 'transcription-dispatcher' | 'opus-transcriber-proxy';
+	errorType?: string;
+	sessionId?: string;
+	targetName?: string;
+	latencyMs?: number;
 }
 
 /**
@@ -41,24 +40,15 @@ export interface MetricEvent {
  * - double2: latency_ms (optional)
  * - index1: session_id (for sampling)
  */
-export function writeMetric(
-  analytics: AnalyticsEngineDataset | undefined,
-  event: MetricEvent
-): void {
-  if (!analytics) {
-    console.warn('Analytics Engine not configured, skipping metric:', event.name);
-    return;
-  }
+export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event: MetricEvent): void {
+	if (!analytics) {
+		console.warn('Analytics Engine not configured, skipping metric:', event.name);
+		return;
+	}
 
-  analytics.writeDataPoint({
-    blobs: [
-      event.name,
-      event.worker,
-      event.errorType ?? '',
-      event.sessionId ?? '',
-      event.targetName ?? '',
-    ],
-    doubles: [1, event.latencyMs ?? 0],
-    indexes: [event.sessionId ?? ''],
-  });
+	analytics.writeDataPoint({
+		blobs: [event.name, event.worker, event.errorType ?? '', event.sessionId ?? '', event.targetName ?? ''],
+		doubles: [1, event.latencyMs ?? 0],
+		indexes: [event.sessionId ?? ''],
+	});
 }

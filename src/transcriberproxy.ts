@@ -27,7 +27,7 @@ export class TranscriberProxy extends EventEmitter {
 	private options: TranscriberProxyOptions;
 
 	constructor(ws: WebSocket, env: Env, options: TranscriberProxyOptions) {
-		super({captureRejections: true});
+		super({ captureRejections: true });
 		this.ws = ws;
 		this.env = env;
 		this.options = options;

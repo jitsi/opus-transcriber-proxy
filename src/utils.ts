@@ -30,7 +30,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		useDispatcher: useDispatcher === 'true',
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
-		language: lang
+		language: lang,
 	};
 }
 

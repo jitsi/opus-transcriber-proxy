@@ -108,7 +108,9 @@ export default {
 					server.close(1011, message);
 				} catch (closeError) {
 					// Error handlers do not themselves catch errors, so log to console
-					console.error(`Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+					console.error(
+						`Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+					);
 				}
 			});
 
