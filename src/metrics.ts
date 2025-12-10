@@ -13,7 +13,11 @@ export type MetricName =
   | 'dispatcher_failure'
   | 'transcription_success'
   | 'transcription_failure'
-  | 'openai_api_error';
+  | 'openai_api_error'
+  | 'opus_loss_concealment'
+  | 'opus_decode_failure'
+  | 'opus_packet_discarded';
+
 
 export interface MetricEvent {
   name: MetricName;

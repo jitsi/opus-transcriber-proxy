@@ -258,6 +258,11 @@ export class OutgoingConnection {
 				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
 				if (chunkDelta <= 0) {
 					// Packets reordered or replayed, drop this packet
+					writeMetric(this.env.METRICS, {
+						name: 'opus_packet_discarded',
+						worker: 'opus-transcriber-proxy',
+					});
+
 					return;
 				}
 
@@ -307,7 +312,18 @@ export class OutgoingConnection {
 
 		try {
 			const concealedAudio = this.opusDecoder.conceal(opusFrame, samplesToConceal);
-			this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
+			if (concealedAudio.errors.length > 0) {
+				writeMetric(this.env.METRICS, {
+					name: 'opus_decode_failure',
+					worker: 'opus-transcriber-proxy',
+				});
+			} else {
+				this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
+				writeMetric(this.env.METRICS, {
+					name: 'opus_loss_concealment',
+					worker: 'opus-transcriber-proxy',
+				});
+			}
 		} catch (error) {
 			console.error(`Error concealing ${samplesToConceal} samples for tag ${this._tag}:`, error);
 			// Don't call onError for concealment errors, as they may be transient
@@ -325,6 +341,11 @@ export class OutgoingConnection {
 			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
 			if (decodedAudio.errors.length > 0) {
 				console.error(`Opus decoding errors for tag ${this._tag}:`, decodedAudio.errors);
+				writeMetric(this.env.METRICS, {
+					name: 'opus_decode_failure',
+					worker: 'opus-transcriber-proxy',
+				});
+
 				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
