@@ -113,6 +113,10 @@ export class OutgoingConnection {
 	reset(newTag: string) {
 		if (this.connectionStatus == 'connected') {
 			this.pendingTags.push(newTag);
+			
+			const commitMessage = { type: 'input_audio_buffer.commit' };
+			this.openaiWebSocket?.send(JSON.stringify(commitMessage));
+
 			const clearMessage = { type: 'input_audio_buffer.clear' };
 			this.openaiWebSocket?.send(JSON.stringify(clearMessage));
 		} else {
