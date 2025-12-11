@@ -67,5 +67,11 @@
               "Transcriptionator"
             ]
           }
-        ]
+        ],
+	"r2_buckets": [
+		{
+			"binding": "DEBUG_AUDIO_BUCKET",
+			"bucket_name": "debug-transcription-razvan"
+		}
+	]
 }

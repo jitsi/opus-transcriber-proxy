@@ -1,5 +1,6 @@
 import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
+import type { Transcriptionator } from './transcriptionator';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -13,6 +14,7 @@ export interface TranscriptionMessage {
 
 export interface TranscriberProxyOptions {
 	language: string | null;
+	transcriptionator?: DurableObjectStub<Transcriptionator>;
 }
 
 export class TranscriberProxy extends EventEmitter {

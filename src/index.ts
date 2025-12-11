@@ -54,8 +54,6 @@ export default {
 
 			server.accept();
 
-			const session = new TranscriberProxy(server, env, { language });
-
 			let outbound: WebSocket | undefined;
 			let transcriptionator: DurableObjectStub<Transcriptionator> | undefined;
 			let dispatcher: Service<TranscriptionDispatcher>;
@@ -75,9 +73,11 @@ export default {
 			}
 
 			if (sessionId) {
-				// Connect to transcriptionator durable object to relay messages
+				// Always get transcriptionator for debug audio capture
+				transcriptionator = env.TRANSCRIPTIONATOR.getByName(sessionId);
+				transcriptionator.setSessionId(sessionId);
+
 				if (useTranscriptionator) {
-					transcriptionator = env.TRANSCRIPTIONATOR.getByName(sessionId);
 					console.log(`Connected to Transcriptionator for sessionId ${sessionId}`);
 				}
 				if (useDispatcher) {
@@ -92,6 +92,8 @@ export default {
 					console.error('Transcriptionator requested but no sessionId provided');
 				}
 			}
+
+			const session = new TranscriberProxy(server, env, { language, transcriptionator });
 
 			session.on('closed', () => {
 				outbound?.close();

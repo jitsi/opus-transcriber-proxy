@@ -1,5 +1,6 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
+import type { Transcriptionator } from './transcriptionator';
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
 
@@ -92,6 +93,9 @@ export class OutgoingConnection {
 
 	private lastTranscriptTime?: number = undefined;
 
+	// Debug audio capture via Durable Object
+	private transcriptionator?: DurableObjectStub<Transcriptionator>;
+
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
@@ -105,6 +109,7 @@ export class OutgoingConnection {
 		this.setTag(tag);
 		this.env = env;
 		this.options = options;
+		this.transcriptionator = options.transcriptionator;
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
@@ -357,6 +362,11 @@ export class OutgoingConnection {
 	}
 
 	private sendOrEnqueueDecodedAudio(pcmData: Int16Array) {
+		// Send PCM samples to Durable Object for debug capture
+		if (this.transcriptionator) {
+			this.transcriptionator.appendPcmSamples(this._tag, pcmData);
+		}
+
 		const uint8Data = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
 
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
