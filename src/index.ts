@@ -95,18 +95,18 @@ export default {
 
 			const session = new TranscriberProxy(server, env, { language, transcriptionator });
 
-			session.on('closed', () => {
+			session.on('closed', async () => {
 				outbound?.close();
-				transcriptionator?.notifySessionClosed();
+				await transcriptionator?.notifySessionClosed();
 				server.close();
 			});
 
-			session.on('error', (tag, error) => {
+			session.on('error', async (tag, error) => {
 				try {
 					const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 					console.error(message);
 					outbound?.close(1001, message);
-					transcriptionator?.notifySessionClosed();
+					await transcriptionator?.notifySessionClosed();
 					server.close(1011, message);
 				} catch (closeError) {
 					// Error handlers do not themselves catch errors, so log to console

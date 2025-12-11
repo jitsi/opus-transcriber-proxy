@@ -71,9 +71,16 @@ export class Transcriptionator extends DurableObject<Env> {
 
 	// Write all accumulated debug audio to R2
 	private async writeDebugAudioToR2(): Promise<void> {
+		console.log(`writeDebugAudioToR2 called, sessionId=${this.sessionId}, chunks=${this.debugPcmChunks.size}`);
+
 		const bucket = (this.env as any).DEBUG_AUDIO_BUCKET as R2Bucket | undefined;
 		if (!bucket) {
 			console.warn('DEBUG_AUDIO_BUCKET not configured, skipping debug audio write');
+			return;
+		}
+
+		if (this.debugPcmChunks.size === 0) {
+			console.warn('No PCM chunks to write');
 			return;
 		}
 
