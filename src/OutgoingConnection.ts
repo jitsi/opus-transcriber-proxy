@@ -253,6 +253,13 @@ export class OutgoingConnection {
 			return;
 		}
 
+		if (this.env.DEBUG === 'true') {
+			writeMetric(this.env.METRICS, {
+				name: 'opus_packet_received',
+				worker: 'opus-transcriber-proxy',
+			});
+		}
+
 		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
 			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
 				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
@@ -282,6 +289,12 @@ export class OutgoingConnection {
 		} else if (this.decoderStatus === 'pending') {
 			// Queue the binary data until decoder is ready
 			this.pendingOpusFrames.push(opusFrame);
+			if (this.env.DEBUG === 'true') {
+				writeMetric(this.env.METRICS, {
+					name: 'opus_packet_queued',
+					worker: 'opus-transcriber-proxy',
+				});
+			}
 			// console.log(`Queued opus frame for tag: ${this.tag} (queue size: ${this.pendingOpusFrames.length})`);
 		} else {
 			console.log(`Not queueing opus frame for tag: ${this._tag}: decoder ${this.decoderStatus}`);
@@ -349,6 +362,12 @@ export class OutgoingConnection {
 				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
+			if (this.env.DEBUG === 'true') {
+				writeMetric(this.env.METRICS, {
+					name: 'opus_packet_decoded',
+					worker: 'opus-transcriber-proxy',
+				});
+			}
 			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
 			this.sendOrEnqueueDecodedAudio(decodedAudio.pcmData);
 		} catch (error) {
@@ -375,6 +394,12 @@ export class OutgoingConnection {
 				this.pendingAudioFrames.push(encodedAudio);
 				this.pendingAudioDataBuffer.resize(uint8Data.byteLength);
 				this.pendingAudioData.set(uint8Data);
+			}
+			if (this.env.DEBUG === 'true') {
+				writeMetric(this.env.METRICS, {
+					name: 'openai_audio_queued',
+					worker: 'opus-transcriber-proxy',
+				});
 			}
 		} else {
 			console.log(`Not queueing audio data for tag: ${this._tag}: connection ${this.connectionStatus}`);
@@ -411,6 +436,12 @@ export class OutgoingConnection {
 			const audioMessageString = JSON.stringify(audioMessage);
 
 			this.openaiWebSocket.send(audioMessageString);
+			if (this.env.DEBUG === 'true') {
+				writeMetric(this.env.METRICS, {
+					name: 'openai_audio_sent',
+					worker: 'opus-transcriber-proxy',
+				});
+			}
 		} catch (error) {
 			console.error(`Failed to send audio to OpenAI for tag ${this._tag}`, error);
 			// TODO should this call onError?
