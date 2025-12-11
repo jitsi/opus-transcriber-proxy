@@ -10,6 +10,7 @@ declare namespace Cloudflare {
 		OPENAI_API_KEY: string;
 		OPENAI_MODEL?: string;
 		OPENAI_TURN_DETECTION?: string;
+		DEBUG?: string;
 		TRANSCRIPTIONATOR: DurableObjectNamespace<import("./src/index").Transcriptionator>;
 		TRANSCRIPTION_DISPATCHER: Fetcher /* transcription-dispatcher */;
 		METRICS?: AnalyticsEngineDataset;
