@@ -532,6 +532,12 @@ export class OutgoingConnection {
 				false,
 			);
 			this.onCompleteTranscription?.(transcription);
+		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.failed') {
+			console.error(`OpenAI failed to transcribe audio for tag ${this._tag}: ${data}`);
+			writeMetric(this.env.METRICS, {
+				name: 'transcription_failure',
+				worker: 'opus-transcriber-proxy',
+			});
 		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
 			// Reset completed
 			this.setTag(this.pendingTags.shift()!);
