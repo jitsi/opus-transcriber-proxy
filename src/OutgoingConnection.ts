@@ -580,7 +580,11 @@ export class OutgoingConnection {
 		} else if (
 			parsedMessage.type !== 'session.created' &&
 			parsedMessage.type !== 'session.updated' &&
-			parsedMessage.type !== 'input_audio_buffer.committed'
+			parsedMessage.type !== 'input_audio_buffer.committed' &&
+			parsedMessage.type !== 'input_audio_buffer.speech_started' &&
+			parsedMessage.type !== 'input_audio_buffer.speech_stopped' &&
+			parsedMessage.type !== 'conversation.item.added' &&
+			parsedMessage.type !== 'conversation.item.done'
 		) {
 			// Log unexpected message types that might indicate issues
 			console.warn(`Unhandled OpenAI message type for ${this._tag}: ${parsedMessage.type}`);
