@@ -553,7 +553,12 @@ export class OutgoingConnection {
 			this.lastChunkNo = -1;
 			this.lastTimestamp = -1;
 			this.lastOpusFrameSize = -1;
-			this.setTag(this.pendingTags.shift()!);
+			const nextTag = this.pendingTags.shift();
+			if (nextTag !== undefined) {
+				this.setTag(nextTag);
+			} else {
+				console.error('Received cleared event but no pending tag available.');
+			}
 			this.resetting = false;
 
 			// Send any audio that was buffered during the reset
