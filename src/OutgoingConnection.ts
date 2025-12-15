@@ -577,8 +577,14 @@ export class OutgoingConnection {
 			this.onOpenAIError?.('api_error', parsedMessage.error?.message || data);
 			this.doClose(true);
 			this.onError?.(this._tag, `OpenAI service sent error message: ${data}`);
+		} else if (
+			parsedMessage.type !== 'session.created' &&
+			parsedMessage.type !== 'session.updated' &&
+			parsedMessage.type !== 'input_audio_buffer.committed'
+		) {
+			// Log unexpected message types that might indicate issues
+			console.warn(`Unhandled OpenAI message type for ${this._tag}: ${parsedMessage.type}`);
 		}
-		// TODO: are there any other messages we care about?
 	}
 
 	close(): void {
