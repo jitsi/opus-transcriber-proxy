@@ -519,7 +519,7 @@ export class OutgoingConnection {
 		}
 		if (parsedMessage.type === 'conversation.item.input_audio_transcription.delta') {
 			const now = Date.now();
-			if (this.lastTranscriptTime !== undefined) {
+			if (this.lastTranscriptTime === undefined) {
 				this.lastTranscriptTime = now;
 			}
 			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
