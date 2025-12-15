@@ -78,9 +78,13 @@ export class OutgoingConnection {
 	private openaiWebSocket?: WebSocket;
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingAudioDataBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
-	private switchAudioBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
 	private pendingAudioData: Uint8Array = new Uint8Array(this.pendingAudioDataBuffer);
 	private pendingAudioFrames: string[] = [];
+
+	// Fixed-size buffer for audio during reset (avoids resize overhead)
+	private switchAudioBuffer = new ArrayBuffer(MAX_AUDIO_BLOCK_BYTES);
+	private switchAudioData = new Uint8Array(this.switchAudioBuffer);
+	private switchAudioLength = 0;
 
 	private _lastMediaTime: number = -1;
 	public get lastMediaTime() {
@@ -93,7 +97,6 @@ export class OutgoingConnection {
 
 	private lastTranscriptTime?: number = undefined;
 	private resetting: boolean = false;
-	private switchAudioData: Uint8Array = new Uint8Array(this.switchAudioBuffer);
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
@@ -385,10 +388,9 @@ export class OutgoingConnection {
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
 			// If in the process of switching (after reset), buffer audio for the new participant
 			if (this.resetting) {
-				if (this.switchAudioData.length + uint8Data.length <= MAX_AUDIO_BLOCK_BYTES) {
-					const oldLength = this.switchAudioData.length;
-					this.switchAudioBuffer.resize(this.switchAudioData.byteLength + uint8Data.byteLength);
-					this.switchAudioData.set(uint8Data, oldLength);
+				if (this.switchAudioLength + uint8Data.length <= MAX_AUDIO_BLOCK_BYTES) {
+					this.switchAudioData.set(uint8Data, this.switchAudioLength);
+					this.switchAudioLength += uint8Data.length;
 				}
 				// If exceeds buffer, drop the audio (unlikely given short reset window)
 				return;
@@ -562,10 +564,11 @@ export class OutgoingConnection {
 			this.resetting = false;
 
 			// Send any audio that was buffered during the reset
-			if (this.switchAudioData.length > 0) {
-				const encodedAudio = safeToBase64(this.switchAudioData);
+			if (this.switchAudioLength > 0) {
+				const bufferedAudio = this.switchAudioData.subarray(0, this.switchAudioLength);
+				const encodedAudio = bufferedAudio.toBase64();
 				this.sendAudioToOpenAI(encodedAudio);
-				this.switchAudioBuffer.resize(0);
+				this.switchAudioLength = 0;
 			}
 		} else if (parsedMessage.type === 'error') {
 			console.error(`OpenAI sent error message for ${this._tag}: ${data}`);
