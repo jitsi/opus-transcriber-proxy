@@ -62,7 +62,7 @@ export default {
 
 			if (connect) {
 				try {
-					const outbound = new WebSocket(connect, ['transcription']);
+					outbound = new WebSocket(connect, ['transcription']);
 					// TODO: pass auth info to this websocket
 
 					outbound.addEventListener('close', () => {
