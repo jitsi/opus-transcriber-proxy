@@ -42,18 +42,25 @@ export function getTurnDetectionConfig(env: Env) {
 		silence_duration_ms: 300,
 	};
 
+	let turnDetection = defaultTurnDetection;
+
 	if (env.OPENAI_TURN_DETECTION) {
 		if (typeof env.OPENAI_TURN_DETECTION === 'string') {
 			try {
-				return JSON.parse(env.OPENAI_TURN_DETECTION);
+				turnDetection = JSON.parse(env.OPENAI_TURN_DETECTION);
 			} catch (error) {
 				console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
 				return defaultTurnDetection;
 			}
 		}
 		// JSON object from CF
-		return env.OPENAI_TURN_DETECTION;
+		turnDetection = env.OPENAI_TURN_DETECTION;
 	}
 
-	return defaultTurnDetection;
+	if (typeof turnDetection !== 'object' || typeof turnDetection.type !== string) {
+		console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults`);
+		return defaultTurnDetection;
+	}
+
+	return turnDetection;
 }
