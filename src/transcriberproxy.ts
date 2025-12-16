@@ -46,8 +46,10 @@ export class TranscriberProxy extends EventEmitter {
 				console.error('Failed to parse message as JSON:', parseError);
 				parsedMessage = { raw: event.data, parseError: true };
 			}
-			// TODO: are there any other events that need to be handled?
-			if (parsedMessage && parsedMessage.event === 'media') {
+
+			if (parsedMessage && parsedMessage.event === 'ping') {
+				this.ws.send(JSON.stringify({ event: 'pong' }));
+			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
 			}
 		});

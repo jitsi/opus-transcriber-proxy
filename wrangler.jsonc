@@ -45,6 +45,9 @@
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
 	"services": [{ "binding": "TRANSCRIPTION_DISPATCHER", "service": "transcription-dispatcher" }],
+	"limits": {
+    	"cpu_ms": 300000,
+  	},
 	/**
 	 * Analytics Engine binding for transcription metrics
 	 * https://developers.cloudflare.com/analytics/analytics-engine/get-started/
