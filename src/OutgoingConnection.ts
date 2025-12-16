@@ -614,9 +614,13 @@ export class OutgoingConnection {
 	private doClose(notify: boolean): void {
 		this.clearIdleCommitTimeout();
 		this.opusDecoder?.free();
-		this.openaiWebSocket?.close();
+		this.opusDecoder = undefined;
 		this.decoderStatus = 'closed';
+
+		this.openaiWebSocket?.close();
+		this.openaiWebSocket = undefined;
 		this.connectionStatus = 'closed';
+
 		if (notify) {
 			this.onClosed?.(this._tag);
 		}
