@@ -43,12 +43,16 @@ export function getTurnDetectionConfig(env: Env) {
 	};
 
 	if (env.OPENAI_TURN_DETECTION) {
-		try {
-			return JSON.parse(env.OPENAI_TURN_DETECTION);
-		} catch (error) {
-			console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
-			return defaultTurnDetection;
+		if (typeof env.OPENAI_TURN_DETECTION === 'string') {
+			try {
+				return JSON.parse(env.OPENAI_TURN_DETECTION);
+			} catch (error) {
+				console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
+				return defaultTurnDetection;
+			}
 		}
+		// JSON object from CF
+		return env.OPENAI_TURN_DETECTION;
 	}
 
 	return defaultTurnDetection;
