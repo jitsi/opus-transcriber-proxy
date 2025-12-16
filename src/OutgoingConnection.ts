@@ -92,6 +92,9 @@ export class OutgoingConnection {
 
 	private lastTranscriptTime?: number = undefined;
 
+	// Idle commit timeout - forces transcription when audio stops
+	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
+
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
@@ -440,6 +443,7 @@ export class OutgoingConnection {
 			const audioMessageString = JSON.stringify(audioMessage);
 
 			this.openaiWebSocket.send(audioMessageString);
+			this.resetIdleCommitTimeout();
 			if (this.env.DEBUG === 'true') {
 				writeMetric(this.env.METRICS, {
 					name: 'openai_audio_sent',
@@ -531,6 +535,7 @@ export class OutgoingConnection {
 				parsedMessage.item_id,
 				false,
 			);
+			this.clearIdleCommitTimeout();
 			this.onCompleteTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.failed') {
 			console.error(`OpenAI failed to transcribe audio for tag ${this._tag}: ${data}`);
@@ -571,11 +576,43 @@ export class OutgoingConnection {
 		}
 	}
 
+	private resetIdleCommitTimeout(): void {
+		this.clearIdleCommitTimeout();
+
+		const timeoutSeconds = parseInt(this.env.FORCE_COMMIT_TIMEOUT || '0', 10);
+		if (timeoutSeconds <= 0) {
+			return;
+		}
+
+		this.idleCommitTimeout = setTimeout(() => {
+			this.forceCommit();
+		}, timeoutSeconds * 1000);
+	}
+
+	private clearIdleCommitTimeout(): void {
+		if (this.idleCommitTimeout !== null) {
+			clearTimeout(this.idleCommitTimeout);
+			this.idleCommitTimeout = null;
+		}
+	}
+
+	private forceCommit(): void {
+		if (this.connectionStatus !== 'connected' || !this.openaiWebSocket) {
+			return;
+		}
+
+		console.log(`Forcing commit for idle connection ${this._tag}`);
+		const commitMessage = { type: 'input_audio_buffer.commit' };
+		this.openaiWebSocket.send(JSON.stringify(commitMessage));
+		this.idleCommitTimeout = null;
+	}
+
 	close(): void {
 		this.doClose(false);
 	}
 
 	private doClose(notify: boolean): void {
+		this.clearIdleCommitTimeout();
 		this.opusDecoder?.free();
 		this.openaiWebSocket?.close();
 		this.decoderStatus = 'closed';
