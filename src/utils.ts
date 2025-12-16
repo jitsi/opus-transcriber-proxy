@@ -57,7 +57,7 @@ export function getTurnDetectionConfig(env: Env) {
 		turnDetection = env.OPENAI_TURN_DETECTION;
 	}
 
-	if (typeof turnDetection !== 'object' || typeof turnDetection.type !== string) {
+	if (typeof turnDetection !== 'object' || typeof turnDetection.type !== 'string') {
 		console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults`);
 		return defaultTurnDetection;
 	}
