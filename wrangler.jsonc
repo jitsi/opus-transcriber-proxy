@@ -36,7 +36,7 @@
 		a flush is triggered.
 		**/
 		"FORCE_COMMIT_TIMEOUT": "2"
-	}
+	},
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
