@@ -78,7 +78,6 @@ export class OutgoingConnection {
 	private openaiWebSocket?: WebSocket;
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingAudioDataBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
-	private switchAudioBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
 	private pendingAudioData: Uint8Array = new Uint8Array(this.pendingAudioDataBuffer);
 	private pendingAudioFrames: string[] = [];
 
@@ -92,8 +91,6 @@ export class OutgoingConnection {
 	private lastOpusFrameSize: number = -1;
 
 	private lastTranscriptTime?: number = undefined;
-	private resetting: boolean = false;
-	private switchAudioData: Uint8Array = new Uint8Array(this.switchAudioBuffer);
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
@@ -115,7 +112,6 @@ export class OutgoingConnection {
 
 	reset(newTag: string) {
 		if (this.connectionStatus == 'connected') {
-			this.resetting = true;
 			this.pendingTags.push(newTag);
 
 			const commitMessage = { type: 'input_audio_buffer.commit' };
@@ -132,6 +128,10 @@ export class OutgoingConnection {
 		// Reset the pending audio buffer
 		this.pendingAudioFrames = [];
 		this.pendingAudioDataBuffer.resize(0);
+
+		this.lastChunkNo = -1;
+		this.lastTimestamp = -1;
+		this.lastOpusFrameSize = -1;
 	}
 
 	private async initializeOpusDecoder(): Promise<void> {
@@ -383,16 +383,6 @@ export class OutgoingConnection {
 		const uint8Data = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
 
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
-			// If in the process of switching (after reset), buffer audio for the new participant
-			if (this.resetting) {
-				if (this.switchAudioData.length + uint8Data.length <= MAX_AUDIO_BLOCK_BYTES) {
-					const oldLength = this.switchAudioData.length;
-					this.switchAudioBuffer.resize(this.switchAudioData.byteLength + uint8Data.byteLength);
-					this.switchAudioData.set(uint8Data, oldLength);
-				}
-				// If exceeds buffer, drop the audio (unlikely given short reset window)
-				return;
-			}
 			const encodedAudio = uint8Data.toBase64();
 			this.sendAudioToOpenAI(encodedAudio);
 		} else if (this.connectionStatus === 'pending') {
@@ -549,24 +539,14 @@ export class OutgoingConnection {
 				worker: 'opus-transcriber-proxy',
 			});
 		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
-			// Reset completed - update state atomically
-			this.lastChunkNo = -1;
-			this.lastTimestamp = -1;
-			this.lastOpusFrameSize = -1;
+			// Reset completed
 			const nextTag = this.pendingTags.shift();
 			if (nextTag !== undefined) {
 				this.setTag(nextTag);
 			} else {
 				console.error('Received cleared event but no pending tag available.');
 			}
-			this.resetting = false;
 
-			// Send any audio that was buffered during the reset
-			if (this.switchAudioData.length > 0) {
-				const encodedAudio = safeToBase64(this.switchAudioData);
-				this.sendAudioToOpenAI(encodedAudio);
-				this.switchAudioBuffer.resize(0);
-			}
 		} else if (parsedMessage.type === 'error') {
 			console.error(`OpenAI sent error message for ${this._tag}: ${data}`);
 			writeMetric(this.env.METRICS, {
