@@ -37,9 +37,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 export function getTurnDetectionConfig(env: Env) {
 	const defaultTurnDetection = {
 		type: 'server_vad',
-		threshold: 0.5,
+		threshold: 0.85,
 		prefix_padding_ms: 300,
-		silence_duration_ms: 500,
+		silence_duration_ms: 300,
 	};
 
 	if (env.OPENAI_TURN_DETECTION) {
