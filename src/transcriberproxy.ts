@@ -48,7 +48,11 @@ export class TranscriberProxy extends EventEmitter {
 			}
 
 			if (parsedMessage && parsedMessage.event === 'ping') {
-				this.ws.send(JSON.stringify({ event: 'pong' }));
+				const pongMessage: { event: string; id?: number } = { event: 'pong' };
+			if (typeof parsedMessage.id === 'number') {
+				pongMessage.id = parsedMessage.id;
+			}
+			this.ws.send(JSON.stringify(pongMessage));
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
 			}
