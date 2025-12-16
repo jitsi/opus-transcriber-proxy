@@ -551,8 +551,14 @@ export class OutgoingConnection {
 			} else {
 				console.error('Received cleared event but no pending tag available.');
 			}
-
 		} else if (parsedMessage.type === 'error') {
+			if (parsedMessage.error?.type === 'invalid_request_error' && parsedMessage.error?.code === 'input_audio_buffer_commit_empty') {
+				// This error indicates that we tried to commit an empty audio buffer, which can happen
+				// if the VAD detected speech stopped just before we did a manual commit.  Ignore.
+				// TODO should we log this at all?
+				console.log(`OpenAI reported empty audio buffer commit for ${this._tag}, ignoring.`);
+				return;
+			}
 			console.error(`OpenAI sent error message for ${this._tag}: ${data}`);
 			writeMetric(this.env.METRICS, {
 				name: 'openai_api_error',
