@@ -7,6 +7,7 @@ export interface TranscriptionMessage {
 	language?: string;
 	message_id: string;
 	type: 'transcription-result';
+	event: 'transcription-result';
 	participant: { id: string; ssrc?: string };
 	timestamp: number;
 }
