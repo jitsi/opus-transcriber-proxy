@@ -210,8 +210,10 @@ export class OutgoingConnection {
 				this.handleOpenAIMessage(event.data);
 			});
 
-			openaiWs.addEventListener('error', (error) => {
-				console.error(`OpenAI WebSocket error for tag ${this._tag}:`, error);
+			openaiWs.addEventListener('error', (event) => {
+				// Extract useful info from ErrorEvent (event.message is often empty for WebSocket errors)
+				const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+				console.error(`OpenAI WebSocket error for tag ${this._tag}: ${errorMessage}`);
 				writeMetric(this.env.METRICS, {
 					name: 'openai_api_error',
 					worker: 'opus-transcriber-proxy',
@@ -220,7 +222,7 @@ export class OutgoingConnection {
 				this.onOpenAIError?.('websocket_error', 'WebSocket connection error');
 				this.doClose(true);
 				this.connectionStatus = 'failed';
-				this.onError?.(this._tag, `Error connecting to OpenAI service: ${error instanceof Error ? error.message : String(error)}`);
+				this.onError?.(this._tag, `Error connecting to OpenAI service: ${errorMessage}`);
 			});
 
 			openaiWs.addEventListener('close', () => {
