@@ -35,7 +35,13 @@
 		After how many seconds of no received audio and no final transcription
 		a flush is triggered.
 		**/
-		"FORCE_COMMIT_TIMEOUT": "2"
+		"FORCE_COMMIT_TIMEOUT": "2",
+		/**
+		Feature flag: Route /transcribe requests to TranscriptionSession DO.
+		Set to "true" to enable WebSocket hibernation support with grace period.
+		Default is "false" (uses legacy Worker-based handling).
+		**/
+		"USE_TRANSCRIPTION_SESSION_DO": "false"
 	},
 	/**
 	 * Note: Use secrets to store sensitive data.
@@ -66,6 +72,10 @@
             {
                 "class_name": "Transcriptionator",
                 "name": "TRANSCRIPTIONATOR"
+            },
+            {
+                "class_name": "TranscriptionSession",
+                "name": "TRANSCRIPTION_SESSION"
             }
         ]
     },
@@ -74,6 +84,12 @@
             "tag": "v1",
             "new_sqlite_classes": [
               "Transcriptionator"
+            ]
+          },
+          {
+            "tag": "v2",
+            "new_sqlite_classes": [
+              "TranscriptionSession"
             ]
           }
         ]

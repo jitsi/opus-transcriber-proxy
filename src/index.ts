@@ -49,6 +49,18 @@ export default {
 				return new Response('No transcription output method specified', { status: 400 });
 			}
 
+			// Feature flag: Route to TranscriptionSession DO for hibernation support
+			const useTranscriptionSessionDO = env.USE_TRANSCRIPTION_SESSION_DO === 'true';
+
+			if (useTranscriptionSessionDO) {
+				// Route to TranscriptionSession Durable Object
+				const doId = env.TRANSCRIPTION_SESSION.idFromName(sessionId || 'default');
+				const stub = env.TRANSCRIPTION_SESSION.get(doId);
+				console.log(`Routing to TranscriptionSession DO for sessionId ${sessionId}`);
+				return stub.fetch(request);
+			}
+
+			// Legacy Worker-based handling (when feature flag is off)
 			const webSocketPair = new WebSocketPair();
 			const [client, server] = Object.values(webSocketPair);
 
@@ -187,3 +199,4 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export { Transcriptionator } from './transcriptionator';
+export { TranscriptionSession } from './transcription-session';

@@ -110,4 +110,12 @@ export class TranscriberProxy extends EventEmitter {
 			connection.handleMediaEvent(parsedMessage);
 		}
 	}
+
+	closeAllConnections(): void {
+		console.log(`Closing ${this.outgoingConnections.size} outgoing connections`);
+		for (const connection of this.outgoingConnections.values()) {
+			connection.close();
+		}
+		this.outgoingConnections.clear();
+	}
 }
