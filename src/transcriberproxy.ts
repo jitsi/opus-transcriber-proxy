@@ -33,8 +33,9 @@ export class TranscriberProxy extends EventEmitter {
 		this.options = options;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
 
-		this.ws.addEventListener('close', () => {
-			this.ws.close();
+		this.ws.addEventListener('close', (event) => {
+			console.log(`Client WebSocket closed: code=${event.code} wasClean=${event.wasClean}`);
+			this.closeAllConnections();
 			this.emit('closed');
 		});
 
@@ -109,5 +110,13 @@ export class TranscriberProxy extends EventEmitter {
 			const connection = this.getConnection(tag);
 			connection.handleMediaEvent(parsedMessage);
 		}
+	}
+
+	private closeAllConnections(): void {
+		console.log(`Closing ${this.outgoingConnections.size} outgoing connections`);
+		for (const connection of this.outgoingConnections.values()) {
+			connection.close();
+		}
+		this.outgoingConnections.clear();
 	}
 }
