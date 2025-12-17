@@ -225,8 +225,8 @@ export class OutgoingConnection {
 				this.onError?.(this._tag, `Error connecting to OpenAI service: ${errorMessage}`);
 			});
 
-			openaiWs.addEventListener('close', () => {
-				console.log(`OpenAI WebSocket closed for tag: ${this._tag}`);
+			openaiWs.addEventListener('close', (event) => {
+				console.log(`OpenAI WebSocket closed for tag ${this._tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
 				this.doClose(true);
 				this.connectionStatus = 'failed';
 			});
