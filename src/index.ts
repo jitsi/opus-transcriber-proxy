@@ -49,18 +49,14 @@ export default {
 				return new Response('No transcription output method specified', { status: 400 });
 			}
 
-			// Feature flag: Route to TranscriptionSession DO for hibernation support
-			const useTranscriptionSessionDO = env.USE_TRANSCRIPTION_SESSION_DO === 'true';
+			// Route to TranscriptionSession Durable Object
+			const doId = env.TRANSCRIPTION_SESSION.idFromName(sessionId || 'default');
+			const stub = env.TRANSCRIPTION_SESSION.get(doId);
+			console.log(`Routing to TranscriptionSession DO for sessionId ${sessionId}`);
+			return stub.fetch(request);
 
-			if (useTranscriptionSessionDO) {
-				// Route to TranscriptionSession Durable Object
-				const doId = env.TRANSCRIPTION_SESSION.idFromName(sessionId || 'default');
-				const stub = env.TRANSCRIPTION_SESSION.get(doId);
-				console.log(`Routing to TranscriptionSession DO for sessionId ${sessionId}`);
-				return stub.fetch(request);
-			}
-
-			// Legacy Worker-based handling (when feature flag is off)
+			/*
+			// Legacy Worker-based handling
 			const webSocketPair = new WebSocketPair();
 			const [client, server] = Object.values(webSocketPair);
 
@@ -186,6 +182,7 @@ export default {
 				status: 101,
 				webSocket: client,
 			});
+			*/
 		} else {
 			if (!sessionId) {
 				return new Response('Missing sessionId or connect param', { status: 400 });
