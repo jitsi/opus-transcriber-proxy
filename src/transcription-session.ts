@@ -44,22 +44,21 @@ export class TranscriptionSession extends DurableObject<Env> {
 			return new Response('No transcription output method specified', { status: 400 });
 		}
 
-		// Check if this is a reconnection (existing WebSockets from hibernation)
-		const existingWebSockets = this.ctx.getWebSockets();
-		const isReconnection = existingWebSockets.length > 0;
+		// Check if this is a reconnection (TranscriberProxy exists from grace period)
+		const isReconnection = this.transcriberProxy !== null;
 
 		if (isReconnection) {
-			console.log(`Client reconnecting - found ${existingWebSockets.length} existing WebSocket(s), reusing TranscriberProxy`);
+			console.log(`Client reconnecting during grace period - reusing TranscriberProxy with existing OpenAI connections`);
 			this.cancelGraceTimeout();
+		}
 
-			// Close old client WebSockets - they're stale (client has new connection)
-			// Note: This does NOT close OpenAI connections - those are in transcriberProxy
-			for (const oldWs of existingWebSockets) {
-				try {
-					oldWs.close(1000, 'Client reconnected');
-				} catch (e) {
-					// Ignore errors closing old sockets
-				}
+		// Close any stale WebSockets from previous connections
+		const existingWebSockets = this.ctx.getWebSockets();
+		for (const oldWs of existingWebSockets) {
+			try {
+				oldWs.close(1000, 'Client reconnected');
+			} catch (e) {
+				// Ignore errors closing old sockets
 			}
 		}
 
@@ -131,7 +130,12 @@ export class TranscriptionSession extends DurableObject<Env> {
 	}
 
 	webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): void {
-		console.log(`Client WebSocket closed: code=${code} reason=${reason || 'none'} wasClean=${wasClean}`);
+		// Restore config from attachment if lost during hibernation
+		if (!this.sessionConfig) {
+			this.sessionConfig = ws.deserializeAttachment() as SessionAttachment;
+		}
+
+		console.log(`Client WebSocket closed: code=${code} reason=${reason || 'none'} wasClean=${wasClean} sessionId=${this.sessionConfig?.sessionId}`);
 
 		// Don't cleanup immediately - start grace period
 		// This allows client to reconnect and reuse OpenAI connections
