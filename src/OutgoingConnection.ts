@@ -496,6 +496,7 @@ export class OutgoingConnection {
 			is_interim: isInterim,
 			message_id,
 			type: 'transcription-result',
+			event: 'transcription-result',
 			participant: this.participant,
 			timestamp,
 		};
