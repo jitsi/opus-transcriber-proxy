@@ -6,6 +6,19 @@
  * a separate environment (dev, staging, prod).
  */
 
+/**
+ * Internal debug state for logging metric writes
+ */
+let debugMetrics = false;
+
+/**
+ * Sets the debug state for metric logging
+ * @param enabled - Whether to enable debug logging for metrics
+ */
+export function setMetricDebug(enabled: boolean): void {
+	debugMetrics = enabled;
+}
+
 export type MetricName =
 	| 'ingester_success'
 	| 'ingester_failure'
@@ -49,6 +62,18 @@ export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event
 	if (!analytics) {
 		console.warn('Analytics Engine not configured, skipping metric:', event.name);
 		return;
+	}
+
+	if (debugMetrics) {
+		console.log('Writing metric:', {
+			name: event.name,
+			worker: event.worker,
+			errorType: event.errorType,
+			sessionId: event.sessionId,
+			targetName: event.targetName,
+			count,
+			latencyMs: event.latencyMs,
+		});
 	}
 
 	analytics.writeDataPoint({
