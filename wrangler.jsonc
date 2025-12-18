@@ -66,6 +66,10 @@
             {
                 "class_name": "Transcriptionator",
                 "name": "TRANSCRIPTIONATOR"
+            },
+            {
+                "class_name": "TranscriptionSession",
+                "name": "TRANSCRIPTION_SESSION"
             }
         ]
     },
@@ -74,6 +78,12 @@
             "tag": "v1",
             "new_sqlite_classes": [
               "Transcriptionator"
+            ]
+          },
+          {
+            "tag": "v2",
+            "new_sqlite_classes": [
+              "TranscriptionSession"
             ]
           }
         ]
