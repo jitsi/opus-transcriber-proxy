@@ -58,6 +58,9 @@ function safeToBase64(array: Uint8Array): string {
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
 export class OutgoingConnection {
+	private static connectionCounter = 0;
+	private connectionId: string;
+
 	private localTag!: string;
 	private serverAcknowledgedTag!: string;
 	public get tag() {
@@ -94,6 +97,10 @@ export class OutgoingConnection {
 
 	private lastTranscriptTime?: number = undefined;
 
+	// Audio tracking for logging
+	private totalSamplesSent: number = 0;
+	private lastLoggedSecond: number = 0;
+
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -108,6 +115,7 @@ export class OutgoingConnection {
 	private metricCache: MetricCache;
 
 	constructor(tag: string, env: Env, options: TranscriberProxyOptions) {
+		this.connectionId = `conn-${++OutgoingConnection.connectionCounter}`;
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.env = env;
@@ -116,6 +124,23 @@ export class OutgoingConnection {
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
+	}
+
+	private getTimeString(): string {
+		const now = new Date();
+		return now.toTimeString().split(' ')[0] + '.' + now.getMilliseconds().toString().padStart(3, '0');
+	}
+
+	private log(message: string): void {
+		console.log(`[${this.getTimeString()}] [${this.connectionId}] ${message}`);
+	}
+
+	private logError(message: string, error?: any): void {
+		if (error !== undefined) {
+			console.error(`[${this.getTimeString()}] [${this.connectionId}] ${message}`, error);
+		} else {
+			console.error(`[${this.getTimeString()}] [${this.connectionId}] ${message}`);
+		}
 	}
 
 	// When a connection is reset, local state is associated with the new tag, but
@@ -147,6 +172,10 @@ export class OutgoingConnection {
 		this.lastChunkNo = -1;
 		this.lastTimestamp = -1;
 		this.lastOpusFrameSize = -1;
+
+		// Reset audio tracking
+		this.totalSamplesSent = 0;
+		this.lastLoggedSecond = 0;
 	}
 
 	private async initializeOpusDecoder(): Promise<void> {
@@ -400,6 +429,15 @@ export class OutgoingConnection {
 	private sendOrEnqueueDecodedAudio(pcmData: Int16Array) {
 		const uint8Data = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
 
+		// Track audio samples for logging (24000 Hz = 24000 samples per second)
+		const samplesSent = pcmData.length;
+		this.totalSamplesSent += samplesSent;
+		const currentSecond = Math.floor(this.totalSamplesSent / 24000);
+		if (currentSecond > this.lastLoggedSecond) {
+			this.log(`Sent ${currentSecond} second(s) of audio for tag: ${this.localTag}`);
+			this.lastLoggedSecond = currentSecond;
+		}
+
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
 			const encodedAudio = uint8Data.toBase64();
 			this.sendAudioToOpenAI(encodedAudio);
@@ -532,6 +570,7 @@ export class OutgoingConnection {
 			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.item_id, true);
 			this.onInterimTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.completed') {
+			this.log(`Completed transcript for tag ${this.serverAcknowledgedTag}: "${parsedMessage.transcript}"`);
 			let transcriptTime;
 			if (this.lastTranscriptTime !== undefined) {
 				transcriptTime = this.lastTranscriptTime;
