@@ -2,7 +2,7 @@ import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { Transcriptionator } from './transcriptionator';
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { writeMetric } from './metrics';
+import { writeMetric, setMetricDebug } from './metrics';
 
 export interface DispatcherTranscriptionMessage {
 	sessionId: string;
@@ -25,6 +25,9 @@ export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
+		// Initialize metric debug logging based on environment
+		setMetricDebug(!!env.DEBUG);
+
 		const upgradeHeader = request.headers.get('Upgrade');
 
 		if (upgradeHeader !== 'websocket') {
