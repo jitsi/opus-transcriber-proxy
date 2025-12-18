@@ -2,7 +2,7 @@ import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
-import { MetricCache } from './metricCache';
+import { MetricCache } from './MetricCache';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
