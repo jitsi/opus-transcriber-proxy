@@ -41,11 +41,11 @@ export interface MetricEvent {
  * - blob3: error_type (optional, for failures)
  * - blob4: session_id (optional, for correlation)
  * - blob5: target_name (optional, for dispatcher)
- * - double1: count (always 1)
+ * - double1: count (default 1)
  * - double2: latency_ms (optional)
  * - index1: session_id (for sampling)
  */
-export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event: MetricEvent): void {
+export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event: MetricEvent, count: number = 1): void {
 	if (!analytics) {
 		console.warn('Analytics Engine not configured, skipping metric:', event.name);
 		return;
@@ -53,7 +53,7 @@ export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event
 
 	analytics.writeDataPoint({
 		blobs: [event.name, event.worker, event.errorType ?? '', event.sessionId ?? '', event.targetName ?? ''],
-		doubles: [1, event.latencyMs ?? 0],
+		doubles: [count, event.latencyMs ?? 0],
 		indexes: [event.sessionId ?? ''],
 	});
 }

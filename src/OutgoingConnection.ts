@@ -2,6 +2,7 @@ import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
+import { MetricCache } from './metricCache';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -103,17 +104,20 @@ export class OutgoingConnection {
 
 	private env: Env;
 	private options: TranscriberProxyOptions;
+	private metricCache: MetricCache;
 
 	constructor(tag: string, env: Env, options: TranscriberProxyOptions) {
 		this.setTag(tag);
 		this.env = env;
 		this.options = options;
+		this.metricCache = new MetricCache(env.METRICS);
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
 	}
 
 	reset(newTag: string) {
+		this.metricCache.flush();
 		if (this.connectionStatus == 'connected') {
 			this.pendingTags.push(newTag);
 
@@ -262,12 +266,10 @@ export class OutgoingConnection {
 			return;
 		}
 
-		if (this.env.DEBUG === 'true') {
-			writeMetric(this.env.METRICS, {
-				name: 'opus_packet_received',
-				worker: 'opus-transcriber-proxy',
-			});
-		}
+		this.metricCache.increment({
+			name: 'opus_packet_received',
+			worker: 'opus-transcriber-proxy',
+		});
 
 		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
 			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
@@ -298,12 +300,10 @@ export class OutgoingConnection {
 		} else if (this.decoderStatus === 'pending') {
 			// Queue the binary data until decoder is ready
 			this.pendingOpusFrames.push(opusFrame);
-			if (this.env.DEBUG === 'true') {
-				writeMetric(this.env.METRICS, {
-					name: 'opus_packet_queued',
-					worker: 'opus-transcriber-proxy',
-				});
-			}
+			this.metricCache.increment({
+				name: 'opus_packet_queued',
+				worker: 'opus-transcriber-proxy',
+			});
 			// console.log(`Queued opus frame for tag: ${this.tag} (queue size: ${this.pendingOpusFrames.length})`);
 		} else {
 			console.log(`Not queueing opus frame for tag: ${this._tag}: decoder ${this.decoderStatus}`);
@@ -371,12 +371,10 @@ export class OutgoingConnection {
 				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
-			if (this.env.DEBUG === 'true') {
-				writeMetric(this.env.METRICS, {
-					name: 'opus_packet_decoded',
-					worker: 'opus-transcriber-proxy',
-				});
-			}
+			this.metricCache.increment({
+				name: 'opus_packet_decoded',
+				worker: 'opus-transcriber-proxy',
+			});
 			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
 			this.sendOrEnqueueDecodedAudio(decodedAudio.pcmData);
 		} catch (error) {
@@ -404,12 +402,10 @@ export class OutgoingConnection {
 				this.pendingAudioDataBuffer.resize(uint8Data.byteLength);
 				this.pendingAudioData.set(uint8Data);
 			}
-			if (this.env.DEBUG === 'true') {
-				writeMetric(this.env.METRICS, {
-					name: 'openai_audio_queued',
-					worker: 'opus-transcriber-proxy',
-				});
-			}
+			this.metricCache.increment({
+				name: 'openai_audio_queued',
+				worker: 'opus-transcriber-proxy',
+			});
 		} else {
 			console.log(`Not queueing audio data for tag: ${this._tag}: connection ${this.connectionStatus}`);
 		}
@@ -446,12 +442,10 @@ export class OutgoingConnection {
 
 			this.openaiWebSocket.send(audioMessageString);
 			this.resetIdleCommitTimeout();
-			if (this.env.DEBUG === 'true') {
-				writeMetric(this.env.METRICS, {
-					name: 'openai_audio_sent',
-					worker: 'opus-transcriber-proxy',
-				});
-			}
+			this.metricCache.increment({
+				name: 'openai_audio_sent',
+				worker: 'opus-transcriber-proxy',
+			});
 		} catch (error) {
 			console.error(`Failed to send audio to OpenAI for tag ${this._tag}`, error);
 			// TODO should this call onError?
@@ -611,6 +605,7 @@ export class OutgoingConnection {
 		}
 
 		console.log(`Forcing commit for idle connection ${this._tag}`);
+		this.metricCache.flush();
 		const commitMessage = { type: 'input_audio_buffer.commit' };
 		this.openaiWebSocket.send(JSON.stringify(commitMessage));
 		this.idleCommitTimeout = null;
@@ -622,6 +617,7 @@ export class OutgoingConnection {
 
 	private doClose(notify: boolean): void {
 		this.clearIdleCommitTimeout();
+		this.metricCache.flush();
 		this.opusDecoder?.free();
 		this.opusDecoder = undefined;
 		this.decoderStatus = 'closed';
