@@ -99,12 +99,13 @@ export default {
 			server.addEventListener('close', () => {
 				// TODO: should we wait some time for the final transcriptions to come in?
 				// How long will Cloudflare let us do that?
+				console.log('Server WebSocket closed');
 				session.close();
 				outbound?.close();
 				outbound = undefined;
 				transcriptionator?.notifySessionClosed();
 				transcriptionator = undefined;
-				// Server.close will be called below, in session 'closed' handler
+				server.close();
 			});
 
 			server.addEventListener('error', (event) => {
