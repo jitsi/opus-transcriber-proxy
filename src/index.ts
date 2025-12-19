@@ -109,14 +109,14 @@ export default {
 			});
 
 			server.addEventListener('error', (event) => {
-				const message = event instanceof Error ? event.message : String(event);
-				console.error('Server WebSocket error:', message);
+				const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+				console.error('Server WebSocket error:', errorMessage);
 				session.close();
-				outbound?.close(1011, message);
+				outbound?.close(1011, errorMessage);
 				outbound = undefined;
 				transcriptionator?.notifySessionClosed();
 				transcriptionator = undefined;
-				server.close(1011, message);
+				server.close(1011, errorMessage);
 			});
 
 			session.on('closed', () => {
