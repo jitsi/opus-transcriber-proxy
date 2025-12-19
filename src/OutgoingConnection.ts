@@ -112,7 +112,7 @@ export class OutgoingConnection {
 		this.setServerAcknowledgedTag(tag);
 		this.env = env;
 		this.options = options;
-		this.metricCache = new MetricCache(env.METRICS);
+		this.metricCache = new MetricCache(env.METRICS, NaN);
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket(env);
@@ -125,7 +125,6 @@ export class OutgoingConnection {
 	// responds to the first reset.
 	reset(newTag: string) {
 		this.localTag = newTag;
-		this.metricCache.flush();
 		if (this.connectionStatus == 'connected') {
 			this.pendingTags.push(newTag);
 
@@ -620,7 +619,6 @@ export class OutgoingConnection {
 		}
 
 		console.log(`Forcing commit for idle connection ${this.localTag}`);
-		this.metricCache.flush();
 		const commitMessage = { type: 'input_audio_buffer.commit' };
 		this.openaiWebSocket.send(JSON.stringify(commitMessage));
 		this.idleCommitTimeout = null;

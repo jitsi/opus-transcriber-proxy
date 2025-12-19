@@ -65,20 +65,28 @@ export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event
 	}
 
 	if (debugMetrics) {
-		console.log('Writing metric:', {
-			name: event.name,
-			worker: event.worker,
-			errorType: event.errorType,
-			sessionId: event.sessionId,
-			targetName: event.targetName,
-			count,
-			latencyMs: event.latencyMs,
-		});
+		console.log(
+			'Writing metric:',
+			JSON.stringify({
+				name: event.name,
+				worker: event.worker,
+				errorType: event.errorType,
+				sessionId: event.sessionId,
+				targetName: event.targetName,
+				count,
+				latencyMs: event.latencyMs,
+			}),
+		);
 	}
 
-	analytics.writeDataPoint({
-		blobs: [event.name, event.worker, event.errorType ?? '', event.sessionId ?? '', event.targetName ?? ''],
-		doubles: [count, event.latencyMs ?? 0],
-		indexes: [event.sessionId ?? ''],
-	});
+	try {
+		analytics.writeDataPoint({
+			blobs: [event.name, event.worker, event.errorType ?? '', event.sessionId ?? '', event.targetName ?? ''],
+			doubles: [count, event.latencyMs ?? 0],
+			indexes: [event.sessionId ?? ''],
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error('Failed to write metric:', message);
+	}
 }

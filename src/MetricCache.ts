@@ -11,7 +11,7 @@ export class MetricCache {
 
 	/**
 	 * @param analytics - The Analytics Engine dataset to write to
-	 * @param intervalMs - Time interval in milliseconds between metric writes (default: 1000ms)
+	 * @param intervalMs - Time interval in milliseconds between metric writes (default: 1000ms).  NaN to force writes only on flush
 	 */
 	constructor(analytics: AnalyticsEngineDataset | undefined, intervalMs: number = 1000) {
 		this.analytics = analytics;
