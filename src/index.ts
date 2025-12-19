@@ -96,9 +96,33 @@ export default {
 				}
 			}
 
+			server.addEventListener('close', () => {
+				// TODO: should we wait some time for the final transcriptions to come in?
+				// How long will Cloudflare let us do that?
+				session.close();
+				outbound?.close();
+				outbound = undefined;
+				transcriptionator?.notifySessionClosed();
+				transcriptionator = undefined;
+				// Server.close will be called below, in session 'closed' handler
+			});
+
+			server.addEventListener('error', (event) => {
+				const message = event instanceof Error ? event.message : String(event);
+				console.error('Server WebSocket error:', message);
+				session.close();
+				outbound?.close(1011, message);
+				outbound = undefined;
+				transcriptionator?.notifySessionClosed();
+				transcriptionator = undefined;
+				server.close(1011, message);
+			});
+
 			session.on('closed', () => {
 				outbound?.close();
+				outbound = undefined;
 				transcriptionator?.notifySessionClosed();
+				transcriptionator = undefined;
 				server.close();
 			});
 
