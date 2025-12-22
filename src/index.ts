@@ -1,8 +1,10 @@
 import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
+import { TranslateProxy } from './translateproxy';
 import { Transcriptionator } from './transcriptionator';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { writeMetric, setMetricDebug } from './metrics';
+import { TRANSLATION_INSTRUCTIONS } from './translation-instructions';
 
 export interface DispatcherTranscriptionMessage {
 	sessionId: string;
@@ -43,7 +45,7 @@ export default {
 
 		const { url, sessionId, transcribe, connect, useTranscriptionator, useDispatcher, sendBack, sendBackInterim, language } = parameters;
 
-		if (!url.pathname.endsWith('/events') && !url.pathname.endsWith('/transcribe')) {
+		if (!url.pathname.endsWith('/events') && !url.pathname.endsWith('/transcribe') && !url.pathname.endsWith('/translate')) {
 			return new Response('Bad URL', { status: 400 });
 		}
 
@@ -169,6 +171,90 @@ export default {
 							const message = error instanceof Error ? error.message : String(error);
 							console.error('Dispatcher RPC failed:', message, dispatcherMessage);
 						});
+				}
+			});
+
+			// Accept the connection and return immediately
+			return new Response(null, {
+				status: 101,
+				webSocket: client,
+			});
+		} else if (url.pathname.endsWith('/translate')) {
+			// Handle translation endpoint
+			const targetLanguage = 'en';
+			const instructions = TRANSLATION_INSTRUCTIONS.english;
+			const sendBack = url.searchParams.get('sendBack') === 'true';
+
+			const webSocketPair = new WebSocketPair();
+			const [client, server] = Object.values(webSocketPair);
+
+			server.accept();
+
+			const translateSession = new TranslateProxy(server, env, {
+				targetLanguage,
+				instructions,
+				voice: url.searchParams.get('voice') || 'alloy',
+			});
+
+			translateSession.on('closed', () => {
+				server.close();
+			});
+
+			translateSession.on('error', (tag, error) => {
+				try {
+					const message = `Error in translation session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+					console.error(message);
+					server.close(1011, message);
+				} catch (closeError) {
+					console.error(
+						`Failed to close connection after error in translation session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+					);
+				}
+			});
+
+			translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
+				console.log("transcription event received, sendBack=" + sendBack, "data:", data);
+				if (sendBack) {
+					// Match the TranscriptionMessage format
+					const translationMessage: TranscriptionMessage = {
+						transcript: [{ text: data.transcript }],
+						is_interim: false,
+						language: data.targetLanguage,
+						message_id: `translation-${data.tag}-${Date.now()}`,
+						type: 'transcription-result',
+						event: 'transcription-result',
+						participant: { id: data.tag },
+						timestamp: Date.now(),
+					};
+					const message = JSON.stringify(translationMessage);
+					console.log("Sending translation back to client:", message);
+					server.send(message);
+				}
+			});
+
+			translateSession.on('audioFrame', (data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
+				if (sendBack) {
+					const audioMessage = {
+						event: 'media',
+						sequenceNumber: data.sequenceNumber.toString(),
+						media: {
+							tag: data.tag,
+							chunk: data.chunk.toString(),
+							timestamp: data.timestamp.toString(),
+							payload: data.payload,
+						},
+					};
+
+					// Log with payload length instead of full payload
+					console.log('Sending audio frame:', JSON.stringify({
+						...audioMessage,
+						media: {
+							...audioMessage.media,
+							payload: `<${data.payload.length} chars>`,
+						},
+					}));
+
+					server.send(JSON.stringify(audioMessage));
 				}
 			});
 

@@ -607,7 +607,7 @@ export class OutgoingConnection {
 				// This error indicates that we tried to commit an empty audio buffer, which can happen
 				// if the VAD detected speech stopped just before we did a manual commit.  Ignore.
 				// TODO should we log this at all?
-				console.log(`OpenAI reported empty audio buffer commit for ${this.serverAcknowledgedTag}, ignoring.`);
+				//console.log(`OpenAI reported empty audio buffer commit for ${this.serverAcknowledgedTag}, ignoring.`);
 				return;
 			}
 			console.error(`OpenAI sent error message for ${this.serverAcknowledgedTag}: ${data}`);
