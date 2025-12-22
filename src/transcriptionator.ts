@@ -22,10 +22,12 @@ export class Transcriptionator extends DurableObject<Env> {
 		this.observers.add(server);
 		server.addEventListener('close', () => {
 			this.observers.delete(server);
+			server.close();
 		});
 
 		server.addEventListener('error', () => {
 			this.observers.delete(server);
+			server.close();
 			console.error(`Observer connection closed with error.`);
 		});
 

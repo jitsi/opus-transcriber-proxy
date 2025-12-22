@@ -629,6 +629,7 @@ export class OutgoingConnection {
 	}
 
 	private doClose(notify: boolean): void {
+		console.log(`Closing OutgoingConnection for tag: ${this.localTag}`);
 		this.clearIdleCommitTimeout();
 		this.metricCache.flush();
 		this.opusDecoder?.free();
