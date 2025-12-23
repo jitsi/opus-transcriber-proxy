@@ -1,4 +1,5 @@
 import { TranslateConnection } from './TranslateConnection';
+import { GeminiTranslateConnection } from './GeminiTranslateConnection';
 import { EventEmitter } from 'node:events';
 
 export interface TranslateProxyOptions {
@@ -7,9 +8,11 @@ export interface TranslateProxyOptions {
 	voice?: string;
 }
 
+type AnyTranslateConnection = TranslateConnection | GeminiTranslateConnection;
+
 export class TranslateProxy extends EventEmitter {
 	private readonly ws: WebSocket;
-	private translateConnections: Map<string, TranslateConnection>;
+	private translateConnections: Map<string, AnyTranslateConnection>;
 	private env: Env;
 	private options: TranslateProxyOptions;
 
@@ -51,18 +54,28 @@ export class TranslateProxy extends EventEmitter {
 		});
 	}
 
-	private getConnection(tag: string): TranslateConnection {
+	private getConnection(tag: string): AnyTranslateConnection {
 		const connection = this.translateConnections.get(tag);
 		if (connection !== undefined) {
 			return connection;
 		}
 
-		// Create a new translation connection
-		const newConnection = new TranslateConnection(tag, this.env, {
-			targetLanguage: this.options.targetLanguage,
-			instructions: this.options.instructions,
-			voice: this.options.voice,
-		});
+		// Determine which provider to use based on environment variable
+		const provider = this.env.TRANSLATION_PROVIDER || 'openai';
+		console.log(`Creating ${provider} translation connection for tag: ${tag}`);
+
+		// Create a new translation connection based on provider
+		const newConnection: AnyTranslateConnection =
+			provider === 'gemini'
+				? new GeminiTranslateConnection(tag, this.env, {
+						targetLanguage: this.options.targetLanguage,
+						instructions: this.options.instructions,
+				  })
+				: new TranslateConnection(tag, this.env, {
+						targetLanguage: this.options.targetLanguage,
+						instructions: this.options.instructions,
+						voice: this.options.voice,
+				  });
 
 		newConnection.onClosed = (tag) => {
 			this.translateConnections.delete(tag);
@@ -79,7 +92,7 @@ export class TranslateProxy extends EventEmitter {
 		};
 
 		this.translateConnections.set(tag, newConnection);
-		console.log(`Created translation connection for tag: ${tag}, target language: ${this.options.targetLanguage}`);
+		console.log(`Created ${provider} translation connection for tag: ${tag}, target language: ${this.options.targetLanguage}`);
 		return newConnection;
 	}
 

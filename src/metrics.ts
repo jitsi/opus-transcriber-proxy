@@ -34,7 +34,10 @@ export type MetricName =
 	| 'opus_packet_discarded'
 	| 'openai_audio_queued'
 	| 'openai_audio_sent'
-	| 'openai_api_error';
+	| 'openai_api_error'
+	| 'gemini_audio_queued'
+	| 'gemini_audio_sent'
+	| 'gemini_api_error';
 
 export interface MetricEvent {
 	name: MetricName;
