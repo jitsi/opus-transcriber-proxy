@@ -91,7 +91,7 @@ export class GeminiTranslateConnection {
 		this.localTag = tag;
 		this.env = env;
 		this.options = {
-			model: 'gemini-2.0-flash-exp',
+			model: 'gemini-2.5-flash-native-audio-preview-12-2025',
 			...options,
 		};
 		this.metricCache = new MetricCache(env.METRICS);
@@ -441,7 +441,29 @@ export class GeminiTranslateConnection {
 	private async handleGeminiMessage(data: any): Promise<void> {
 		let parsedMessage;
 		try {
-			parsedMessage = JSON.parse(data);
+			// Handle different message formats (string, ArrayBuffer, Blob)
+			let messageText: string;
+			if (typeof data === 'string') {
+				messageText = data;
+			} else if (data instanceof ArrayBuffer) {
+				const decoder = new TextDecoder();
+				messageText = decoder.decode(data);
+			} else {
+				this.logError(`Unsupported message data type for tag ${this.localTag}: ${typeof data}`);
+				return;
+			}
+
+			parsedMessage = JSON.parse(messageText);
+
+			// Log the event received from Gemini (excluding base64 audio data)
+			const sanitizedMessage = JSON.parse(JSON.stringify(parsedMessage, (key, value) => {
+				// Replace base64 audio data with a placeholder
+				if (key === 'data' && typeof value === 'string' && value.length > 100) {
+					return `[BASE64 DATA - ${value.length} chars]`;
+				}
+				return value;
+			}));
+			this.log(`Gemini event received: ${JSON.stringify(sanitizedMessage, null, 2)}`);
 		} catch (parseError) {
 			this.logError(`Failed to parse Gemini message as JSON for tag ${this.localTag}:`, parseError);
 			return;
