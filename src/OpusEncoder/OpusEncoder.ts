@@ -24,13 +24,16 @@ export interface OpusEncoderConfig {
 	complexity?: number; // 0-10
 }
 
-interface OpusEncoderModule extends EmscriptenModule {
+interface OpusEncoderModule {
 	_opus_frame_encoder_create: (sampleRate: number, channels: number, application: number) => number;
 	_opus_frame_encoder_get_frame_size: (ctx: number) => number;
 	_opus_frame_encode: (ctx: number, pcmData: number, pcmLength: number, outputBuffer: number, outputBufferSize: number) => number;
 	_opus_frame_encoder_destroy: (ctx: number) => void;
 	_opus_frame_encoder_set_bitrate: (ctx: number, bitrate: number) => number;
 	_opus_frame_encoder_set_complexity: (ctx: number, complexity: number) => number;
+	_malloc: (size: number) => number;
+	_free: (ptr: number) => void;
+	HEAPU8: Uint8Array;
 }
 
 const APPLICATION_TYPES = {
