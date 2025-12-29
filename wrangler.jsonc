@@ -35,7 +35,14 @@
 		After how many seconds of no received audio and no final transcription
 		a flush is triggered.
 		**/
-		"FORCE_COMMIT_TIMEOUT": "2"
+		"FORCE_COMMIT_TIMEOUT": "2",
+		/** OpenAI API configuration (use secrets for actual values) */
+		"OPENAI_API_KEY": "",
+		"OPENAI_MODEL": "",
+		/** Gemini API configuration (use secrets for actual values) */
+		"GEMINI_API_KEY": "",
+		/** Translation provider selection: "openai" or "gemini" */
+		"TRANSLATION_PROVIDER": ""
 	},
 	/**
 	 * Note: Use secrets to store sensitive data.
