@@ -52,9 +52,10 @@ export function getTurnDetectionConfig(env: Env) {
 				console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
 				return defaultTurnDetection;
 			}
+		} else {
+			// JSON object from CF (when using JSON bindings)
+			turnDetection = env.OPENAI_TURN_DETECTION as any;
 		}
-		// JSON object from CF
-		turnDetection = env.OPENAI_TURN_DETECTION;
 	}
 
 	if (typeof turnDetection !== 'object' || typeof turnDetection.type !== 'string') {
