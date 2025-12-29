@@ -37,12 +37,15 @@
 		**/
 		"FORCE_COMMIT_TIMEOUT": "2",
 		/** OpenAI API configuration (use secrets for actual values) */
-		"OPENAI_API_KEY": "",
-		"OPENAI_MODEL": "",
+		"OPENAI_API_KEY": "placeholder",
+		"OPENAI_MODEL": "gpt-4o-realtime-preview",
+		"OPENAI_TURN_DETECTION": "server_vad",
 		/** Gemini API configuration (use secrets for actual values) */
-		"GEMINI_API_KEY": "",
+		"GEMINI_API_KEY": "placeholder",
 		/** Translation provider selection: "openai" or "gemini" */
-		"TRANSLATION_PROVIDER": ""
+		"TRANSLATION_PROVIDER": "openai",
+		/** Debug logging */
+		"DEBUG": "false"
 	},
 	/**
 	 * Note: Use secrets to store sensitive data.
