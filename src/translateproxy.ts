@@ -61,7 +61,7 @@ export class TranslateProxy extends EventEmitter {
 		}
 
 		// Determine which provider to use based on environment variable
-		const provider = this.env.TRANSLATION_PROVIDER || 'openai';
+		const provider: string = this.env.TRANSLATION_PROVIDER || 'openai';
 		console.log(`Creating ${provider} translation connection for tag: ${tag}`);
 
 		// Create a new translation connection based on provider

@@ -166,7 +166,7 @@ export class OpusEncoder<SR extends SampleRate> {
 			);
 
 			if (encodedBytes < 0) {
-				const errorMessages: Record<number, string> = {
+				const errorMessages: Record<string, string> = {
 					'-1': 'OPUS_BAD_ARG: One or more invalid/out of range arguments',
 					'-2': 'OPUS_BUFFER_TOO_SMALL: Not enough bytes allocated in the buffer',
 					'-3': 'OPUS_INTERNAL_ERROR: An internal error was detected',
