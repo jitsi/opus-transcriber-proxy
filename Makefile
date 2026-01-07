@@ -47,8 +47,9 @@ opus-wasmlib: $(LIBOPUS_WASM_LIB)
 
 # common EMCC options
 define EMCC_OPTS
--O2 \
+-O3 \
 -msimd128 \
+-flto \
 --minify 0 \
 -gsource-map \
 -s WASM=1 \
@@ -109,9 +110,11 @@ $(LIBOPUS_WASM_LIB): $(LIBOPUS_BUILD)/Makefile
 
 libopus-configure: $(LIBOPUS_BUILD)/Makefile
 
- $(LIBOPUS_BUILD)/Makefile: $(LIBOPUS_SRC)/configure
+$(LIBOPUS_BUILD)/Makefile: $(LIBOPUS_SRC)/configure
 	mkdir -p $(LIBOPUS_BUILD)
-	cd $(LIBOPUS_BUILD); CFLAGS="-O3 -msimd128" emconfigure $(CURDIR)/$(LIBOPUS_SRC)/configure \
+	cd $(LIBOPUS_BUILD); \
+	  CFLAGS="-O3 -msimd128 -flto" \
+	  emconfigure $(CURDIR)/$(LIBOPUS_SRC)/configure \
 	  --host=wasm32-unknown-emscripten \
 	  --enable-float-approx \
 	  --disable-rtcd \
