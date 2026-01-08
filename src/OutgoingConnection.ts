@@ -3,7 +3,6 @@ import type { TranscriptionMessage, TranscriberProxyOptions } from './transcribe
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
-import { get } from 'http';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -58,7 +57,12 @@ function safeToBase64(array: Uint8Array): string {
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
-function getParticipantFromTag(tag: string): { id: string; ssrc?: string } {
+declare interface Participant {
+	id: string;
+	ssrc?: string;
+}
+
+function getParticipantFromTag(tag: string): Participant {
 	const match = tagMatcher.exec(tag);
 	if (match !== null && match.length === 3) {
 		return { id: match[1], ssrc: match[2] };
@@ -77,9 +81,9 @@ export class OutgoingConnection {
 		this.serverAcknowledgedTag = newTag;
 		this.participant = getParticipantFromTag(newTag);
 	}
-	private participant: any;
+	private participant!: Participant;
 	private pendingTags: string[] = [];
-	private pendingItems = new Map<string, any>();
+	private pendingItems = new Map<string, Participant>();
 	private connectionStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private opusDecoder?: OpusDecoder<24000>;
@@ -548,8 +552,18 @@ export class OutgoingConnection {
 				transcriptTime = Date.now();
 			}
 			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
-			const participant = this.pendingItems.get(parsedMessage.item_id) ?? this.participant;
-			this.pendingItems.delete(parsedMessage.item_id);
+			let participant: Participant
+			if (this.pendingItems.has(parsedMessage.item_id)) {
+				participant = this.pendingItems.get(parsedMessage.item_id)!;
+				this.pendingItems.delete(parsedMessage.item_id);
+			} else {
+				participant = this.participant;
+				if (this.tag === this.serverAcknowledgedTag) {
+					// Once we have a final transcription for the current tag, we can reset the pending items map
+					// since no more transcriptions for previous tags will be arriving.
+					this.pendingItems.clear();
+				}
+			}
 			const transcription = this.getTranscriptionMessage(
 				parsedMessage.transcript,
 				confidence,
@@ -560,10 +574,6 @@ export class OutgoingConnection {
 			);
 			this.clearIdleCommitTimeout();
 			this.onCompleteTranscription?.(transcription);
-			if (this.tag === this.serverAcknowledgedTag) {
-				// Once we have a transcription for the current tag, we can reset the pending items map
-				this.pendingItems.clear();
-			}
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.failed') {
 			console.error(`OpenAI failed to transcribe audio for tag ${this.serverAcknowledgedTag}: ${data}`);
 			writeMetric(this.env.METRICS, {
