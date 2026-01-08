@@ -525,7 +525,6 @@ export class OutgoingConnection {
 	}
 
 	private async handleOpenAIMessage(data: any): Promise<void> {
-		console.log(`Received OpenAI message for tag ${this.serverAcknowledgedTag}: ${data}`);
 		let parsedMessage;
 		try {
 			parsedMessage = JSON.parse(data);
