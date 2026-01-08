@@ -93,7 +93,7 @@ jobs:
               env:
                 cache-name: emscripten-cache
               with:
-                path: ~/emsdk_main/upstream/emscripten/cache
+                path: ${{ env.EMSDK }}/upstream/emscripten/cache
                 key: ${{ runner.os }}-${{ env.cache-name }}-${{ inputs.emsdk_version }}
 
             - if: ${{ steps.cache-emscripten.outputs.cache-hit }} == 'true'
