@@ -505,7 +505,7 @@ export class OutgoingConnection {
 		timestamp: number,
 		message_id: string,
 		isInterim: boolean,
-		participant?: any,
+		participant: Participant,
 	): TranscriptionMessage {
 		const message: TranscriptionMessage = {
 			transcript: [
@@ -518,7 +518,7 @@ export class OutgoingConnection {
 			message_id,
 			type: 'transcription-result',
 			event: 'transcription-result',
-			participant: this.participant,
+			participant,
 			timestamp,
 		};
 		return message;
@@ -583,10 +583,9 @@ export class OutgoingConnection {
 		} else if (parsedMessage.type === 'input_audio_buffer.committed') {
 			if (this.tag !== this.serverAcknowledgedTag) {
 				// This commit is for the previous tag, but its transcript may arrive after the reset.
-				const pendingTag = this.pendingTags[0];
-				if (parsedMessage.item_id !== undefined && pendingTag !== undefined) {
+				if (parsedMessage.item_id !== undefined) {
 					// Store the item ID associated with this commit, so we can map it back when the transcription arrives
-					this.pendingItems.set(parsedMessage.item_id, getParticipantFromTag(pendingTag));
+					this.pendingItems.set(parsedMessage.item_id, this.participant);
 				}
 			}
 		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
