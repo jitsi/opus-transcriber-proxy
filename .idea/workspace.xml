@@ -4,10 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="9af83209-962b-4465-8433-c41c08320aea" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/worker-configuration.d.ts" beforeDir="false" afterPath="$PROJECT_DIR$/worker-configuration.d.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/wrangler.jsonc" beforeDir="false" afterPath="$PROJECT_DIR$/wrangler.jsonc" afterDir="false" />
-    </list>
+    <list default="true" id="9af83209-962b-4465-8433-c41c08320aea" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -38,7 +35,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "to.speed.mode.migration.done": "true",
-    "ts.external.directory.path": "/Users/bgrozev/git/opus-transcriber-proxy/node_modules/typescript/lib",
+    "ts.external.directory.path": "/Applications/IntelliJ IDEA.app/Contents/plugins/javascript-plugin/jsLanguageServicesImpl/external",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
@@ -57,7 +54,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1767903202566</updated>
-      <workItem from="1767903203777" duration="1475000" />
+      <workItem from="1767903203777" duration="3461000" />
     </task>
     <servers />
   </component>

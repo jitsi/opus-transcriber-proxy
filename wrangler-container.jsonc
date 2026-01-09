@@ -1,0 +1,73 @@
+{
+	"name": "opus-transcriber-proxy-container",
+	"main": "worker/index.ts",
+	"compatibility_date": "2025-01-09",
+	"account_id": "9b4d72f249d1514cee8e14c4a2510181",
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+		{
+			"image": "./Dockerfile",
+			"class_name": "TranscriberContainer",
+			"name": "transcriber",
+			// Allow up to 10 concurrent container instances
+			// Adjust based on your expected load
+			"max_instances": 10
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "TranscriberContainer",
+				"name": "TRANSCRIBER"
+			},
+			{
+				"class_name": "ContainerCoordinator",
+				"name": "CONTAINER_COORDINATOR"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["TranscriberContainer"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["ContainerCoordinator"]
+		}
+	],
+	// Service bindings for calling other workers
+	"services": [
+		{
+			// Bind to the transcription dispatcher worker
+			// This enables zero-latency RPC calls via env.TRANSCRIPTION_DISPATCHER
+			"binding": "TRANSCRIPTION_DISPATCHER",
+			// Replace with your actual dispatcher worker name
+			"service": "transcription-dispatcher",
+			// Optional: specify environment if dispatcher has multiple environments
+			"environment": "production"
+		}
+	],
+	// Environment variables - add your secrets using wrangler secret put
+	"vars": {
+		"FORCE_COMMIT_TIMEOUT": "2",
+		"DEBUG": "true",
+		// Container routing strategy: 'pool', 'session', 'shared', or 'autoscale'
+		// - 'pool': Load balance across a pool of containers (recommended for many sessions)
+		// - 'session': One container per sessionId (expensive, use for stateful sessions)
+		// - 'shared': Single container for all sessions (simple, low traffic)
+		// - 'autoscale': Auto-scaling with coordinator (dynamic scaling based on load)
+		"ROUTING_MODE": "autoscale",
+		// Number of containers in the pool (only used when ROUTING_MODE='pool')
+		"CONTAINER_POOL_SIZE": "5",
+		// Auto-scaling configuration (only used when ROUTING_MODE='autoscale')
+		// Maximum connections per container before scaling up
+		"MAX_CONNECTIONS_PER_CONTAINER": "10",
+		// Minimum number of containers to keep running
+		"MIN_CONTAINERS": "2",
+		// How long (ms) a container can be idle with 0 connections before scaling down
+		"SCALE_DOWN_IDLE_TIME": "600000"
+	}
+}

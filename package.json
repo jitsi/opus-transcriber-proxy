@@ -2,17 +2,25 @@
 	"name": "opus-transcriber-proxy",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"license": "Apache-2.0",
 	"scripts": {
 		"format": "prettier --write '**/*.{js,ts,css,json,md}'",
 		"configure": "make configure -j$(node -e 'console.log(require(\"os\").cpus().length)')",
-		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')",
+		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')  && mv dist/opus-decoder.js dist/opus-decoder.cjs",
 		"build:ts": "tsc",
-		"build": "npm run build:wasm && npm run build:ts",
+		"build:bundle": "node build.mjs",
+		"build": "npm run build:wasm && npm run build:bundle",
 		"dev": "npm run build:wasm && tsx watch src/server.ts",
-		"start": "node dist/src/server.js",
+		"start": "node dist/bundle/server.js",
 		"typecheck": "tsc --noEmit",
-		"test": "vitest"
+		"test": "vitest",
+		"docker:build": "npm run build && docker build -t opus-transcriber-proxy .",
+		"docker:run": "docker run -p 8080:8080 --env-file .env opus-transcriber-proxy",
+		"docker:test": "npm run docker:build && npm run docker:run",
+		"docker:build:local": "docker build -t opus-transcriber-proxy .",
+		"cf:deploy": "cd worker && npm install && npm run deploy",
+		"cf:tail": "cd worker && npm run tail"
 	},
 	"dependencies": {
 		"dotenv": "^16.4.5",
@@ -21,6 +29,7 @@
 	"devDependencies": {
 		"@types/node": "^24.7.2",
 		"@types/ws": "^8.5.13",
+		"esbuild": "^0.27.2",
 		"prettier": "^3.6.2",
 		"tsx": "^4.19.2",
 		"typescript": "^5.9.3",

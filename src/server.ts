@@ -10,6 +10,10 @@ setMetricDebug(config.debug);
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
+	// Log all incoming requests for debugging
+	console.log(`HTTP ${req.method} ${req.url}`);
+	console.log('Headers:', JSON.stringify(req.headers, null, 2));
+
 	if (req.url === '/health') {
 		res.writeHead(200);
 		res.end('OK');
@@ -24,6 +28,10 @@ const wss = new WebSocketServer({ noServer: true });
 
 // Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
+	console.log('UPGRADE EVENT TRIGGERED!');
+	console.log(`Upgrade ${request.method} ${request.url}`);
+	console.log('Upgrade Headers:', JSON.stringify(request.headers, null, 2));
+
 	const url = `http://${request.headers.host}${request.url}`;
 	const parameters = extractSessionParameters(url);
 

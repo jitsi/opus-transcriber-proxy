@@ -5,39 +5,6 @@ import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
 import { config } from './config';
 
-// Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
-// declarations for them as of version 5.9.3.
-// These definitions are taken from https://github.com/microsoft/TypeScript/pull/61696, which should be included
-// in TypeScript 6.0 and later.
-declare global {
-	interface Uint8ArrayConstructor {
-		/**
-		 * Creates a new `Uint8Array` from a base64-encoded string.
-		 * @param string The base64-encoded string.
-		 * @param options If provided, specifies the alphabet and handling of the last chunk.
-		 * @returns A new `Uint8Array` instance.
-		 * @throws {SyntaxError} If the input string contains characters outside the specified alphabet, or if the last
-		 * chunk is inconsistent with the `lastChunkHandling` option.
-		 */
-		fromBase64(
-			string: string,
-			options?: {
-				alphabet?: 'base64' | 'base64url' | undefined;
-				lastChunkHandling?: 'loose' | 'strict' | 'stop-before-partial' | undefined;
-			},
-		): Uint8Array<ArrayBuffer>;
-	}
-
-	interface Uint8Array<TArrayBuffer extends ArrayBufferLike> {
-		/**
-		 * Converts the `Uint8Array` to a base64-encoded string.
-		 * @param options If provided, sets the alphabet and padding behavior used.
-		 * @returns A base64-encoded string.
-		 */
-		toBase64(options?: { alphabet?: 'base64' | 'base64url' | undefined; omitPadding?: boolean | undefined }): string;
-	}
-}
-
 const OPENAI_WS_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
 
 // The maximum number of bytes of audio OpenAI allows to be sent at a time.
@@ -45,15 +12,9 @@ const OPENAI_WS_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
 // It's unlikely we'll hit this limit (it's ~4 minutes of audio at 24000 Hz) but better safe than sorry
 const MAX_AUDIO_BLOCK_BYTES = (15 * 1024 * 1024 * 3) / 4;
 
-// Safely create a base64 representation of a Uint8Array.  There's a bug in current versions of the v8 engine that
-// toBase64 doesn't work on an array backed by a resizable buffer.
-// TODO: test whether this bug is present, and fast-path this function if not.
+// Convert Uint8Array to base64 string using Node.js Buffer
 function safeToBase64(array: Uint8Array): string {
-	if (!(array.buffer instanceof ArrayBuffer) || !array.buffer.resizable) {
-		return array.toBase64();
-	}
-	const tmpArray = new Uint8Array(array);
-	return tmpArray.toBase64();
+	return Buffer.from(array.buffer, array.byteOffset, array.byteLength).toString('base64');
 }
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
@@ -234,8 +195,8 @@ export class OutgoingConnection {
 		let opusFrame: Uint8Array;
 
 		try {
-			// Base64 decode the media payload to binary
-			opusFrame = Uint8Array.fromBase64(mediaEvent.media.payload);
+			// Base64 decode the media payload to binary using Node.js Buffer
+			opusFrame = new Uint8Array(Buffer.from(mediaEvent.media.payload, 'base64'));
 		} catch (error) {
 			console.error(`Failed to decode base64 media payload for tag ${this.localTag}:`, error);
 			return;
@@ -361,7 +322,7 @@ export class OutgoingConnection {
 		const uint8Data = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
 
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
-			const encodedAudio = uint8Data.toBase64();
+			const encodedAudio = Buffer.from(uint8Data.buffer, uint8Data.byteOffset, uint8Data.byteLength).toString('base64');
 			this.sendAudioToOpenAI(encodedAudio);
 		} else if (this.connectionStatus === 'pending') {
 			// Add the pending audio data for later sending

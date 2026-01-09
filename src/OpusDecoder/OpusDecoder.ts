@@ -13,7 +13,7 @@ if (typeof globalThis.__dirname === 'undefined') {
 	globalThis.__dirname = '.';
 }
 
-import OpusDecoderModule from '../../dist/opus-decoder.js';
+import OpusDecoderModule from '../../dist/opus-decoder.cjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
