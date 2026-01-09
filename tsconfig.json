@@ -5,7 +5,7 @@
 		/* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
 		"target": "esnext",
 		/* Specify a set of bundled library declaration files that describe the target runtime environment. */
-		"lib": ["esnext"],
+		"lib": ["esnext", "webworker"],
 		/* Specify what JSX code is generated. */
 		"jsx": "react-jsx",
 
@@ -22,7 +22,9 @@
 		"checkJs": false,
 
 		/* Disable emitting files from a compilation. */
-		"noEmit": true,
+		"noEmit": false,
+		/* Specify an output folder for all emitted files. */
+		"outDir": "dist",
 		/* Generate source maps for debugging. */
 		"sourceMap": true,
 
@@ -38,8 +40,8 @@
 
 		/* Skip type checking all .d.ts files. */
 		"skipLibCheck": true,
-		"types": ["@types/node", "./worker-configuration.d.ts"]
+		"types": ["@types/node"]
 	},
 	"exclude": ["test"],
-	"include": ["worker-configuration.d.ts", "src/**/*.ts"]
+	"include": ["src/**/*.ts"]
 }

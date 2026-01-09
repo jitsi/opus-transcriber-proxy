@@ -1,5 +1,6 @@
 import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
+import { WebSocket } from 'ws';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -20,17 +21,15 @@ export class TranscriberProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
 
-	// Cloudflare workers allow a max of six concurrent outgoing connections.  Leave some room
-	// in case we need to do separate fetch() calls or the like.  The JVB should have at most
-	// three concurrent speakers.
+	// Node.js doesn't have the same connection limit as Cloudflare workers,
+	// but we maintain the same limit for consistency with the original design.
+	// The JVB should have at most three concurrent speakers.
 	private MAX_OUTGOING_CONNECTIONS = 4;
-	private env: Env;
 	private options: TranscriberProxyOptions;
 
-	constructor(ws: WebSocket, env: Env, options: TranscriberProxyOptions) {
+	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
 		this.ws = ws;
-		this.env = env;
 		this.options = options;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
 
@@ -77,7 +76,7 @@ export class TranscriberProxy extends EventEmitter {
 		}
 
 		if (this.outgoingConnections.size < this.MAX_OUTGOING_CONNECTIONS) {
-			const newConnection = new OutgoingConnection(tag, this.env, this.options);
+			const newConnection = new OutgoingConnection(tag, this.options);
 
 			newConnection.onInterimTranscription = (message) => {
 				this.emit('interim_transcription', message);

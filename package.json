@@ -6,21 +6,24 @@
 	"scripts": {
 		"format": "prettier --write '**/*.{js,ts,css,json,md}'",
 		"configure": "make configure -j$(node -e 'console.log(require(\"os\").cpus().length)')",
-		"build": "make -j$(node -e 'console.log(require(\"os\").cpus().length)') && tsc",
 		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')",
 		"build:ts": "tsc",
-		"dev": "npm run build && wrangler dev",
-		"deploy": "npm run build && wrangler deploy",
+		"build": "npm run build:wasm && npm run build:ts",
+		"dev": "npm run build:wasm && tsx watch src/server.ts",
+		"start": "node dist/src/server.js",
 		"typecheck": "tsc --noEmit",
-		"test": "vitest",
-		"cf-typegen": "wrangler types"
+		"test": "vitest"
+	},
+	"dependencies": {
+		"dotenv": "^16.4.5",
+		"ws": "^8.18.0"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
 		"@types/node": "^24.7.2",
+		"@types/ws": "^8.5.13",
 		"prettier": "^3.6.2",
+		"tsx": "^4.19.2",
 		"typescript": "^5.9.3",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.38.0"
+		"vitest": "~3.2.0"
 	}
 }

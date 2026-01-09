@@ -3,6 +3,7 @@ import type { TranscriptionMessage, TranscriberProxyOptions } from './transcribe
 import { getTurnDetectionConfig } from './utils';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
+import { config } from './config';
 
 // Type definition augmentation for Uint8Array - Cloudflare Worker's JS has these methods but TypeScript doesn't have
 // declarations for them as of version 5.9.3.
@@ -103,19 +104,17 @@ export class OutgoingConnection {
 	onOpenAIError?: (errorType: string, errorMessage: string) => void = undefined;
 	onError?: (tag: string, error: any) => void = undefined;
 
-	private env: Env;
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
 
-	constructor(tag: string, env: Env, options: TranscriberProxyOptions) {
+	constructor(tag: string, options: TranscriberProxyOptions) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
-		this.env = env;
 		this.options = options;
-		this.metricCache = new MetricCache(env.METRICS, NaN);
+		this.metricCache = new MetricCache(undefined, NaN);
 
 		this.initializeOpusDecoder();
-		this.initializeOpenAIWebSocket(env);
+		this.initializeOpenAIWebSocket();
 	}
 
 	// When a connection is reset, local state is associated with the new tag, but
@@ -168,9 +167,9 @@ export class OutgoingConnection {
 		}
 	}
 
-	private initializeOpenAIWebSocket(env: Env): void {
+	private initializeOpenAIWebSocket(): void {
 		try {
-			const openaiWs = new WebSocket(OPENAI_WS_URL, ['realtime', `openai-insecure-api-key.${env.OPENAI_API_KEY}`]);
+			const openaiWs = new WebSocket(OPENAI_WS_URL, ['realtime', `openai-insecure-api-key.${config.openai.apiKey}`]);
 
 			console.log(`Opening OpenAI WebSocket to ${OPENAI_WS_URL} for tag: ${this.localTag}`);
 
@@ -181,7 +180,7 @@ export class OutgoingConnection {
 				this.connectionStatus = 'connected';
 
 				const transcriptionConfig: { model: string; language?: string } = {
-					model: env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
+					model: config.openai.model,
 				};
 				if (this.options.language !== null) {
 					transcriptionConfig.language = this.options.language;
@@ -201,7 +200,7 @@ export class OutgoingConnection {
 									type: 'near_field',
 								},
 								transcription: transcriptionConfig,
-								turn_detection: getTurnDetectionConfig(env),
+								turn_detection: getTurnDetectionConfig(),
 							},
 						},
 						include: ['item.input_audio_transcription.logprobs'],
@@ -225,7 +224,7 @@ export class OutgoingConnection {
 				// Extract useful info from ErrorEvent (event.message is often empty for WebSocket errors)
 				const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
 				console.error(`OpenAI WebSocket error for tag ${this.serverAcknowledgedTag}: ${errorMessage}`);
-				writeMetric(this.env.METRICS, {
+				writeMetric(undefined, {
 					name: 'openai_api_error',
 					worker: 'opus-transcriber-proxy',
 					errorType: 'websocket_error',
@@ -245,7 +244,7 @@ export class OutgoingConnection {
 			});
 		} catch (error) {
 			console.error(`Failed to create OpenAI WebSocket connection for tag ${this.localTag}:`, error);
-			writeMetric(this.env.METRICS, {
+			writeMetric(undefined, {
 				name: 'openai_api_error',
 				worker: 'opus-transcriber-proxy',
 				errorType: 'connection_failed',
@@ -290,7 +289,7 @@ export class OutgoingConnection {
 				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
 				if (chunkDelta <= 0) {
 					// Packets reordered or replayed, drop this packet
-					writeMetric(this.env.METRICS, {
+					writeMetric(undefined, {
 						name: 'opus_packet_discarded',
 						worker: 'opus-transcriber-proxy',
 					});
@@ -349,13 +348,13 @@ export class OutgoingConnection {
 		try {
 			const concealedAudio = this.opusDecoder.conceal(opusFrame, samplesToConceal);
 			if (concealedAudio.errors.length > 0) {
-				writeMetric(this.env.METRICS, {
+				writeMetric(undefined, {
 					name: 'opus_decode_failure',
 					worker: 'opus-transcriber-proxy',
 				});
 			} else {
 				this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
-				writeMetric(this.env.METRICS, {
+				writeMetric(undefined, {
 					name: 'opus_loss_concealment',
 					worker: 'opus-transcriber-proxy',
 				});
@@ -377,7 +376,7 @@ export class OutgoingConnection {
 			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
 			if (decodedAudio.errors.length > 0) {
 				console.error(`Opus decoding errors for tag ${this.localTag}:`, decodedAudio.errors);
-				writeMetric(this.env.METRICS, {
+				writeMetric(undefined, {
 					name: 'opus_decode_failure',
 					worker: 'opus-transcriber-proxy',
 				});
@@ -550,7 +549,7 @@ export class OutgoingConnection {
 			this.onCompleteTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.failed') {
 			console.error(`OpenAI failed to transcribe audio for tag ${this.serverAcknowledgedTag}: ${data}`);
-			writeMetric(this.env.METRICS, {
+			writeMetric(undefined, {
 				name: 'transcription_failure',
 				worker: 'opus-transcriber-proxy',
 			});
@@ -571,7 +570,7 @@ export class OutgoingConnection {
 				return;
 			}
 			console.error(`OpenAI sent error message for ${this.serverAcknowledgedTag}: ${data}`);
-			writeMetric(this.env.METRICS, {
+			writeMetric(undefined, {
 				name: 'openai_api_error',
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
@@ -596,7 +595,7 @@ export class OutgoingConnection {
 	private resetIdleCommitTimeout(): void {
 		this.clearIdleCommitTimeout();
 
-		const timeoutSeconds = parseInt(this.env.FORCE_COMMIT_TIMEOUT || '0', 10);
+		const timeoutSeconds = config.forceCommitTimeout;
 		if (timeoutSeconds <= 0) {
 			return;
 		}

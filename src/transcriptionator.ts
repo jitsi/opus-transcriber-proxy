@@ -1,3 +1,18 @@
+/*
+ * DISABLED FOR NODE.JS VERSION
+ *
+ * This file contains the Transcriptionator Durable Object for Cloudflare Workers.
+ * It implements an observer pattern for broadcasting transcription results to multiple WebSocket clients.
+ *
+ * This functionality is not available in the Node.js version because:
+ * - Durable Objects are a Cloudflare-specific feature
+ * - The Node.js version focuses on direct sendBack functionality only
+ *
+ * If you need multi-observer support in Node.js, you would need to implement it differently,
+ * such as using Redis pub/sub or a similar message broker.
+ */
+
+/*
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 
 export class Transcriptionator extends DurableObject<Env> {
@@ -57,3 +72,4 @@ export class Transcriptionator extends DurableObject<Env> {
 		// For now, we'll keep them open to allow reconnection
 	}
 }
+*/

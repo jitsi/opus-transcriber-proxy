@@ -14,8 +14,16 @@ if (typeof globalThis.__dirname === 'undefined') {
 }
 
 import OpusDecoderModule from '../../dist/opus-decoder.js';
-// @ts-ignore
-import wasm from '../../dist/opus-decoder.wasm';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Load WASM module from file system for Node.js
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const wasmPath = path.join(__dirname, '../../dist/opus-decoder.wasm');
+const wasmBuffer = fs.readFileSync(wasmPath);
+const wasm = new WebAssembly.Module(wasmBuffer);
 
 export type OpusDecoderDefaultSampleRate = 48000;
 export type OpusDecoderSampleRate = 8000 | 12000 | 16000 | 24000 | OpusDecoderDefaultSampleRate;

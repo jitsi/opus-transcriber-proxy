@@ -1,19 +1,19 @@
 import { writeMetric, MetricEvent } from './metrics';
 
 /**
- * Aggregates metric counts and periodically flushes them to Analytics Engine.
+ * Aggregates metric counts and periodically flushes them (Node.js version - logs to console).
  * Reduces write frequency by batching metrics over a time interval.
  */
 export class MetricCache {
-	private analytics: AnalyticsEngineDataset | undefined;
+	private analytics: undefined;
 	private intervalMs: number;
 	private metrics: Map<string, { event: MetricEvent; count: number; lastWriteTime: number }>;
 
 	/**
-	 * @param analytics - The Analytics Engine dataset to write to
+	 * @param analytics - Always undefined in Node.js version (for compatibility)
 	 * @param intervalMs - Time interval in milliseconds between metric writes (default: 1000ms).  NaN to force writes only on flush
 	 */
-	constructor(analytics: AnalyticsEngineDataset | undefined, intervalMs: number = 1000) {
+	constructor(analytics: undefined, intervalMs: number = 1000) {
 		this.analytics = analytics;
 		this.intervalMs = intervalMs;
 		this.metrics = new Map();
