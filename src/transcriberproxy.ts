@@ -20,11 +20,6 @@ export interface TranscriberProxyOptions {
 export class TranscriberProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
-
-	// Node.js doesn't have the same connection limit as Cloudflare workers,
-	// but we maintain the same limit for consistency with the original design.
-	// The JVB should have at most three concurrent speakers.
-	private MAX_OUTGOING_CONNECTIONS = 4;
 	private options: TranscriberProxyOptions;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
@@ -59,52 +54,32 @@ export class TranscriberProxy extends EventEmitter {
 		});
 	}
 
-	private oldestConnection(): OutgoingConnection | undefined {
-		let oldestConnection: OutgoingConnection | undefined = undefined;
-		for (const conn of this.outgoingConnections.values()) {
-			if (oldestConnection === undefined || conn.lastMediaTime < oldestConnection.lastMediaTime) {
-				oldestConnection = conn;
-			}
-		}
-		return oldestConnection;
-	}
-
 	private getConnection(tag: string): OutgoingConnection {
+		// Check if connection already exists for this tag
 		const connection = this.outgoingConnections.get(tag);
 		if (connection !== undefined) {
 			return connection;
 		}
 
-		if (this.outgoingConnections.size < this.MAX_OUTGOING_CONNECTIONS) {
-			const newConnection = new OutgoingConnection(tag, this.options);
+		// Create a new connection for this tag (no limit, no reuse)
+		const newConnection = new OutgoingConnection(tag, this.options);
 
-			newConnection.onInterimTranscription = (message) => {
-				this.emit('interim_transcription', message);
-			};
-			newConnection.onCompleteTranscription = (message) => {
-				this.emit('transcription', message);
-			};
-			newConnection.onClosed = (tag) => {
-				this.outgoingConnections.delete(tag);
-			};
-			newConnection.onError = (tag, error) => {
-				this.emit('error', tag, error);
-			};
+		newConnection.onInterimTranscription = (message) => {
+			this.emit('interim_transcription', message);
+		};
+		newConnection.onCompleteTranscription = (message) => {
+			this.emit('transcription', message);
+		};
+		newConnection.onClosed = (tag) => {
+			this.outgoingConnections.delete(tag);
+		};
+		newConnection.onError = (tag, error) => {
+			this.emit('error', tag, error);
+		};
 
-			this.outgoingConnections.set(tag, newConnection);
-			console.log(`Created outgoing connection entry for tag: ${tag}`);
-			return newConnection;
-		}
-
-		// Otherwise reset and reuse the least-recently-used connection to support the new tag
-		const connectionToReuse = this.oldestConnection()!;
-		const oldTag = connectionToReuse.tag;
-		this.outgoingConnections.delete(oldTag);
-		connectionToReuse.reset(tag);
-		this.outgoingConnections.set(tag, connectionToReuse);
-		console.log(`Reused outgoing connection entry for tag: ${tag}, previously for tag: ${oldTag}`);
-
-		return connectionToReuse;
+		this.outgoingConnections.set(tag, newConnection);
+		console.log(`Created outgoing connection for tag: ${tag} (total connections: ${this.outgoingConnections.size})`);
+		return newConnection;
 	}
 
 	handleMediaEvent(parsedMessage: any): void {

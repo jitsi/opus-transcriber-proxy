@@ -74,7 +74,6 @@ export class OutgoingConnection {
 		}
 	}
 	private participant: any;
-	private pendingTags: string[] = [];
 	private connectionStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private opusDecoder?: OpusDecoder<24000>;
@@ -83,11 +82,6 @@ export class OutgoingConnection {
 	private pendingAudioDataBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
 	private pendingAudioData: Uint8Array = new Uint8Array(this.pendingAudioDataBuffer);
 	private pendingAudioFrames: string[] = [];
-
-	private _lastMediaTime: number = -1;
-	public get lastMediaTime() {
-		return this._lastMediaTime;
-	}
 
 	private lastChunkNo: number = -1;
 	private lastTimestamp: number = -1;
@@ -115,36 +109,6 @@ export class OutgoingConnection {
 
 		this.initializeOpusDecoder();
 		this.initializeOpenAIWebSocket();
-	}
-
-	// When a connection is reset, local state is associated with the new tag, but
-	// transcription results from OpenAI are still associated with the previous tag until the
-	// server acknowledges the reset.
-	// There can be multiple pending resets if the client resets multiple times before the server
-	// responds to the first reset.
-	reset(newTag: string) {
-		this.localTag = newTag;
-		if (this.connectionStatus == 'connected') {
-			this.pendingTags.push(newTag);
-
-			const commitMessage = { type: 'input_audio_buffer.commit' };
-			this.openaiWebSocket?.send(JSON.stringify(commitMessage));
-
-			const clearMessage = { type: 'input_audio_buffer.clear' };
-			this.openaiWebSocket?.send(JSON.stringify(clearMessage));
-		} else {
-			this.setServerAcknowledgedTag(newTag);
-		}
-		if (this.decoderStatus === 'ready') {
-			this.opusDecoder?.reset();
-		}
-		// Reset the pending audio buffer
-		this.pendingAudioFrames = [];
-		this.pendingAudioDataBuffer.resize(0);
-
-		this.lastChunkNo = -1;
-		this.lastTimestamp = -1;
-		this.lastOpusFrameSize = -1;
 	}
 
 	private async initializeOpusDecoder(): Promise<void> {
@@ -266,8 +230,6 @@ export class OutgoingConnection {
 			console.warn(`Received media for tag ${mediaEvent.media.tag} on connection for tag ${this.localTag}, ignoring.`);
 			return;
 		}
-
-		this._lastMediaTime = Date.now();
 
 		let opusFrame: Uint8Array;
 
@@ -553,14 +515,6 @@ export class OutgoingConnection {
 				name: 'transcription_failure',
 				worker: 'opus-transcriber-proxy',
 			});
-		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
-			// Reset completed
-			const nextTag = this.pendingTags.shift();
-			if (nextTag !== undefined) {
-				this.setServerAcknowledgedTag(nextTag);
-			} else {
-				console.error('Received cleared event but no pending tag available.');
-			}
 		} else if (parsedMessage.type === 'error') {
 			if (parsedMessage.error?.type === 'invalid_request_error' && parsedMessage.error?.code === 'input_audio_buffer_commit_empty') {
 				// This error indicates that we tried to commit an empty audio buffer, which can happen
