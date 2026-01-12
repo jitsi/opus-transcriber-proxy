@@ -68,7 +68,16 @@ export class TranscriberProxy extends EventEmitter {
 			this.emit('interim_transcription', message);
 		};
 		newConnection.onCompleteTranscription = (message) => {
+			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
+
+			// Broadcast this transcript to all OTHER tags in the same session
+			const sourceTag = message.participant?.id || tag;
+			const transcriptText = message.transcript.map((t) => t.text).join(' ');
+
+			if (transcriptText.trim()) {
+				this.broadcastTranscriptToOtherTags(sourceTag, transcriptText);
+			}
 		};
 		newConnection.onClosed = (tag) => {
 			this.outgoingConnections.delete(tag);
@@ -87,6 +96,29 @@ export class TranscriberProxy extends EventEmitter {
 		if (tag) {
 			const connection = this.getConnection(tag);
 			connection.handleMediaEvent(parsedMessage);
+		}
+	}
+
+	/**
+	 * Broadcast a transcript from one tag to all other tags in the same session
+	 * This allows participants to see what others are saying as context in their OpenAI session
+	 * @param sourceTag - The participant ID who said this
+	 * @param transcriptText - The text that was transcribed
+	 */
+	private broadcastTranscriptToOtherTags(sourceTag: string, transcriptText: string): void {
+		const contextMessage = `${sourceTag}: ${transcriptText}`;
+		let broadcastCount = 0;
+
+		this.outgoingConnections.forEach((connection, tag) => {
+			// Don't inject context back to the same participant who said it
+			if (tag !== sourceTag) {
+				connection.injectConversationItem(contextMessage);
+				broadcastCount++;
+			}
+		});
+
+		if (broadcastCount > 0) {
+			console.log(`Broadcasted "${contextMessage}" to ${broadcastCount} other tag(s) in the same session`);
 		}
 	}
 

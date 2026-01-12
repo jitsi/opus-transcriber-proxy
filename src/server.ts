@@ -68,6 +68,8 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	const { sessionId, sendBack, sendBackInterim, language } = parameters;
 
 	// Create transcription session
+	// Within this session, multiple participants (tags) can send audio
+	// Each tag gets its own OpenAI connection, and transcripts are shared between tags
 	const session = new TranscriberProxy(ws, { language });
 
 	// Handle WebSocket close
@@ -124,6 +126,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		if (sendBack) {
 			ws.send(JSON.stringify(data));
 		}
+
+		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
+		// When one tag generates a transcript, it's broadcast to other tags in the same session
 	});
 }
 

@@ -538,6 +538,44 @@ export class OutgoingConnection {
 		this.idleCommitTimeout = null;
 	}
 
+	/**
+	 * Inject a conversation item (context from another participant) into the OpenAI session
+	 * This adds context to the conversation history so the AI is aware of what others said
+	 * @param text - The text to inject (e.g., "participantA: hello world")
+	 */
+	injectConversationItem(text: string): void {
+		if (this.connectionStatus !== 'connected' || !this.openaiWebSocket) {
+			console.warn(`Cannot inject context for ${this.localTag}: connection not ready`);
+			return;
+		}
+
+		try {
+			// Create a conversation item to inject context
+			// This uses the OpenAI Realtime API's conversation.item.create event
+			const contextMessage = {
+				type: 'conversation.item.create',
+				item: {
+					type: 'message',
+					role: 'user',
+					content: [
+						{
+							type: 'input_text',
+							text: text,
+						},
+					],
+				},
+			};
+
+			this.openaiWebSocket.send(JSON.stringify(contextMessage));
+
+			if (config.debug) {
+				console.log(`Injected context into ${this.localTag}: "${text}"`);
+			}
+		} catch (error) {
+			console.error(`Failed to inject context for ${this.localTag}:`, error);
+		}
+	}
+
 	close(): void {
 		this.doClose(false);
 	}
