@@ -22,9 +22,10 @@ export const config = {
 	openai: {
 		apiKey: process.env.OPENAI_API_KEY || '',
 		model: process.env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
+		transcriptionPrompt: process.env.OPENAI_TRANSCRIPTION_PROMPT || undefined,
 		turnDetection: parseJsonOrDefault(process.env.OPENAI_TURN_DETECTION, {
 			type: 'server_vad',
-			threshold: 0.85,
+			threshold: 0.5,
 			prefix_padding_ms: 300,
 			silence_duration_ms: 300,
 		}),
@@ -34,6 +35,8 @@ export const config = {
 		host: process.env.HOST || '0.0.0.0',
 	},
 	forceCommitTimeout: parseIntOrDefault(process.env.FORCE_COMMIT_TIMEOUT, 2),
+	broadcastTranscripts: process.env.BROADCAST_TRANSCRIPTS === 'true',
+	broadcastTranscriptsMaxSize: parseIntOrDefault(process.env.BROADCAST_TRANSCRIPTS_MAX_SIZE, 5 * 1024), // Default 5 KB
 	debug: process.env.DEBUG === 'true',
 } as const;
 

@@ -35,6 +35,9 @@ export class OutgoingConnection {
 		}
 	}
 	private participant: any;
+	public get participantId(): string {
+		return this.participant?.id || this.localTag;
+	}
 	private connectionStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private opusDecoder?: OpusDecoder<24000>;
@@ -52,6 +55,9 @@ export class OutgoingConnection {
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	// Transcript history for context injection
+	private transcriptHistory: string = '';
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
@@ -104,11 +110,14 @@ export class OutgoingConnection {
 				console.log(`OpenAI WebSocket connected for tag: ${this.localTag}`);
 				this.connectionStatus = 'connected';
 
-				const transcriptionConfig: { model: string; language?: string } = {
+				const transcriptionConfig: { model: string; language?: string; prompt?: string } = {
 					model: config.openai.model,
 				};
 				if (this.options.language !== null) {
 					transcriptionConfig.language = this.options.language;
+				}
+				if (config.openai.transcriptionPrompt) {
+					transcriptionConfig.prompt = config.openai.transcriptionPrompt;
 				}
 
 				const sessionConfig = {
@@ -132,10 +141,9 @@ export class OutgoingConnection {
 					},
 				};
 
-				const configMessage = JSON.stringify(sessionConfig);
-				console.log(`Initializing OpenAI config with message: ${configMessage}`);
-
-				openaiWs.send(configMessage);
+				const sessionConfigMessage = JSON.stringify(sessionConfig);
+				console.log(`Sending session.update for tag ${this.localTag}:`, sessionConfigMessage);
+				openaiWs.send(sessionConfigMessage);
 
 				// Process any pending audio data that was queued while waiting for connection
 				this.processPendingAudioData();
@@ -374,9 +382,8 @@ export class OutgoingConnection {
 				type: 'input_audio_buffer.append',
 				audio: encodedAudio,
 			};
-			const audioMessageString = JSON.stringify(audioMessage);
 
-			this.openaiWebSocket.send(audioMessageString);
+			this.openaiWebSocket.send(JSON.stringify(audioMessage));
 			this.resetIdleCommitTimeout();
 			this.metricCache.increment({
 				name: 'openai_audio_sent',
@@ -476,6 +483,10 @@ export class OutgoingConnection {
 				name: 'transcription_failure',
 				worker: 'opus-transcriber-proxy',
 			});
+		} else if (parsedMessage.type === 'session.created') {
+			console.log(`Received session.created for tag ${this.serverAcknowledgedTag}:`, data);
+		} else if (parsedMessage.type === 'session.updated') {
+			console.log(`Received session.updated for tag ${this.serverAcknowledgedTag}:`, data);
 		} else if (parsedMessage.type === 'error') {
 			if (parsedMessage.error?.type === 'invalid_request_error' && parsedMessage.error?.code === 'input_audio_buffer_commit_empty') {
 				// This error indicates that we tried to commit an empty audio buffer, which can happen
@@ -494,8 +505,6 @@ export class OutgoingConnection {
 			this.doClose(true);
 			this.onError?.(this.serverAcknowledgedTag, `OpenAI service sent error message: ${data}`);
 		} else if (
-			parsedMessage.type !== 'session.created' &&
-			parsedMessage.type !== 'session.updated' &&
 			parsedMessage.type !== 'input_audio_buffer.committed' &&
 			parsedMessage.type !== 'input_audio_buffer.speech_started' &&
 			parsedMessage.type !== 'input_audio_buffer.speech_stopped' &&
@@ -539,40 +548,90 @@ export class OutgoingConnection {
 	}
 
 	/**
-	 * Inject a conversation item (context from another participant) into the OpenAI session
-	 * This adds context to the conversation history so the AI is aware of what others said
-	 * @param text - The text to inject (e.g., "participantA: hello world")
+	 * Add a transcript from another participant to the history and update the session prompt
+	 * This adds context to the transcription by including recent transcripts in the prompt
+	 * @param text - The text to add (e.g., "participantA: hello world")
 	 */
-	injectConversationItem(text: string): void {
+	addTranscriptContext(text: string): void {
 		if (this.connectionStatus !== 'connected' || !this.openaiWebSocket) {
-			console.warn(`Cannot inject context for ${this.localTag}: connection not ready`);
+			console.warn(`Cannot add transcript context for ${this.localTag}: connection not ready`);
 			return;
 		}
 
 		try {
-			// Create a conversation item to inject context
-			// This uses the OpenAI Realtime API's conversation.item.create event
-			const contextMessage = {
-				type: 'conversation.item.create',
-				item: {
-					type: 'message',
-					role: 'user',
-					content: [
-						{
-							type: 'input_text',
-							text: text,
+			// Append new transcript to history
+			const newEntry = text + '\n';
+			this.transcriptHistory += newEntry;
+
+			// Clip history to max size (from the end, keeping most recent)
+			const maxSize = config.broadcastTranscriptsMaxSize;
+			if (this.transcriptHistory.length > maxSize) {
+				// Keep the most recent part
+				this.transcriptHistory = this.transcriptHistory.substring(this.transcriptHistory.length - maxSize);
+				// Try to start from a complete line
+				const firstNewline = this.transcriptHistory.indexOf('\n');
+				if (firstNewline !== -1 && firstNewline < this.transcriptHistory.length - 1) {
+					this.transcriptHistory = this.transcriptHistory.substring(firstNewline + 1);
+				}
+			}
+
+			// Update the session with the new prompt
+			this.updateSessionPrompt();
+
+			if (config.debug) {
+				console.log(`Added transcript context to ${this.localTag}: "${text}" (history size: ${this.transcriptHistory.length} bytes)`);
+			}
+		} catch (error) {
+			console.error(`Failed to add transcript context for ${this.localTag}:`, error);
+		}
+	}
+
+	/**
+	 * Update the session prompt to include transcript history
+	 */
+	private updateSessionPrompt(): void {
+		if (this.connectionStatus !== 'connected' || !this.openaiWebSocket) {
+			return;
+		}
+
+		try {
+			// Construct the full prompt with base + context header + history
+			let fullPrompt = config.openai.transcriptionPrompt || '';
+
+			if (this.transcriptHistory) {
+				fullPrompt += '\n\nThe following is a transcription of what others in the conference have recently said. Use it as context when transcribing.\n';
+				fullPrompt += this.transcriptHistory;
+			}
+
+			// Build transcription config with updated prompt
+			const transcriptionConfig: { model: string; language?: string; prompt?: string } = {
+				model: config.openai.model,
+			};
+			if (this.options.language !== null) {
+				transcriptionConfig.language = this.options.language;
+			}
+			transcriptionConfig.prompt = fullPrompt;
+
+			// Send session update
+			const sessionUpdate = {
+				type: 'session.update',
+				session: {
+					type: 'transcription',
+					audio: {
+						input: {
+							transcription: transcriptionConfig,
 						},
-					],
+					},
 				},
 			};
 
-			this.openaiWebSocket.send(JSON.stringify(contextMessage));
+			this.openaiWebSocket.send(JSON.stringify(sessionUpdate));
 
 			if (config.debug) {
-				console.log(`Injected context into ${this.localTag}: "${text}"`);
+				console.log(`Updated session prompt for ${this.localTag} (prompt size: ${fullPrompt.length} bytes)`);
 			}
 		} catch (error) {
-			console.error(`Failed to inject context for ${this.localTag}:`, error);
+			console.error(`Failed to update session prompt for ${this.localTag}:`, error);
 		}
 	}
 

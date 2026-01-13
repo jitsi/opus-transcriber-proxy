@@ -109,7 +109,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	if (sendBackInterim) {
 		session.on('interim_transcription', (data: TranscriptionMessage) => {
 			if (sendBack) {
-				ws.send(JSON.stringify(data));
+				const message = JSON.stringify(data);
+				console.log(`Sending interim transcription to client for participant ${data.participant?.id}:`, message);
+				ws.send(message);
 			}
 		});
 	}
@@ -124,7 +126,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		});
 
 		if (sendBack) {
-			ws.send(JSON.stringify(data));
+			const message = JSON.stringify(data);
+			console.log(`Sending final transcription to client for participant ${data.participant?.id}:`, message);
+			ws.send(message);
 		}
 
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy

@@ -1,6 +1,7 @@
 import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
+import { config } from './config';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -106,13 +107,19 @@ export class TranscriberProxy extends EventEmitter {
 	 * @param transcriptText - The text that was transcribed
 	 */
 	private broadcastTranscriptToOtherTags(sourceTag: string, transcriptText: string): void {
+		// Check if transcript broadcasting is enabled
+		if (!config.broadcastTranscripts) {
+			return;
+		}
+
 		const contextMessage = `${sourceTag}: ${transcriptText}`;
 		let broadcastCount = 0;
 
 		this.outgoingConnections.forEach((connection, tag) => {
 			// Don't inject context back to the same participant who said it
-			if (tag !== sourceTag) {
-				connection.injectConversationItem(contextMessage);
+			// Compare using participantId, not the connection tag
+			if (connection.participantId !== sourceTag) {
+				connection.addTranscriptContext(contextMessage);
 				broadcastCount++;
 			}
 		});
