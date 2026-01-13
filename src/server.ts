@@ -64,8 +64,13 @@ server.on('upgrade', (request, socket, head) => {
 	});
 });
 
+let wsConnectionId = 0;
+
 function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	const { sessionId, sendBack, sendBackInterim, language } = parameters;
+	const connectionId = ++wsConnectionId;
+
+	console.log(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}`);
 
 	// Create transcription session
 	// Within this session, multiple participants (tags) can send audio
@@ -73,21 +78,35 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	const session = new TranscriberProxy(ws, { language });
 
 	// Handle WebSocket close
-	ws.addEventListener('close', () => {
-		console.log('Client WebSocket closed');
+	ws.addEventListener('close', (event) => {
+		console.log(`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
+		clearInterval(stateCheckInterval);
 		session.close();
 	});
 
 	// Handle WebSocket error
 	ws.addEventListener('error', (event) => {
 		const errorMessage = 'WebSocket error';
-		console.error('Client WebSocket error:', errorMessage);
+		console.error(`[WS-${connectionId}] Client WebSocket error:`, errorMessage, event);
 		session.close();
 		ws.close(1011, errorMessage);
 	});
 
+	// Log initial WebSocket state
+	console.log(`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`);
+
+	// Monitor WebSocket state changes
+	let lastReadyState = ws.readyState;
+	const stateCheckInterval = setInterval(() => {
+		if (ws.readyState !== lastReadyState) {
+			console.log(`[WS-${connectionId}] readyState changed: ${lastReadyState} -> ${ws.readyState}`);
+			lastReadyState = ws.readyState;
+		}
+	}, 100);
+
 	// Handle session closed event
 	session.on('closed', () => {
+		console.log(`[WS-${connectionId}] Session closed event received, closing WebSocket`);
 		ws.close();
 	});
 
@@ -95,12 +114,12 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	session.on('error', (tag, error) => {
 		try {
 			const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
-			console.error(message);
+			console.error(`[WS-${connectionId}] ${message}`);
 			ws.close(1011, message);
 		} catch (closeError) {
 			// Error handlers do not themselves catch errors, so log to console
 			console.error(
-				`Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+				`[WS-${connectionId}] Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
 			);
 		}
 	});
@@ -108,16 +127,31 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Handle interim transcriptions
 	if (sendBackInterim) {
 		session.on('interim_transcription', (data: TranscriptionMessage) => {
+			console.log(`[WS-${connectionId}] Received interim transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
 			if (sendBack) {
-				const message = JSON.stringify(data);
-				console.log(`Sending interim transcription to client for participant ${data.participant?.id}:`, message);
-				ws.send(message);
+				// Only send if WebSocket is OPEN (readyState === 1)
+				if (ws.readyState !== 1) {
+					console.warn(`[WS-${connectionId}] Cannot send interim: not open (readyState=${ws.readyState})`);
+					return;
+				}
+				try {
+					const message = JSON.stringify(data);
+					console.log(`[WS-${connectionId}] Sending interim for ${data.participant?.id}:`, message);
+					ws.send(message);
+					console.log(`[WS-${connectionId}] Sent interim successfully`);
+				} catch (error) {
+					console.error(`[WS-${connectionId}] Failed to send interim:`, error);
+				}
+			} else {
+				console.warn(`[WS-${connectionId}] Not sending interim: sendBack=${sendBack}`);
 			}
 		});
 	}
 
 	// Handle final transcriptions
 	session.on('transcription', (data: TranscriptionMessage) => {
+		console.log(`[WS-${connectionId}] Received final transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
+
 		// Track successful transcription
 		writeMetric(undefined, {
 			name: 'transcription_success',
@@ -126,9 +160,21 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		});
 
 		if (sendBack) {
-			const message = JSON.stringify(data);
-			console.log(`Sending final transcription to client for participant ${data.participant?.id}:`, message);
-			ws.send(message);
+			// Only send if WebSocket is OPEN (readyState === 1)
+			if (ws.readyState !== 1) {
+				console.warn(`[WS-${connectionId}] Cannot send final: not open (readyState=${ws.readyState})`);
+				return;
+			}
+			try {
+				const message = JSON.stringify(data);
+				console.log(`[WS-${connectionId}] Sending final for ${data.participant?.id}:`, message);
+				ws.send(message);
+				console.log(`[WS-${connectionId}] Sent final successfully`);
+			} catch (error) {
+				console.error(`[WS-${connectionId}] Failed to send final:`, error);
+			}
+		} else {
+			console.warn(`[WS-${connectionId}] Not sending final: sendBack=${sendBack}`);
 		}
 
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy

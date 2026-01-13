@@ -603,7 +603,7 @@ export class OutgoingConnection {
 				fullPrompt += this.transcriptHistory;
 			}
 
-			// Build transcription config with updated prompt
+			// Build complete transcription config with updated prompt
 			const transcriptionConfig: { model: string; language?: string; prompt?: string } = {
 				model: config.openai.model,
 			};
@@ -612,23 +612,34 @@ export class OutgoingConnection {
 			}
 			transcriptionConfig.prompt = fullPrompt;
 
-			// Send session update
+			// Send complete session update with all required fields
 			const sessionUpdate = {
 				type: 'session.update',
 				session: {
 					type: 'transcription',
 					audio: {
 						input: {
+							format: {
+								type: 'audio/pcm',
+								rate: 24000,
+							},
+							noise_reduction: {
+								type: 'near_field',
+							},
 							transcription: transcriptionConfig,
+							turn_detection: getTurnDetectionConfig(),
 						},
 					},
+					include: ['item.input_audio_transcription.logprobs'],
 				},
 			};
 
-			this.openaiWebSocket.send(JSON.stringify(sessionUpdate));
+			const sessionUpdateMessage = JSON.stringify(sessionUpdate);
+			console.log(`Updating session prompt for ${this.localTag} (prompt size: ${fullPrompt.length} bytes)`);
+			this.openaiWebSocket.send(sessionUpdateMessage);
 
 			if (config.debug) {
-				console.log(`Updated session prompt for ${this.localTag} (prompt size: ${fullPrompt.length} bytes)`);
+				console.log(`Session update message:`, sessionUpdateMessage);
 			}
 		} catch (error) {
 			console.error(`Failed to update session prompt for ${this.localTag}:`, error);
