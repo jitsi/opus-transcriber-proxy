@@ -57,6 +57,20 @@ function safeToBase64(array: Uint8Array): string {
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
+declare interface Participant {
+	id: string;
+	ssrc?: string;
+}
+
+function getParticipantFromTag(tag: string): Participant {
+	const match = tagMatcher.exec(tag);
+	if (match !== null && match.length === 3) {
+		return { id: match[1], ssrc: match[2] };
+	} else {
+		return { id: tag };
+	}
+}
+
 export class OutgoingConnection {
 	private localTag!: string;
 	private serverAcknowledgedTag!: string;
@@ -65,15 +79,11 @@ export class OutgoingConnection {
 	}
 	private setServerAcknowledgedTag(newTag: string) {
 		this.serverAcknowledgedTag = newTag;
-		const match = tagMatcher.exec(newTag);
-		if (match !== null && match.length === 3) {
-			this.participant = { id: match[1], ssrc: match[2] };
-		} else {
-			this.participant = { id: newTag };
-		}
+		this.participant = getParticipantFromTag(newTag);
 	}
-	private participant: any;
+	private participant!: Participant;
 	private pendingTags: string[] = [];
+	private pendingItems = new Map<string, Participant>();
 	private connectionStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private opusDecoder?: OpusDecoder<24000>;
@@ -495,6 +505,7 @@ export class OutgoingConnection {
 		timestamp: number,
 		message_id: string,
 		isInterim: boolean,
+		participant: Participant,
 	): TranscriptionMessage {
 		const message: TranscriptionMessage = {
 			transcript: [
@@ -507,7 +518,7 @@ export class OutgoingConnection {
 			message_id,
 			type: 'transcription-result',
 			event: 'transcription-result',
-			participant: this.participant,
+			participant,
 			timestamp,
 		};
 		return message;
@@ -528,7 +539,8 @@ export class OutgoingConnection {
 				this.lastTranscriptTime = now;
 			}
 			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
-			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.item_id, true);
+			const participant = this.pendingItems.get(parsedMessage.item_id) ?? this.participant;
+			const transcription = this.getTranscriptionMessage(parsedMessage.delta, confidence, now, parsedMessage.item_id, true, participant);
 			this.onInterimTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.completed') {
 			let transcriptTime;
@@ -539,12 +551,25 @@ export class OutgoingConnection {
 				transcriptTime = Date.now();
 			}
 			const confidence = parsedMessage.logprobs?.[0]?.logprob !== undefined ? Math.exp(parsedMessage.logprobs[0].logprob) : undefined;
+			let participant: Participant
+			if (this.pendingItems.has(parsedMessage.item_id)) {
+				participant = this.pendingItems.get(parsedMessage.item_id)!;
+				this.pendingItems.delete(parsedMessage.item_id);
+			} else {
+				participant = this.participant;
+				if (this.tag === this.serverAcknowledgedTag) {
+					// Once we have a final transcription for the current tag, we can reset the pending items map
+					// since no more transcriptions for previous tags will be arriving.
+					this.pendingItems.clear();
+				}
+			}
 			const transcription = this.getTranscriptionMessage(
 				parsedMessage.transcript,
 				confidence,
 				transcriptTime,
 				parsedMessage.item_id,
 				false,
+				participant,
 			);
 			this.clearIdleCommitTimeout();
 			this.onCompleteTranscription?.(transcription);
@@ -554,6 +579,14 @@ export class OutgoingConnection {
 				name: 'transcription_failure',
 				worker: 'opus-transcriber-proxy',
 			});
+		} else if (parsedMessage.type === 'input_audio_buffer.committed') {
+			if (this.tag !== this.serverAcknowledgedTag) {
+				// This commit is for the previous tag, but its transcript may arrive after the reset.
+				if (parsedMessage.item_id !== undefined) {
+					// Store the item ID associated with this commit, so we can map it back when the transcription arrives
+					this.pendingItems.set(parsedMessage.item_id, this.participant);
+				}
+			}
 		} else if (parsedMessage.type === 'input_audio_buffer.cleared') {
 			// Reset completed
 			const nextTag = this.pendingTags.shift();
@@ -582,7 +615,6 @@ export class OutgoingConnection {
 		} else if (
 			parsedMessage.type !== 'session.created' &&
 			parsedMessage.type !== 'session.updated' &&
-			parsedMessage.type !== 'input_audio_buffer.committed' &&
 			parsedMessage.type !== 'input_audio_buffer.speech_started' &&
 			parsedMessage.type !== 'input_audio_buffer.speech_stopped' &&
 			parsedMessage.type !== 'conversation.item.added' &&
