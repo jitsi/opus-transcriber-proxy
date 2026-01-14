@@ -175,3 +175,5 @@ transcript.jsonl
 *.jsonl
 
 tmp/
+
+.DS_Store

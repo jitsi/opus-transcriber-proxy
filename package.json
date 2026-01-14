@@ -15,6 +15,7 @@
 		"start": "node dist/bundle/server.js",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest",
+		"mix-audio": "node scripts/mix-audio.mjs",
 		"docker:build": "npm run build && docker build -t opus-transcriber-proxy .",
 		"docker:run": "docker run --rm -p 8080:8080 --env-file .env opus-transcriber-proxy",
 		"docker:test": "npm run docker:build && npm run docker:run",

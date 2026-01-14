@@ -106,7 +106,27 @@ The replay script will:
 - Show progress as messages are sent
 - Display any responses received
 
-### 4. Use for testing
+### 4. Mix audio to WAV file
+
+Use the audio mixing script to decode and mix the Opus audio:
+
+```bash
+# Mix all participants into a single WAV file
+npm run mix-audio /tmp/my-test-session/media.jsonl output.wav
+
+# Or directly with node
+node scripts/mix-audio.mjs /tmp/my-test-session/media.jsonl output.wav
+```
+
+The mixing script will:
+- Decode all Opus packets from the media.jsonl file
+- Synchronize audio from multiple participants using chunk numbers
+- Insert silence for missing packets
+- Mix all streams into a single mono WAV file (24 kHz, 16-bit)
+
+See [AUDIO_MIXING.md](./AUDIO_MIXING.md) for detailed documentation.
+
+### 5. Use for testing
 
 The dump files can be used to:
 - Create repeatable integration tests
