@@ -75,7 +75,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Create transcription session
 	// Within this session, multiple participants (tags) can send audio
 	// Each tag gets its own OpenAI connection, and transcripts are shared between tags
-	const session = new TranscriberProxy(ws, { language });
+	const session = new TranscriberProxy(ws, { language, sessionId });
 
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {

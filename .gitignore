@@ -169,3 +169,9 @@ dist
 # Emscripten builds
 build/
 dist/
+
+# WebSocket and transcript dumps
+websocket-dump.jsonl
+websocket-messages.jsonl
+transcripts.jsonl
+*.jsonl

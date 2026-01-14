@@ -37,6 +37,9 @@ export const config = {
 	forceCommitTimeout: parseIntOrDefault(process.env.FORCE_COMMIT_TIMEOUT, 2),
 	broadcastTranscripts: process.env.BROADCAST_TRANSCRIPTS === 'true',
 	broadcastTranscriptsMaxSize: parseIntOrDefault(process.env.BROADCAST_TRANSCRIPTS_MAX_SIZE, 5 * 1024), // Default 5 KB
+	dumpWebSocketMessages: process.env.DUMP_WEBSOCKET_MESSAGES === 'true',
+	dumpTranscripts: process.env.DUMP_TRANSCRIPTS === 'true',
+	dumpBasePath: process.env.DUMP_BASE_PATH || '/tmp',
 	debug: process.env.DEBUG === 'true',
 } as const;
 

@@ -2,6 +2,7 @@ import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
 import { config } from './config';
+import * as fs from 'fs';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -16,18 +17,28 @@ export interface TranscriptionMessage {
 
 export interface TranscriberProxyOptions {
 	language: string | null;
+	sessionId?: string;
 }
 
 export class TranscriberProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
 	private options: TranscriberProxyOptions;
+	private dumpStream?: fs.WriteStream;
+	private transcriptDumpStream?: fs.WriteStream;
+	private sessionId?: string;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
 		this.ws = ws;
 		this.options = options;
+		this.sessionId = options.sessionId;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
+
+		// Initialize dump streams if enabled
+		if (config.dumpWebSocketMessages || config.dumpTranscripts) {
+			this.initializeDumpStreams();
+		}
 
 		this.ws.addEventListener('close', () => {
 			this.ws.close();
@@ -35,6 +46,20 @@ export class TranscriberProxy extends EventEmitter {
 		});
 
 		this.ws.addEventListener('message', async (event) => {
+			// Dump raw message if enabled
+			if (this.dumpStream) {
+				try {
+					const dumpEntry = {
+						timestamp: Date.now(),
+						direction: 'incoming',
+						data: event.data,
+					};
+					this.dumpStream.write(JSON.stringify(dumpEntry) + '\n');
+				} catch (error) {
+					console.error('Failed to dump WebSocket message:', error);
+				}
+			}
+
 			let parsedMessage;
 			try {
 				parsedMessage = JSON.parse(event.data as string);
@@ -55,6 +80,35 @@ export class TranscriberProxy extends EventEmitter {
 		});
 	}
 
+	private initializeDumpStreams(): void {
+		// Create session directory if we have a sessionId
+		const sessionDir = this.sessionId ? `${config.dumpBasePath}/${this.sessionId}` : config.dumpBasePath;
+
+		try {
+			// Create directory if it doesn't exist
+			if (this.sessionId && !fs.existsSync(sessionDir)) {
+				fs.mkdirSync(sessionDir, { recursive: true });
+				console.log(`Created dump directory: ${sessionDir}`);
+			}
+
+			// Initialize WebSocket message dump stream
+			if (config.dumpWebSocketMessages) {
+				const wsMessagePath = `${sessionDir}/websocket-messages.jsonl`;
+				this.dumpStream = fs.createWriteStream(wsMessagePath, { flags: 'a' });
+				console.log(`WebSocket message dump enabled: ${wsMessagePath}`);
+			}
+
+			// Initialize transcript dump stream
+			if (config.dumpTranscripts) {
+				const transcriptPath = `${sessionDir}/transcripts.jsonl`;
+				this.transcriptDumpStream = fs.createWriteStream(transcriptPath, { flags: 'a' });
+				console.log(`Transcript dump enabled: ${transcriptPath}`);
+			}
+		} catch (error) {
+			console.error(`Failed to initialize dump streams:`, error);
+		}
+	}
+
 	private getConnection(tag: string): OutgoingConnection {
 		// Check if connection already exists for this tag
 		const connection = this.outgoingConnections.get(tag);
@@ -69,6 +123,19 @@ export class TranscriberProxy extends EventEmitter {
 			this.emit('interim_transcription', message);
 		};
 		newConnection.onCompleteTranscription = (message) => {
+			// Dump transcript if enabled
+			if (this.transcriptDumpStream) {
+				try {
+					const dumpEntry = {
+						timestamp: Date.now(),
+						message: message,
+					};
+					this.transcriptDumpStream.write(JSON.stringify(dumpEntry) + '\n');
+				} catch (error) {
+					console.error('Failed to dump transcript:', error);
+				}
+			}
+
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
@@ -135,6 +202,17 @@ export class TranscriberProxy extends EventEmitter {
 		});
 		this.outgoingConnections.clear();
 		this.ws.close();
+
+		// Close dump streams if open
+		if (this.dumpStream) {
+			this.dumpStream.end();
+			this.dumpStream = undefined;
+		}
+		if (this.transcriptDumpStream) {
+			this.transcriptDumpStream.end();
+			this.transcriptDumpStream = undefined;
+		}
+
 		this.emit('closed');
 	}
 }
