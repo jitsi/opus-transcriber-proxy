@@ -93,14 +93,14 @@ export class TranscriberProxy extends EventEmitter {
 
 			// Initialize WebSocket message dump stream
 			if (config.dumpWebSocketMessages) {
-				const wsMessagePath = `${sessionDir}/websocket-messages.jsonl`;
+				const wsMessagePath = `${sessionDir}/media.jsonl`;
 				this.dumpStream = fs.createWriteStream(wsMessagePath, { flags: 'a' });
 				console.log(`WebSocket message dump enabled: ${wsMessagePath}`);
 			}
 
 			// Initialize transcript dump stream
 			if (config.dumpTranscripts) {
-				const transcriptPath = `${sessionDir}/transcripts.jsonl`;
+				const transcriptPath = `${sessionDir}/transcript.jsonl`;
 				this.transcriptDumpStream = fs.createWriteStream(transcriptPath, { flags: 'a' });
 				console.log(`Transcript dump enabled: ${transcriptPath}`);
 			}

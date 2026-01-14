@@ -163,7 +163,6 @@ dist
 .dev.vars*
 !.dev.vars.example
 .env*
-!.env.example
 .wrangler/
 
 # Emscripten builds
@@ -171,7 +170,8 @@ build/
 dist/
 
 # WebSocket and transcript dumps
-websocket-dump.jsonl
-websocket-messages.jsonl
-transcripts.jsonl
+media.jsonl
+transcript.jsonl
 *.jsonl
+
+tmp/

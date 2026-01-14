@@ -19,14 +19,14 @@ DUMP_BASE_PATH=/tmp
 ```
 
 Files are organized by session ID:
-- WebSocket messages: `/tmp/$sessionId/websocket-messages.jsonl`
-- Transcripts: `/tmp/$sessionId/transcripts.jsonl`
+- WebSocket messages: `/tmp/$sessionId/media.jsonl`
+- Transcripts: `/tmp/$sessionId/transcript.jsonl`
 
 ## Output Format
 
 All files are written in **JSONL** (JSON Lines) format - one JSON object per line.
 
-### WebSocket Messages (`websocket-messages.jsonl`)
+### WebSocket Messages (`media.jsonl`)
 
 ```json
 {"timestamp":1768341932350,"direction":"incoming","data":"{\"event\":\"media\",\"media\":{...}}"}
@@ -37,7 +37,7 @@ All files are written in **JSONL** (JSON Lines) format - one JSON object per lin
 - **direction**: Always `"incoming"` (indicates message direction)
 - **data**: Raw message data as received (usually JSON string)
 
-### Transcripts (`transcripts.jsonl`)
+### Transcripts (`transcript.jsonl`)
 
 ```json
 {"timestamp":1768341932350,"message":{"transcript":[{"confidence":0.98,"text":"hello world"}],"is_interim":false,"message_id":"item_123","type":"transcription-result","event":"transcription-result","participant":{"id":"10a52c3f","ssrc":"2614982672"},"timestamp":1768341932350}}
@@ -64,30 +64,30 @@ npm start
 # ws://localhost:8080/transcribe?transcribe=true&sendBack=true&sessionId=my-test-session
 
 # Files will be written to:
-# - /tmp/my-test-session/websocket-messages.jsonl
-# - /tmp/my-test-session/transcripts.jsonl
+# - /tmp/my-test-session/media.jsonl
+# - /tmp/my-test-session/transcript.jsonl
 ```
 
 ### 2. View captured data
 
 ```bash
 # View all WebSocket messages
-cat /tmp/my-test-session/websocket-messages.jsonl
+cat /tmp/my-test-session/media.jsonl
 
 # View all transcripts
-cat /tmp/my-test-session/transcripts.jsonl
+cat /tmp/my-test-session/transcript.jsonl
 
 # View formatted (requires jq)
-cat /tmp/my-test-session/transcripts.jsonl | jq '.'
+cat /tmp/my-test-session/transcript.jsonl | jq '.'
 
 # Count messages
-wc -l /tmp/my-test-session/websocket-messages.jsonl
+wc -l /tmp/my-test-session/media.jsonl
 
 # Extract just transcription text
-cat /tmp/my-test-session/transcripts.jsonl | jq -r '.message.transcript[].text'
+cat /tmp/my-test-session/transcript.jsonl | jq -r '.message.transcript[].text'
 
 # Extract transcripts for a specific participant
-cat /tmp/my-test-session/transcripts.jsonl | jq 'select(.message.participant.id=="10a52c3f") | .message.transcript[].text'
+cat /tmp/my-test-session/transcript.jsonl | jq 'select(.message.participant.id=="10a52c3f") | .message.transcript[].text'
 ```
 
 ### 3. Replay messages
@@ -96,7 +96,7 @@ Use the provided replay script to send recorded messages:
 
 ```bash
 # Replay messages with original timing
-node scripts/replay-dump.cjs /tmp/my-test-session/websocket-messages.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
+node scripts/replay-dump.cjs /tmp/my-test-session/media.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
 ```
 
 **Note:** Make sure to quote the WebSocket URL if it contains special characters like `?` or `&`.
@@ -140,5 +140,5 @@ When running in Docker, make sure to:
    docker cp <container_id>:/tmp/my-test-session ./my-test-session
 
    # Or copy specific files
-   docker cp <container_id>:/tmp/my-test-session/transcripts.jsonl ./transcripts.jsonl
+   docker cp <container_id>:/tmp/my-test-session/transcript.jsonl ./transcript.jsonl
    ```
