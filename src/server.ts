@@ -4,6 +4,7 @@ import { config } from './config';
 import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { setMetricDebug, writeMetric } from './metrics';
+import logger from './logger';
 
 // Initialize metric debug logging
 setMetricDebug(config.debug);
@@ -11,8 +12,8 @@ setMetricDebug(config.debug);
 // Create HTTP server
 const server = http.createServer((req, res) => {
 	// Log all incoming requests for debugging
-	console.log(`HTTP ${req.method} ${req.url}`);
-	console.log('Headers:', JSON.stringify(req.headers, null, 2));
+	logger.debug(`HTTP ${req.method} ${req.url}`);
+	logger.debug('Headers:', JSON.stringify(req.headers, null, 2));
 
 	if (req.url === '/health') {
 		res.writeHead(200);
@@ -28,14 +29,14 @@ const wss = new WebSocketServer({ noServer: true });
 
 // Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
-	console.log('UPGRADE EVENT TRIGGERED!');
-	console.log(`Upgrade ${request.method} ${request.url}`);
-	console.log('Upgrade Headers:', JSON.stringify(request.headers, null, 2));
+	logger.debug('UPGRADE EVENT TRIGGERED!');
+	logger.debug(`Upgrade ${request.method} ${request.url}`);
+	logger.debug('Upgrade Headers:', JSON.stringify(request.headers, null, 2));
 
 	const url = `http://${request.headers.host}${request.url}`;
 	const parameters = extractSessionParameters(url);
 
-	console.log('Session parameters:', JSON.stringify(parameters));
+	logger.debug('Session parameters:', JSON.stringify(parameters));
 
 	// Validate path
 	if (!parameters.url.pathname.endsWith('/transcribe')) {
@@ -70,7 +71,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	const { sessionId, sendBack, sendBackInterim, language } = parameters;
 	const connectionId = ++wsConnectionId;
 
-	console.log(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}`);
+	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}`);
 
 	// Create transcription session
 	// Within this session, multiple participants (tags) can send audio
@@ -79,7 +80,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {
-		console.log(`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
+		logger.info(`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
 		clearInterval(stateCheckInterval);
 		session.close();
 	});
@@ -87,26 +88,26 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Handle WebSocket error
 	ws.addEventListener('error', (event) => {
 		const errorMessage = 'WebSocket error';
-		console.error(`[WS-${connectionId}] Client WebSocket error:`, errorMessage, event);
+		logger.error(`[WS-${connectionId}] Client WebSocket error:`, errorMessage, event);
 		session.close();
 		ws.close(1011, errorMessage);
 	});
 
 	// Log initial WebSocket state
-	console.log(`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`);
+	logger.debug(`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`);
 
 	// Monitor WebSocket state changes
 	let lastReadyState = ws.readyState;
 	const stateCheckInterval = setInterval(() => {
 		if (ws.readyState !== lastReadyState) {
-			console.log(`[WS-${connectionId}] readyState changed: ${lastReadyState} -> ${ws.readyState}`);
+			logger.debug(`[WS-${connectionId}] readyState changed: ${lastReadyState} -> ${ws.readyState}`);
 			lastReadyState = ws.readyState;
 		}
 	}, 100);
 
 	// Handle session closed event
 	session.on('closed', () => {
-		console.log(`[WS-${connectionId}] Session closed event received, closing WebSocket`);
+		logger.info(`[WS-${connectionId}] Session closed event received, closing WebSocket`);
 		ws.close();
 	});
 
@@ -114,11 +115,11 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	session.on('error', (tag, error) => {
 		try {
 			const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
-			console.error(`[WS-${connectionId}] ${message}`);
+			logger.error(`[WS-${connectionId}] ${message}`);
 			ws.close(1011, message);
 		} catch (closeError) {
-			// Error handlers do not themselves catch errors, so log to console
-			console.error(
+			// Error handlers do not themselves catch errors, so log with logger
+			logger.error(
 				`[WS-${connectionId}] Failed to close connections after error in session ${tag}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
 			);
 		}
@@ -127,30 +128,30 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Handle interim transcriptions
 	if (sendBackInterim) {
 		session.on('interim_transcription', (data: TranscriptionMessage) => {
-			console.log(`[WS-${connectionId}] Received interim transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
+			logger.debug(`[WS-${connectionId}] Received interim transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
 			if (sendBack) {
 				// Only send if WebSocket is OPEN (readyState === 1)
 				if (ws.readyState !== 1) {
-					console.warn(`[WS-${connectionId}] Cannot send interim: not open (readyState=${ws.readyState})`);
+					logger.warn(`[WS-${connectionId}] Cannot send interim: not open (readyState=${ws.readyState})`);
 					return;
 				}
 				try {
 					const message = JSON.stringify(data);
-					console.log(`[WS-${connectionId}] Sending interim for ${data.participant?.id}:`, message);
+					logger.debug(`[WS-${connectionId}] Sending interim for ${data.participant?.id}:`, message);
 					ws.send(message);
-					console.log(`[WS-${connectionId}] Sent interim successfully`);
+					logger.debug(`[WS-${connectionId}] Sent interim successfully`);
 				} catch (error) {
-					console.error(`[WS-${connectionId}] Failed to send interim:`, error);
+					logger.error(`[WS-${connectionId}] Failed to send interim:`, error);
 				}
 			} else {
-				console.warn(`[WS-${connectionId}] Not sending interim: sendBack=${sendBack}`);
+				logger.warn(`[WS-${connectionId}] Not sending interim: sendBack=${sendBack}`);
 			}
 		});
 	}
 
 	// Handle final transcriptions
 	session.on('transcription', (data: TranscriptionMessage) => {
-		console.log(`[WS-${connectionId}] Received final transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
+		logger.debug(`[WS-${connectionId}] Received final transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
 
 		// Track successful transcription
 		writeMetric(undefined, {
@@ -162,19 +163,19 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		if (sendBack) {
 			// Only send if WebSocket is OPEN (readyState === 1)
 			if (ws.readyState !== 1) {
-				console.warn(`[WS-${connectionId}] Cannot send final: not open (readyState=${ws.readyState})`);
+				logger.warn(`[WS-${connectionId}] Cannot send final: not open (readyState=${ws.readyState})`);
 				return;
 			}
 			try {
 				const message = JSON.stringify(data);
-				console.log(`[WS-${connectionId}] Sending final for ${data.participant?.id}:`, message);
+				logger.debug(`[WS-${connectionId}] Sending final for ${data.participant?.id}:`, message);
 				ws.send(message);
-				console.log(`[WS-${connectionId}] Sent final successfully`);
+				logger.debug(`[WS-${connectionId}] Sent final successfully`);
 			} catch (error) {
-				console.error(`[WS-${connectionId}] Failed to send final:`, error);
+				logger.error(`[WS-${connectionId}] Failed to send final:`, error);
 			}
 		} else {
-			console.warn(`[WS-${connectionId}] Not sending final: sendBack=${sendBack}`);
+			logger.warn(`[WS-${connectionId}] Not sending final: sendBack=${sendBack}`);
 		}
 
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
@@ -187,15 +188,15 @@ const PORT = config.server.port;
 const HOST = config.server.host;
 
 server.listen(PORT, HOST, () => {
-	console.log(`Transcription server listening on ${HOST}:${PORT}`);
-	console.log(`WebSocket endpoint: ws://${HOST}:${PORT}/transcribe`);
+	logger.info(`Transcription server listening on ${HOST}:${PORT}`);
+	logger.info(`WebSocket endpoint: ws://${HOST}:${PORT}/transcribe`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-	console.log('SIGTERM received, closing server...');
+	logger.info('SIGTERM received, closing server...');
 	server.close(() => {
-		console.log('Server closed');
+		logger.info('Server closed');
 		process.exit(0);
 	});
 });

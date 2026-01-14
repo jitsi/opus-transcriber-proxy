@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
 import { config } from './config';
 import * as fs from 'fs';
+import logger from './logger';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -56,7 +57,7 @@ export class TranscriberProxy extends EventEmitter {
 					};
 					this.dumpStream.write(JSON.stringify(dumpEntry) + '\n');
 				} catch (error) {
-					console.error('Failed to dump WebSocket message:', error);
+					logger.error('Failed to dump WebSocket message:', error);
 				}
 			}
 
@@ -64,7 +65,7 @@ export class TranscriberProxy extends EventEmitter {
 			try {
 				parsedMessage = JSON.parse(event.data as string);
 			} catch (parseError) {
-				console.error('Failed to parse message as JSON:', parseError);
+				logger.error('Failed to parse message as JSON:', parseError);
 				parsedMessage = { raw: event.data, parseError: true };
 			}
 
@@ -88,24 +89,24 @@ export class TranscriberProxy extends EventEmitter {
 			// Create directory if it doesn't exist
 			if (this.sessionId && !fs.existsSync(sessionDir)) {
 				fs.mkdirSync(sessionDir, { recursive: true });
-				console.log(`Created dump directory: ${sessionDir}`);
+				logger.info(`Created dump directory: ${sessionDir}`);
 			}
 
 			// Initialize WebSocket message dump stream
 			if (config.dumpWebSocketMessages) {
 				const wsMessagePath = `${sessionDir}/media.jsonl`;
 				this.dumpStream = fs.createWriteStream(wsMessagePath, { flags: 'a' });
-				console.log(`WebSocket message dump enabled: ${wsMessagePath}`);
+				logger.info(`WebSocket message dump enabled: ${wsMessagePath}`);
 			}
 
 			// Initialize transcript dump stream
 			if (config.dumpTranscripts) {
 				const transcriptPath = `${sessionDir}/transcript.jsonl`;
 				this.transcriptDumpStream = fs.createWriteStream(transcriptPath, { flags: 'a' });
-				console.log(`Transcript dump enabled: ${transcriptPath}`);
+				logger.info(`Transcript dump enabled: ${transcriptPath}`);
 			}
 		} catch (error) {
-			console.error(`Failed to initialize dump streams:`, error);
+			logger.error(`Failed to initialize dump streams:`, error);
 		}
 	}
 
@@ -132,7 +133,7 @@ export class TranscriberProxy extends EventEmitter {
 					};
 					this.transcriptDumpStream.write(JSON.stringify(dumpEntry) + '\n');
 				} catch (error) {
-					console.error('Failed to dump transcript:', error);
+					logger.error('Failed to dump transcript:', error);
 				}
 			}
 
@@ -155,7 +156,7 @@ export class TranscriberProxy extends EventEmitter {
 		};
 
 		this.outgoingConnections.set(tag, newConnection);
-		console.log(`Created outgoing connection for tag: ${tag} (total connections: ${this.outgoingConnections.size})`);
+		logger.info(`Created outgoing connection for tag: ${tag} (total connections: ${this.outgoingConnections.size})`);
 		return newConnection;
 	}
 
@@ -192,7 +193,7 @@ export class TranscriberProxy extends EventEmitter {
 		});
 
 		if (broadcastCount > 0) {
-			console.log(`Broadcasted "${contextMessage}" to ${broadcastCount} other tag(s) in the same session`);
+			logger.debug(`Broadcasted "${contextMessage}" to ${broadcastCount} other tag(s) in the same session`);
 		}
 	}
 

@@ -40,6 +40,7 @@ export const config = {
 	dumpWebSocketMessages: process.env.DUMP_WEBSOCKET_MESSAGES === 'true',
 	dumpTranscripts: process.env.DUMP_TRANSCRIPTS === 'true',
 	dumpBasePath: process.env.DUMP_BASE_PATH || '/tmp',
+	logLevel: process.env.LOG_LEVEL || 'info',
 	debug: process.env.DEBUG === 'true',
 } as const;
 

@@ -6,6 +6,8 @@
  * a separate environment (dev, staging, prod).
  */
 
+import logger from './logger';
+
 /**
  * Internal debug state for logging metric writes
  */
@@ -59,10 +61,10 @@ export interface MetricEvent {
  * - index1: session_id (for sampling)
  */
 export function writeMetric(analytics: undefined, event: MetricEvent, count: number = 1): void {
-	// In Node.js, we log metrics to console when debug is enabled
+	// In Node.js, we log metrics when debug is enabled
 	// Cloudflare Analytics Engine is not available
 	if (debugMetrics) {
-		console.log(
+		logger.debug(
 			'[METRIC]',
 			JSON.stringify({
 				name: event.name,
