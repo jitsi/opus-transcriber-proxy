@@ -34,9 +34,13 @@ export type MetricName =
 	| 'opus_packet_decoded'
 	| 'opus_decode_failure'
 	| 'opus_packet_discarded'
-	| 'openai_audio_queued'
-	| 'openai_audio_sent'
-	| 'openai_api_error';
+	| 'backend_audio_queued' // Audio queued for transcription backend
+	| 'backend_audio_sent' // Audio sent to transcription backend
+	| 'openai_audio_queued' // Deprecated: use backend_audio_queued
+	| 'openai_audio_sent' // Deprecated: use backend_audio_sent
+	| 'openai_api_error' // OpenAI-specific API errors
+	| 'gemini_api_error' // Gemini-specific API errors
+	| 'deepgram_api_error'; // Deepgram-specific API errors
 
 export interface MetricEvent {
 	name: MetricName;

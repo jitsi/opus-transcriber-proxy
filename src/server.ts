@@ -188,8 +188,51 @@ const PORT = config.server.port;
 const HOST = config.server.host;
 
 server.listen(PORT, HOST, () => {
-	logger.info(`Transcription server listening on ${HOST}:${PORT}`);
+	logger.info('='.repeat(60));
+	logger.info('opus-transcriber-proxy started');
+	logger.info('='.repeat(60));
+
+	// Server info
+	logger.info(`Server: ${HOST}:${PORT}`);
 	logger.info(`WebSocket endpoint: ws://${HOST}:${PORT}/transcribe`);
+	logger.info('');
+
+	// Backend configuration
+	logger.info(`Transcription Backend: ${config.transcriptionBackend}`);
+	if (config.transcriptionBackend === 'openai') {
+		logger.info(`  Model: ${config.openai.model}`);
+		logger.info(`  Prompt: ${config.openai.transcriptionPrompt ? config.openai.transcriptionPrompt.substring(0, 60) + '...' : '(none)'}`);
+		logger.info(`  Turn Detection: ${JSON.stringify(config.openai.turnDetection)}`);
+	} else if (config.transcriptionBackend === 'gemini') {
+		logger.info(`  Model: ${config.gemini.model}`);
+		logger.info(`  Prompt: ${config.gemini.transcriptionPrompt ? config.gemini.transcriptionPrompt.substring(0, 60) + '...' : '(none)'}`);
+	} else if (config.transcriptionBackend === 'deepgram') {
+		logger.info(`  Model: ${config.deepgram.model}`);
+		logger.info(`  Punctuate: ${config.deepgram.punctuate}`);
+		logger.info(`  Diarize: ${config.deepgram.diarize}`);
+	}
+	logger.info('');
+
+	// Transcription settings
+	logger.info('Transcription Settings:');
+	logger.info(`  Force Commit Timeout: ${config.forceCommitTimeout}s`);
+	logger.info(`  Broadcast Transcripts: ${config.broadcastTranscripts}`);
+	if (config.broadcastTranscripts) {
+		logger.info(`  Broadcast Max Size: ${config.broadcastTranscriptsMaxSize} bytes`);
+	}
+	logger.info('');
+
+	// Debug/Development settings
+	logger.info('Debug Settings:');
+	logger.info(`  Log Level: ${config.logLevel}`);
+	logger.info(`  Debug Mode: ${config.debug}`);
+	logger.info(`  Dump WebSocket Messages: ${config.dumpWebSocketMessages}`);
+	logger.info(`  Dump Transcripts: ${config.dumpTranscripts}`);
+	if (config.dumpWebSocketMessages || config.dumpTranscripts) {
+		logger.info(`  Dump Base Path: ${config.dumpBasePath}`);
+	}
+
+	logger.info('='.repeat(60));
 });
 
 // Graceful shutdown

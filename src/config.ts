@@ -19,6 +19,10 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 }
 
 export const config = {
+	// Backend selection
+	transcriptionBackend: (process.env.TRANSCRIPTION_BACKEND || 'openai') as 'openai' | 'gemini' | 'deepgram',
+
+	// OpenAI configuration
 	openai: {
 		apiKey: process.env.OPENAI_API_KEY || '',
 		model: process.env.OPENAI_MODEL || 'gpt-4o-mini-transcribe',
@@ -30,6 +34,22 @@ export const config = {
 			silence_duration_ms: 300,
 		}),
 	},
+
+	// Gemini configuration
+	gemini: {
+		apiKey: process.env.GEMINI_API_KEY || '',
+		model: process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
+		transcriptionPrompt: process.env.GEMINI_TRANSCRIPTION_PROMPT || undefined,
+	},
+
+	// Deepgram configuration
+	deepgram: {
+		apiKey: process.env.DEEPGRAM_API_KEY || '',
+		model: process.env.DEEPGRAM_MODEL || 'nova-2',
+		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
+		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
+	},
+
 	server: {
 		port: parseIntOrDefault(process.env.PORT, 8080),
 		host: process.env.HOST || '0.0.0.0',
@@ -44,7 +64,19 @@ export const config = {
 	debug: process.env.DEBUG === 'true',
 } as const;
 
-// Validate required config
-if (!config.openai.apiKey) {
-	throw new Error('OPENAI_API_KEY environment variable is required');
+// Validate required config based on selected backend
+if (config.transcriptionBackend === 'openai' && !config.openai.apiKey) {
+	throw new Error('OPENAI_API_KEY environment variable is required when using OpenAI backend');
+}
+
+if (config.transcriptionBackend === 'gemini' && !config.gemini.apiKey) {
+	throw new Error('GEMINI_API_KEY environment variable is required when using Gemini backend');
+}
+
+if (config.transcriptionBackend === 'deepgram' && !config.deepgram.apiKey) {
+	throw new Error('DEEPGRAM_API_KEY environment variable is required when using Deepgram backend');
+}
+
+if (config.transcriptionBackend !== 'openai' && config.transcriptionBackend !== 'gemini' && config.transcriptionBackend !== 'deepgram') {
+	throw new Error(`Invalid TRANSCRIPTION_BACKEND: ${config.transcriptionBackend}. Must be 'openai', 'gemini', or 'deepgram'`);
 }
