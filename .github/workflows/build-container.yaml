@@ -1,0 +1,73 @@
+name: "Build and deploy container"
+on:
+    workflow_dispatch:
+        inputs:
+            cf_env:
+                description: Choose environment
+                type: choice
+                required: true
+                options:
+                    - dev
+                    - staging
+                    - prod
+                default: dev
+            branch:
+                description: Choose branch or tag, defaults to container
+                type: string
+                required: true
+                default: container
+            preCommand:
+                description: Provide a bash script to execute before running wrangler
+                type: string
+                required: false
+                default: echo "No script provided for execution before running Wrangler. Moving along."
+            postCommand:
+                description: Provide a bash script to execute after running wrangler
+                type: string
+                required: false
+                default: echo "Nothing to execute after running Wrangler. Finishing..."
+jobs:
+    deploy:
+        runs-on: "ubuntu-latest"
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.branch }}
+                  submodules: 'true'
+
+            - name: Set environment variables
+              run: |
+                  if [[ "${{ inputs.cf_env }}" == "dev" ]]; then
+                    echo "CF_ACCOUNT=DEV_ACCOUNT_ID" >> "$GITHUB_ENV"
+                    echo "CF_TOKEN=JITSI_CF_DEV_TOKEN" >> "$GITHUB_ENV"
+                  elif [[ "${{ inputs.cf_env }}" == "staging" ]]; then
+                    echo "CF_ACCOUNT=STAGE_ACCOUNT_ID" >> "$GITHUB_ENV"
+                    echo "CF_TOKEN=JITSI_CF_STAGING_TOKEN" >> "$GITHUB_ENV"
+                  elif [[ "${{ inputs.cf_env }}" == "prod" ]]; then
+                    echo "CF_ACCOUNT=PROD_ACCOUNT_ID" >> "$GITHUB_ENV"
+                    echo "CF_TOKEN=JITSI_CF_PROD_TOKEN" >> "$GITHUB_ENV"
+                  else
+                    echo "Invalid environment specified: ${{ inputs.cf_env }}, exiting."
+                    exit 1
+                  fi
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: Install Worker Dependencies
+              working-directory: worker
+              run: |
+                  npm ci
+
+            - name: Wrangler Deploy
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  wranglerVersion: "4.51.0"
+                  apiToken: ${{ secrets[env.CF_TOKEN] }}
+                  accountId: ${{ secrets[env.CF_ACCOUNT] }}
+                  workingDirectory: worker
+                  preCommands: ${{ inputs.preCommand }}
+                  postCommands: ${{ inputs.postCommand }}
+                  command: deploy --config ../wrangler-container.jsonc
