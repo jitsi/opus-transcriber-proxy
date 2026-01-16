@@ -96,7 +96,9 @@ DEEPGRAM_DIARIZE=false
 - Audio sent at 24kHz, 16-bit, mono PCM
 - Returns both interim and final transcriptions
 - Supports KeepAlive, Finalize, and CloseStream control messages
-- Authentication via Authorization header
+- Authentication via Sec-WebSocket-Protocol header
+- Defaults to `language=multi` for automatic multilingual detection (supports 31+ languages with Nova-3)
+- Generates unique UUID for each transcription message
 
 ## Architecture
 

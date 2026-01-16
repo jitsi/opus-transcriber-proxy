@@ -5,6 +5,7 @@
  * Each participant gets its own WebSocket connection.
  */
 
+import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
@@ -49,6 +50,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 					sample_rate: '24000',
 					channels: '1',
 					interim_results: 'true',
+					// Use multilingual model by default for automatic language detection
+					// See: https://developers.deepgram.com/docs/multilingual-code-switching
+					language: 'multi',
 				});
 
 				// Add model if specified
@@ -56,7 +60,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 					params.set('model', backendConfig.model);
 				}
 
-				// Add language if specified
+				// Override language if explicitly specified in config
 				if (backendConfig.language) {
 					params.set('language', backendConfig.language);
 				}
@@ -290,11 +294,12 @@ export class DeepgramBackend implements TranscriptionBackend {
 		);
 
 		// Create transcription message
+		// Note: Deepgram's request_id is per-session, not per-message, so we generate unique UUIDs
 		const transcriptionMessage = this.createTranscriptionMessage(
 			transcript,
 			confidence,
 			Date.now(),
-			result.metadata?.request_id || Date.now().toString(),
+			randomUUID(),
 			!isFinal,
 		);
 
