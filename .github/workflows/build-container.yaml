@@ -26,6 +26,11 @@ on:
                 type: string
                 required: false
                 default: echo "Nothing to execute after running Wrangler. Finishing..."
+            emsdk_version:
+                description: Emscripten SDK version, defaults to 4.0.20
+                type: string
+                required: false
+                default: "4.0.20"
 jobs:
     deploy:
         runs-on: "ubuntu-latest"
@@ -52,9 +57,36 @@ jobs:
                     exit 1
                   fi
 
+            - name: Install Linux deps
+              run: |
+                sudo apt update
+                sudo apt -y install wget unzip
+
             - uses: actions/setup-node@v4
               with:
                   node-version: 22
+                  cache: npm
+
+            - name: Install Node Dependencies
+              run: |
+                  npm ci
+
+            - name: Setup Emscripten SDK
+              run: |
+                wget https://github.com/emscripten-core/emsdk/archive/main.zip
+                unzip main.zip
+                cd emsdk-main
+                ./emsdk install ${{ inputs.emsdk_version }}
+                ./emsdk activate ${{ inputs.emsdk_version }}
+                source ./emsdk_env.sh
+                echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+                echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
+                echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
+
+            - name: Build WASM modules
+              run: |
+                source "$EMSDK/emsdk_env.sh"
+                npm run build:wasm
 
             - name: Install Worker Dependencies
               working-directory: worker
