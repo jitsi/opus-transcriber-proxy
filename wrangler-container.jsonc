@@ -2,7 +2,6 @@
 	"name": "opus-transcriber-proxy-container",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-01-09",
-	"account_id": "9b4d72f249d1514cee8e14c4a2510181",
 	"observability": {
 		"enabled": true
 	},
