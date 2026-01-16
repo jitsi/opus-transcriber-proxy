@@ -20,7 +20,7 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 
 export const config = {
 	// Backend selection
-	transcriptionBackend: (process.env.TRANSCRIPTION_BACKEND || 'openai') as 'openai' | 'gemini' | 'deepgram',
+	transcriptionBackend: (process.env.TRANSCRIPTION_BACKEND || 'openai') as 'openai' | 'gemini' | 'deepgram' | 'dummy',
 
 	// OpenAI configuration
 	openai: {
@@ -79,6 +79,6 @@ if (config.transcriptionBackend === 'deepgram' && !config.deepgram.apiKey) {
 	throw new Error('DEEPGRAM_API_KEY environment variable is required when using Deepgram backend');
 }
 
-if (config.transcriptionBackend !== 'openai' && config.transcriptionBackend !== 'gemini' && config.transcriptionBackend !== 'deepgram') {
-	throw new Error(`Invalid TRANSCRIPTION_BACKEND: ${config.transcriptionBackend}. Must be 'openai', 'gemini', or 'deepgram'`);
+if (config.transcriptionBackend !== 'openai' && config.transcriptionBackend !== 'gemini' && config.transcriptionBackend !== 'deepgram' && config.transcriptionBackend !== 'dummy') {
+	throw new Error(`Invalid TRANSCRIPTION_BACKEND: ${config.transcriptionBackend}. Must be 'openai', 'gemini', 'deepgram', or 'dummy'`);
 }

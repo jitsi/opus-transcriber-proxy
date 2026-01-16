@@ -3,10 +3,18 @@
  * Replay WebSocket messages from a dump file
  *
  * Usage:
- *   node scripts/replay-dump.cjs <dump-file> <websocket-url>
+ *   node scripts/replay-dump.cjs <dump-file> <websocket-url> [speed]
+ *
+ * Parameters:
+ *   speed - Playback speed multiplier (default: 1.0)
+ *           - speed=2 plays at 2x speed (half the delays)
+ *           - speed=0.5 plays at half speed (double the delays)
+ *           - speed=0 plays with no delay at all
  *
  * Example:
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
+ *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2
+ *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 0
  */
 
 const fs = require('fs');
@@ -38,10 +46,17 @@ function updateStatusLine(current, total, remainingSec) {
 // Parse arguments
 const dumpFile = process.argv[2];
 const wsUrl = process.argv[3];
+const speed = process.argv[4] ? parseFloat(process.argv[4]) : 1.0;
 
 if (!dumpFile || !wsUrl) {
-    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url>');
+    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed]');
     console.error('Example: node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"');
+    console.error('         node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2');
+    process.exit(1);
+}
+
+if (isNaN(speed) || speed < 0) {
+    console.error('Error: Speed must be a non-negative number');
     process.exit(1);
 }
 
@@ -71,6 +86,7 @@ const totalDurationSec = Math.ceil(totalDurationMs / 1000);
 
 console.log(`Loaded ${messages.length} messages`);
 console.log(`Total duration: ${formatTime(totalDurationSec)}`);
+console.log(`Playback speed: ${speed}x ${speed === 0 ? '(no delay)' : ''}`);
 console.log('');
 
 // Connect to WebSocket
@@ -95,7 +111,9 @@ ws.on('open', () => {
         }
 
         const elapsedMs = Date.now() - replayStartTime;
-        const remainingMs = Math.max(0, totalDurationMs - elapsedMs);
+        // Adjust remaining time calculation based on speed
+        const adjustedTotalDurationMs = speed === 0 ? 0 : totalDurationMs / speed;
+        const remainingMs = Math.max(0, adjustedTotalDurationMs - elapsedMs);
         const remainingSec = Math.ceil(remainingMs / 1000);
 
         updateStatusLine(messageIndex, messages.length, remainingSec);
@@ -114,8 +132,16 @@ ws.on('open', () => {
         const message = messages[messageIndex];
         const originalTimestamp = message.timestamp;
         const timeSinceStart = originalTimestamp - firstTimestamp;
-        const targetTime = replayStartTime + timeSinceStart;
-        const delay = Math.max(0, targetTime - Date.now());
+
+        // Calculate delay based on speed
+        let delay;
+        if (speed === 0) {
+            delay = 0; // No delay at all
+        } else {
+            const adjustedTimeSinceStart = timeSinceStart / speed;
+            const targetTime = replayStartTime + adjustedTimeSinceStart;
+            delay = Math.max(0, targetTime - Date.now());
+        }
 
         setTimeout(() => {
             ws.send(message.data);

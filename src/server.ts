@@ -212,6 +212,8 @@ server.listen(PORT, HOST, () => {
 		logger.info(`  Include Language: ${config.deepgram.includeLanguage}`);
 		logger.info(`  Punctuate: ${config.deepgram.punctuate}`);
 		logger.info(`  Diarize: ${config.deepgram.diarize}`);
+	} else if (config.transcriptionBackend === 'dummy') {
+		logger.info('  (Testing/statistics backend - decodes audio but does not transcribe)');
 	}
 	logger.info('');
 

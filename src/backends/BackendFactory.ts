@@ -8,6 +8,7 @@ import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend
 import { OpenAIBackend } from './OpenAIBackend';
 import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
+import { DummyBackend } from './DummyBackend';
 
 export function createBackend(tag: string, participantInfo: any): TranscriptionBackend {
 	const backendType = config.transcriptionBackend;
@@ -21,6 +22,8 @@ export function createBackend(tag: string, participantInfo: any): TranscriptionB
 			return new GeminiBackend(tag, participantInfo);
 		case 'deepgram':
 			return new DeepgramBackend(tag, participantInfo);
+		case 'dummy':
+			return new DummyBackend(tag, participantInfo);
 		default:
 			throw new Error(`Unknown transcription backend: ${backendType}`);
 	}
@@ -47,6 +50,12 @@ export function getBackendConfig(): BackendConfig {
 				language: null, // Will be set per-connection based on options
 				prompt: undefined, // Deepgram doesn't support prompts
 				model: config.deepgram.model,
+			};
+		case 'dummy':
+			return {
+				language: null,
+				prompt: undefined, // Dummy backend doesn't use prompts
+				model: undefined,
 			};
 		default:
 			throw new Error(`Unknown transcription backend: ${backendType}`);
