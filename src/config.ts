@@ -46,8 +46,10 @@ export const config = {
 	deepgram: {
 		apiKey: process.env.DEEPGRAM_API_KEY || '',
 		model: process.env.DEEPGRAM_MODEL || 'nova-2',
+		language: process.env.DEEPGRAM_LANGUAGE || 'multi',
 		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
 		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
+		includeLanguage: process.env.DEEPGRAM_INCLUDE_LANGUAGE === 'true', // Default false
 	},
 
 	server: {

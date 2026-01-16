@@ -80,6 +80,8 @@ Uses Deepgram's WebSocket streaming API for real-time transcription.
 TRANSCRIPTION_BACKEND=deepgram
 DEEPGRAM_API_KEY=your-key-here
 DEEPGRAM_MODEL=nova-2
+DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
+DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
 DEEPGRAM_DIARIZE=false
 ```
@@ -97,7 +99,12 @@ DEEPGRAM_DIARIZE=false
 - Returns both interim and final transcriptions
 - Supports KeepAlive, Finalize, and CloseStream control messages
 - Authentication via Sec-WebSocket-Protocol header
-- Defaults to `language=multi` for automatic multilingual detection (supports 31+ languages with Nova-3)
+- Multilingual streaming support:
+  - Defaults to `language=multi` for automatic multilingual code-switching (31+ languages with Nova-3)
+  - Can specify single language (e.g., `en`, `es`, `fr`, `de`, `pt`, etc.)
+  - Automatically adds `endpointing=100` for multilingual mode (recommended for code-switching)
+  - Optional: Include detected language in transcript (e.g., `"Hello [en]"`) via `DEEPGRAM_INCLUDE_LANGUAGE=true`
+  - **Note**: `detect_language` parameter is NOT supported for streaming (only for pre-recorded audio)
 - Generates unique UUID for each transcription message
 
 ## Architecture

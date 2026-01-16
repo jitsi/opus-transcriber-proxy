@@ -50,9 +50,6 @@ export class DeepgramBackend implements TranscriptionBackend {
 					sample_rate: '24000',
 					channels: '1',
 					interim_results: 'true',
-					// Use multilingual model by default for automatic language detection
-					// See: https://developers.deepgram.com/docs/multilingual-code-switching
-					language: 'multi',
 				});
 
 				// Add model if specified
@@ -60,10 +57,20 @@ export class DeepgramBackend implements TranscriptionBackend {
 					params.set('model', backendConfig.model);
 				}
 
-				// Override language if explicitly specified in config
-				if (backendConfig.language) {
-					params.set('language', backendConfig.language);
+				// Language configuration
+				// Use per-connection language if specified, otherwise use global config
+				const language = backendConfig.language || config.deepgram.language;
+				if (language) {
+					params.set('language', language);
+					// For multilingual streaming, add recommended endpointing
+					// See: https://developers.deepgram.com/docs/multilingual-code-switching
+					if (language === 'multi') {
+						params.set('endpointing', '100');
+					}
 				}
+
+				// Note: detect_language is NOT supported for streaming
+				// See: https://developers.deepgram.com/docs/language-detection
 
 				// Add other Deepgram-specific features
 				if (config.deepgram.punctuate !== undefined) {
@@ -79,7 +86,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 				// See: https://developers.deepgram.com/docs/using-the-sec-websocket-protocol
 				const ws = new WebSocket(deepgramUrl, ['token', config.deepgram.apiKey]);
 
-				logger.debug(`Opening Deepgram WebSocket to ${deepgramUrl} for tag: ${this.tag}`);
+				logger.info(`Opening Deepgram WebSocket to ${deepgramUrl} for tag: ${this.tag}`);
 
 				this.ws = ws;
 
@@ -279,7 +286,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 		}
 
 		const alternative = channel.alternatives[0];
-		const transcript = alternative.transcript;
+		let transcript = alternative.transcript;
 
 		// Skip empty transcripts
 		if (!transcript || transcript.trim() === '') {
@@ -288,6 +295,13 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 		const confidence = alternative.confidence;
 		const isFinal = result.is_final === true;
+
+		// Append detected language if configured
+		if (config.deepgram.includeLanguage && alternative.languages && alternative.languages.length > 0) {
+			// Use the first (dominant) language
+			const detectedLanguage = alternative.languages[0];
+			transcript = `${transcript} [${detectedLanguage}]`;
+		}
 
 		logger.debug(
 			`Received ${isFinal ? 'final' : 'interim'} transcription from Deepgram for ${this.tag}: ${transcript} (confidence: ${confidence})`,

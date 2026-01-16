@@ -208,6 +208,8 @@ server.listen(PORT, HOST, () => {
 		logger.info(`  Prompt: ${config.gemini.transcriptionPrompt ? config.gemini.transcriptionPrompt.substring(0, 60) + '...' : '(none)'}`);
 	} else if (config.transcriptionBackend === 'deepgram') {
 		logger.info(`  Model: ${config.deepgram.model}`);
+		logger.info(`  Language: ${config.deepgram.language}`);
+		logger.info(`  Include Language: ${config.deepgram.includeLanguage}`);
 		logger.info(`  Punctuate: ${config.deepgram.punctuate}`);
 		logger.info(`  Diarize: ${config.deepgram.diarize}`);
 	}
