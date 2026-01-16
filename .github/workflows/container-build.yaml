@@ -88,7 +88,11 @@ jobs:
                 source "$EMSDK/emsdk_env.sh"
                 npm run build:wasm
 
-            - name: Install Worker Dependencies
+            - name: Build main worker
+              run: |
+                  npm run build
+
+            - name: Install Worker Container Dependencies
               working-directory: worker
               run: |
                   npm ci
