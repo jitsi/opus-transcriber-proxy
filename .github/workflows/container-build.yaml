@@ -99,7 +99,6 @@ jobs:
                   wranglerVersion: "4.51.0"
                   apiToken: ${{ secrets[env.CF_TOKEN] }}
                   accountId: ${{ secrets[env.CF_ACCOUNT] }}
-                  workingDirectory: worker
                   preCommands: ${{ inputs.preCommand }}
                   postCommands: ${{ inputs.postCommand }}
                   command: deploy --config ../wrangler-container.jsonc
