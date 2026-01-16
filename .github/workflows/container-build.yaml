@@ -103,3 +103,12 @@ jobs:
                   preCommands: ${{ inputs.preCommand }}
                   postCommands: ${{ inputs.postCommand }}
                   command: deploy --config ../wrangler-container.jsonc
+
+            - name: Upload Wrangler Logs
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: wrangler-logs-${{ github.run_id }}
+                  path: /home/runner/.config/.wrangler/logs/
+                  retention-days: 7
+                  if-no-files-found: ignore
