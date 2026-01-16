@@ -80,6 +80,7 @@ Uses Deepgram's WebSocket streaming API for real-time transcription.
 TRANSCRIPTION_BACKEND=deepgram
 DEEPGRAM_API_KEY=your-key-here
 DEEPGRAM_MODEL=nova-2
+DEEPGRAM_ENCODING=linear16        # Audio encoding: linear16 (PCM) or opus (default: linear16)
 DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
@@ -94,8 +95,9 @@ DEEPGRAM_DIARIZE=false
 
 **Technical Details:**
 - Uses WebSocket API: `wss://api.deepgram.com/v1/listen`
-- Streams raw PCM audio directly (linear16 encoding)
-- Audio sent at 24kHz, 16-bit, mono PCM
+- Audio encoding options:
+  - **linear16** (default): Sends decoded PCM audio at 24kHz, 16-bit, mono. Uses more CPU for Opus decoding but universally compatible.
+  - **opus**: Sends raw Opus frames at 48kHz. More efficient (skips decoding step), lower CPU usage, native Opus support.
 - Returns both interim and final transcriptions
 - Supports KeepAlive, Finalize, and CloseStream control messages
 - Authentication via Sec-WebSocket-Protocol header

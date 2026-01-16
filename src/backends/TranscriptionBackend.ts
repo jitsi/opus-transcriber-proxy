@@ -29,11 +29,21 @@ export interface TranscriptionBackend {
 	connect(config: BackendConfig): Promise<void>;
 
 	/**
-	 * Send base64-encoded PCM audio data to the backend
-	 * Audio format: 24kHz, 16-bit, mono PCM
-	 * @param audioBase64 - Base64-encoded PCM audio
+	 * Send base64-encoded audio data to the backend
+	 * Audio format depends on wantsRawOpus():
+	 * - If false (default): 24kHz, 16-bit, mono PCM
+	 * - If true: Raw Opus frames at 48kHz
+	 * @param audioBase64 - Base64-encoded audio (PCM or Opus)
 	 */
 	sendAudio(audioBase64: string): Promise<void>;
+
+	/**
+	 * Optional: Indicates if this backend wants raw Opus frames instead of decoded PCM
+	 * If true, sendAudio will receive base64-encoded Opus frames
+	 * If false/undefined (default), sendAudio receives base64-encoded PCM
+	 * @returns true if backend prefers raw Opus frames
+	 */
+	wantsRawOpus?(): boolean;
 
 	/**
 	 * Force the backend to commit/finalize pending audio and generate transcription

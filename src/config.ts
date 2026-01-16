@@ -47,6 +47,7 @@ export const config = {
 		apiKey: process.env.DEEPGRAM_API_KEY || '',
 		model: process.env.DEEPGRAM_MODEL || 'nova-2',
 		language: process.env.DEEPGRAM_LANGUAGE || 'multi',
+		encoding: (process.env.DEEPGRAM_ENCODING || 'linear16') as 'opus' | 'linear16',
 		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
 		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
 		includeLanguage: process.env.DEEPGRAM_INCLUDE_LANGUAGE === 'true', // Default false

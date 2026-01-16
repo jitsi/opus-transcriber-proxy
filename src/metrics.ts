@@ -35,7 +35,8 @@ export type MetricName =
 	| 'opus_decode_failure'
 	| 'opus_packet_discarded'
 	| 'backend_audio_queued' // Audio queued for transcription backend
-	| 'backend_audio_sent' // Audio sent to transcription backend
+	| 'backend_audio_sent' // Audio sent to transcription backend (decoded PCM)
+	| 'backend_opus_sent' // Raw Opus frames sent to transcription backend
 	| 'openai_audio_queued' // Deprecated: use backend_audio_queued
 	| 'openai_audio_sent' // Deprecated: use backend_audio_sent
 	| 'openai_api_error' // OpenAI-specific API errors

@@ -70,8 +70,9 @@ export class OutgoingConnection {
 		this.options = options;
 		this.metricCache = new MetricCache(undefined, NaN);
 
-		this.initializeOpusDecoder();
 		this.initializeBackend();
+		// Note: Opus decoder initialization is now done in initializeBackend
+		// after we know if the backend wants raw Opus or not
 	}
 
 	private async initializeOpusDecoder(): Promise<void> {
@@ -99,6 +100,18 @@ export class OutgoingConnection {
 			// Create backend using factory
 			this.backend = createBackend(this.localTag, this.participant);
 
+			// Check if backend wants raw Opus frames or decoded PCM
+			const wantsRawOpus = this.backend.wantsRawOpus?.() ?? false;
+
+			if (wantsRawOpus) {
+				logger.info(`Backend wants raw Opus frames for tag: ${this.localTag}, skipping Opus decoder initialization`);
+				// Set decoder status to skip - we won't decode
+				this.decoderStatus = 'ready'; // Mark as ready so we can process frames
+			} else {
+				// Initialize Opus decoder for PCM output
+				this.initializeOpusDecoder();
+			}
+
 			// Set up event handlers
 			this.backend.onInterimTranscription = (message) => {
 				this.onInterimTranscription?.(message);
@@ -125,7 +138,13 @@ export class OutgoingConnection {
 			logger.info(`Transcription backend connected for tag: ${this.localTag}`);
 
 			// Process any pending audio data that was queued while waiting for connection
-			this.processPendingAudioData();
+			if (wantsRawOpus) {
+				// For raw Opus mode, process pending Opus frames directly
+				this.processPendingOpusFrames();
+			} else {
+				// For PCM mode, process pending decoded audio
+				this.processPendingAudioData();
+			}
 		} catch (error) {
 			logger.error(`Failed to initialize transcription backend for tag ${this.localTag}:`, error);
 			this.backend = undefined;
@@ -187,10 +206,25 @@ export class OutgoingConnection {
 			this.lastTimestamp = mediaEvent.media.timestamp;
 		}
 
-		if (this.decoderStatus === 'ready' && this.opusDecoder) {
+		// Check if backend wants raw Opus or decoded PCM
+		const wantsRawOpus = this.backend?.wantsRawOpus?.() ?? false;
+		const backendStatus = this.backend?.getStatus();
+
+		if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'connected') {
+			// Send raw Opus frame directly (no decoding, backend is ready)
+			this.sendRawOpusToBackend(opusFrame);
+		} else if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'pending') {
+			// Queue raw Opus frames until backend is ready
+			this.pendingOpusFrames.push(opusFrame);
+			this.metricCache.increment({
+				name: 'opus_packet_queued',
+				worker: 'opus-transcriber-proxy',
+			});
+		} else if (this.decoderStatus === 'ready' && this.opusDecoder) {
+			// Decode Opus to PCM and send
 			this.processOpusFrame(opusFrame);
 		} else if (this.decoderStatus === 'pending') {
-			// Queue the binary data until decoder is ready
+			// Queue the binary data until decoder/backend is ready
 			this.pendingOpusFrames.push(opusFrame);
 			this.metricCache.increment({
 				name: 'opus_packet_queued',
@@ -198,7 +232,7 @@ export class OutgoingConnection {
 			});
 			// logger.debug(`Queued opus frame for tag: ${this.tag} (queue size: ${this.pendingOpusFrames.length})`);
 		} else {
-			logger.debug(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}`);
+			logger.debug(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}, backend ${backendStatus}`);
 		}
 	}
 
@@ -316,8 +350,17 @@ export class OutgoingConnection {
 		const queuedPayloads = [...this.pendingOpusFrames];
 		this.pendingOpusFrames = []; // Clear the queue
 
+		// Check if backend wants raw Opus or decoded PCM
+		const wantsRawOpus = this.backend?.wantsRawOpus?.() ?? false;
+
 		for (const binaryData of queuedPayloads) {
-			this.processOpusFrame(binaryData);
+			if (wantsRawOpus) {
+				// Send raw Opus frame directly
+				this.sendRawOpusToBackend(binaryData);
+			} else {
+				// Decode and send PCM
+				this.processOpusFrame(binaryData);
+			}
 		}
 	}
 
@@ -337,6 +380,26 @@ export class OutgoingConnection {
 		} catch (error) {
 			logger.error(`Failed to send audio to backend for tag ${this.localTag}`, error);
 			// TODO should this call onError?
+		}
+	}
+
+	private sendRawOpusToBackend(opusFrame: Uint8Array): void {
+		if (!this.backend) {
+			logger.error(`No backend available for tag: ${this.localTag}`);
+			return;
+		}
+
+		try {
+			// Convert raw Opus frame to base64 and send to backend
+			const base64Opus = Buffer.from(opusFrame).toString('base64');
+			this.backend.sendAudio(base64Opus);
+			this.resetIdleCommitTimeout();
+			this.metricCache.increment({
+				name: 'backend_opus_sent',
+				worker: 'opus-transcriber-proxy',
+			});
+		} catch (error) {
+			logger.error(`Failed to send raw Opus to backend for tag ${this.localTag}`, error);
 		}
 	}
 

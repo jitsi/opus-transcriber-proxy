@@ -44,10 +44,13 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 		return new Promise((resolve, reject) => {
 			try {
-				// Build query parameters
+				// Build query parameters based on encoding type
+				const encoding = config.deepgram.encoding;
+				const sampleRate = encoding === 'opus' ? '48000' : '24000';
+
 				const params = new URLSearchParams({
-					encoding: 'linear16',
-					sample_rate: '24000',
+					encoding: encoding,
+					sample_rate: sampleRate,
 					channels: '1',
 					interim_results: 'true',
 				});
@@ -199,6 +202,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	wantsRawOpus(): boolean {
+		// Return true if encoding is opus, otherwise false (use decoded PCM)
+		return config.deepgram.encoding === 'opus';
 	}
 
 	private startKeepAlive(): void {
