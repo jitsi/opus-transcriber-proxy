@@ -87,6 +87,22 @@ jobs:
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
                 echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
 
+            - name: Cache emscripten build products
+              id: cache-emscripten
+              uses: actions/cache@v5
+              env:
+                cache-name: emscripten-cache
+              with:
+                path: ${{ env.EMSDK }}/upstream/emscripten/cache
+                key: ${{ runner.os }}-${{ env.cache-name }}-${{ inputs.emsdk_version }}
+
+            - if: ${{ steps.cache-emscripten.outputs.cache-hit }} == 'true'
+              name: Run emscripten sanity check after restoring cache
+              run: |
+                source "$EMSDK/emsdk_env.sh"
+                emcc --check
+                exit $?
+
             - name: Build TS App
               run: |
                 source "$EMSDK/emsdk_env.sh"
