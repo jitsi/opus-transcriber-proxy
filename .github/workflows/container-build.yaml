@@ -114,12 +114,24 @@ jobs:
 
             - name: Attach Custom Domain
               if: ${{ inputs.custom_domain != '' }}
-              uses: cloudflare/wrangler-action@v3
-              with:
-                  wranglerVersion: "4.51.0"
-                  apiToken: ${{ secrets[env.CF_TOKEN] }}
-                  accountId: ${{ secrets[env.CF_ACCOUNT] }}
-                  command: domains add ${{ inputs.custom_domain }} --config wrangler.jsonc
+              run: |
+                  # Extract zone ID from domain
+                  ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$(echo ${{ inputs.custom_domain }} | rev | cut -d. -f1,2 | rev)" \
+                    -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
+                    -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+                  echo "Zone ID: $ZONE_ID"
+
+                  # Attach custom domain to worker
+                  curl -X PUT "https://api.cloudflare.com/client/v4/accounts/${{ secrets[env.CF_ACCOUNT] }}/workers/domains/records" \
+                    -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
+                    -H "Content-Type: application/json" \
+                    --data '{
+                      "zone_id": "'$ZONE_ID'",
+                      "hostname": "${{ inputs.custom_domain }}",
+                      "service": "opus-transcriber-proxy",
+                      "environment": "production"
+                    }'
 
             - name: Upload Wrangler Logs
               if: always()
