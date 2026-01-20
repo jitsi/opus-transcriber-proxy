@@ -8,6 +8,7 @@ export interface ISessionParameters {
 	sendBack: boolean;
 	sendBackInterim: boolean;
 	language: string | null;
+	provider: string | null;
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -20,6 +21,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const sendBack = parsedUrl.searchParams.get('sendBack');
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
 	const lang = parsedUrl.searchParams.get('lang');
+	const provider = parsedUrl.searchParams.get('provider');
 
 	return {
 		url: parsedUrl,
@@ -31,6 +33,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
 		language: lang,
+		provider,
 	};
 }
 

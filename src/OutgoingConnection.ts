@@ -2,7 +2,7 @@ import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
-import { config } from './config';
+import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig } from './backends/BackendFactory';
 import type { TranscriptionBackend } from './backends/TranscriptionBackend';
@@ -98,7 +98,8 @@ export class OutgoingConnection {
 	private async initializeBackend(): Promise<void> {
 		try {
 			// Create backend using factory
-			this.backend = createBackend(this.localTag, this.participant);
+			// Use provider from options (URL param), or fall back to config default
+			this.backend = createBackend(this.localTag, this.participant, this.options.provider);
 
 			// Check if backend wants raw Opus frames or decoded PCM
 			const wantsRawOpus = this.backend.wantsRawOpus?.() ?? false;
@@ -129,7 +130,7 @@ export class OutgoingConnection {
 			};
 
 			// Get backend configuration
-			const backendConfig = getBackendConfig();
+			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
 
 			// Connect the backend
@@ -504,8 +505,8 @@ export class OutgoingConnection {
 		}
 
 		try {
-			// Get base prompt from config
-			const backendType = config.transcriptionBackend;
+			// Get base prompt from config based on this connection's provider
+			const backendType = this.options.provider || getDefaultProvider();
 			let basePrompt = '';
 
 			if (backendType === 'openai') {

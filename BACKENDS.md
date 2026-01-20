@@ -20,10 +20,12 @@ Uses OpenAI's Realtime API for low-latency streaming transcription.
 
 **Configuration:**
 ```bash
-TRANSCRIPTION_BACKEND=openai
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-transcribe
 OPENAI_TRANSCRIPTION_PROMPT="Your custom prompt here"
+
+# Make OpenAI the default provider
+PROVIDERS_PRIORITY=openai,deepgram,gemini
 ```
 
 **Models:**
@@ -41,10 +43,12 @@ Uses Google's Gemini WebSocket-based BidiGenerateContent API for transcription.
 
 **Configuration:**
 ```bash
-TRANSCRIPTION_BACKEND=gemini
 GEMINI_API_KEY=your-key-here
 GEMINI_MODEL=gemini-2.0-flash-exp
 GEMINI_TRANSCRIPTION_PROMPT="Your custom prompt here"
+
+# Make Gemini the default provider
+PROVIDERS_PRIORITY=gemini,openai,deepgram
 ```
 
 **Models:**
@@ -77,7 +81,6 @@ Uses Deepgram's WebSocket streaming API for real-time transcription.
 
 **Configuration:**
 ```bash
-TRANSCRIPTION_BACKEND=deepgram
 DEEPGRAM_API_KEY=your-key-here
 DEEPGRAM_MODEL=nova-2
 DEEPGRAM_ENCODING=linear16        # Audio encoding: linear16 (PCM) or opus (default: linear16)
@@ -85,6 +88,9 @@ DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
 DEEPGRAM_DIARIZE=false
+
+# Make Deepgram the default provider
+PROVIDERS_PRIORITY=deepgram,openai,gemini
 ```
 
 **Models:**
@@ -252,8 +258,6 @@ Update `src/config.ts`:
 
 ```typescript
 export const config = {
-  transcriptionBackend: (process.env.TRANSCRIPTION_BACKEND || 'openai') as 'openai' | 'gemini' | 'yourbackend',
-
   // ... existing config ...
 
   yourbackend: {
@@ -263,9 +267,15 @@ export const config = {
   },
 } as const;
 
-// Add validation
-if (config.transcriptionBackend === 'yourbackend' && !config.yourbackend.apiKey) {
-  throw new Error('YOURBACKEND_API_KEY environment variable is required');
+// Add to isProviderAvailable function
+export function isProviderAvailable(provider: Provider): boolean {
+  switch (provider) {
+    // ... existing cases ...
+    case 'yourbackend':
+      return !!config.yourbackend.apiKey;
+    default:
+      return false;
+  }
 }
 ```
 
@@ -351,16 +361,23 @@ All backends support multiple languages with auto-detection:
 Test your backend implementation:
 
 ```bash
-# Set backend in .env
-TRANSCRIPTION_BACKEND=yourbackend
+# Configure API key
 YOURBACKEND_API_KEY=...
+
+# Make it the default provider
+PROVIDERS_PRIORITY=yourbackend,openai,deepgram,gemini
 
 # Run the server
 npm start
 
 # Test with real audio or replay a dump
 cd ../transcription-experiments
+
+# Use default provider
 node scripts/replay-dump.cjs standup-2026-01-14/recording/media.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
+
+# Or specify provider explicitly
+node scripts/replay-dump.cjs standup-2026-01-14/recording/media.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true&provider=yourbackend"
 ```
 
 ## Best Practices

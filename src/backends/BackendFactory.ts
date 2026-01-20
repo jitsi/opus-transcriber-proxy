@@ -2,7 +2,7 @@
  * Factory for creating transcription backends
  */
 
-import { config } from '../config';
+import { config, getDefaultProvider, type Provider } from '../config';
 import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
 import { OpenAIBackend } from './OpenAIBackend';
@@ -10,8 +10,8 @@ import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
 import { DummyBackend } from './DummyBackend';
 
-export function createBackend(tag: string, participantInfo: any): TranscriptionBackend {
-	const backendType = config.transcriptionBackend;
+export function createBackend(tag: string, participantInfo: any, provider?: Provider): TranscriptionBackend {
+	const backendType = provider || getDefaultProvider();
 
 	logger.info(`Creating ${backendType} transcription backend for tag: ${tag}`);
 
@@ -29,8 +29,8 @@ export function createBackend(tag: string, participantInfo: any): TranscriptionB
 	}
 }
 
-export function getBackendConfig(): BackendConfig {
-	const backendType = config.transcriptionBackend;
+export function getBackendConfig(provider?: Provider): BackendConfig {
+	const backendType = provider || getDefaultProvider();
 
 	switch (backendType) {
 		case 'openai':

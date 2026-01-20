@@ -18,9 +18,17 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	}
 }
 
+export type Provider = 'openai' | 'gemini' | 'deepgram' | 'dummy';
+
 export const config = {
-	// Backend selection
-	transcriptionBackend: (process.env.TRANSCRIPTION_BACKEND || 'openai') as 'openai' | 'gemini' | 'deepgram' | 'dummy',
+	// Provider priority list (comma-separated, first available is default)
+	// Example: "openai,gemini,deepgram" means try openai first, then gemini, then deepgram
+	providersPriority: (process.env.PROVIDERS_PRIORITY || 'openai,deepgram,gemini')
+		.split(',')
+		.map((p) => p.trim()) as Provider[],
+
+	// Enable dummy provider (for testing/statistics only)
+	enableDummyProvider: process.env.ENABLE_DUMMY_PROVIDER === 'true',
 
 	// OpenAI configuration
 	openai: {
@@ -67,19 +75,48 @@ export const config = {
 	debug: process.env.DEBUG === 'true',
 } as const;
 
-// Validate required config based on selected backend
-if (config.transcriptionBackend === 'openai' && !config.openai.apiKey) {
-	throw new Error('OPENAI_API_KEY environment variable is required when using OpenAI backend');
+/**
+ * Check if a provider is available (has all required configuration)
+ */
+export function isProviderAvailable(provider: Provider): boolean {
+	switch (provider) {
+		case 'openai':
+			return !!config.openai.apiKey;
+		case 'gemini':
+			return !!config.gemini.apiKey;
+		case 'deepgram':
+			return !!config.deepgram.apiKey;
+		case 'dummy':
+			return config.enableDummyProvider; // Dummy only available if explicitly enabled
+		default:
+			return false;
+	}
 }
 
-if (config.transcriptionBackend === 'gemini' && !config.gemini.apiKey) {
-	throw new Error('GEMINI_API_KEY environment variable is required when using Gemini backend');
+/**
+ * Get all available providers
+ */
+export function getAvailableProviders(): Provider[] {
+	const allProviders: Provider[] = ['openai', 'gemini', 'deepgram', 'dummy'];
+	return allProviders.filter(isProviderAvailable);
 }
 
-if (config.transcriptionBackend === 'deepgram' && !config.deepgram.apiKey) {
-	throw new Error('DEEPGRAM_API_KEY environment variable is required when using Deepgram backend');
+/**
+ * Get the default provider based on PROVIDERS_PRIORITY
+ * Returns the first available provider from the priority list
+ */
+export function getDefaultProvider(): Provider | null {
+	for (const provider of config.providersPriority) {
+		if (isProviderAvailable(provider)) {
+			return provider;
+		}
+	}
+	return null;
 }
 
-if (config.transcriptionBackend !== 'openai' && config.transcriptionBackend !== 'gemini' && config.transcriptionBackend !== 'deepgram' && config.transcriptionBackend !== 'dummy') {
-	throw new Error(`Invalid TRANSCRIPTION_BACKEND: ${config.transcriptionBackend}. Must be 'openai', 'gemini', 'deepgram', or 'dummy'`);
+/**
+ * Validate that a provider name is valid
+ */
+export function isValidProvider(provider: string): provider is Provider {
+	return provider === 'openai' || provider === 'gemini' || provider === 'deepgram' || provider === 'dummy';
 }

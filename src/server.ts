@@ -1,6 +1,6 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { config } from './config';
+import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
 import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { setMetricDebug, writeMetric } from './metrics';
@@ -68,15 +68,42 @@ server.on('upgrade', (request, socket, head) => {
 let wsConnectionId = 0;
 
 function handleWebSocketConnection(ws: WebSocket, parameters: any) {
-	const { sessionId, sendBack, sendBackInterim, language } = parameters;
+	const { sessionId, sendBack, sendBackInterim, language, provider: requestedProvider } = parameters;
 	const connectionId = ++wsConnectionId;
 
-	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}`);
+	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}`);
+
+	// Determine which provider to use
+	let provider: Provider | undefined;
+
+	if (requestedProvider) {
+		// Provider specified in URL
+		if (!isValidProvider(requestedProvider)) {
+			const errorMessage = `Invalid provider: ${requestedProvider}. Valid providers are: openai, gemini, deepgram, dummy`;
+			logger.error(`[WS-${connectionId}] ${errorMessage}`);
+			ws.close(1002, errorMessage);
+			return;
+		}
+
+		if (!isProviderAvailable(requestedProvider)) {
+			const errorMessage = `Provider '${requestedProvider}' is not available. Available providers: ${getAvailableProviders().join(', ')}`;
+			logger.error(`[WS-${connectionId}] ${errorMessage}`);
+			ws.close(1002, errorMessage);
+			return;
+		}
+
+		provider = requestedProvider;
+		logger.info(`[WS-${connectionId}] Using requested provider: ${provider}`);
+	} else {
+		// No provider specified, use default
+		provider = getDefaultProvider() || undefined;
+		logger.info(`[WS-${connectionId}] Using default provider: ${provider}`);
+	}
 
 	// Create transcription session
 	// Within this session, multiple participants (tags) can send audio
-	// Each tag gets its own OpenAI connection, and transcripts are shared between tags
-	const session = new TranscriberProxy(ws, { language, sessionId });
+	// Each tag gets its own backend connection, and transcripts are shared between tags
+	const session = new TranscriberProxy(ws, { language, sessionId, provider });
 
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {
@@ -197,24 +224,22 @@ server.listen(PORT, HOST, () => {
 	logger.info(`WebSocket endpoint: ws://${HOST}:${PORT}/transcribe`);
 	logger.info('');
 
-	// Backend configuration
-	logger.info(`Transcription Backend: ${config.transcriptionBackend}`);
-	if (config.transcriptionBackend === 'openai') {
-		logger.info(`  Model: ${config.openai.model}`);
-		logger.info(`  Prompt: ${config.openai.transcriptionPrompt ? config.openai.transcriptionPrompt.substring(0, 60) + '...' : '(none)'}`);
-		logger.info(`  Turn Detection: ${JSON.stringify(config.openai.turnDetection)}`);
-	} else if (config.transcriptionBackend === 'gemini') {
-		logger.info(`  Model: ${config.gemini.model}`);
-		logger.info(`  Prompt: ${config.gemini.transcriptionPrompt ? config.gemini.transcriptionPrompt.substring(0, 60) + '...' : '(none)'}`);
-	} else if (config.transcriptionBackend === 'deepgram') {
-		logger.info(`  Model: ${config.deepgram.model}`);
-		logger.info(`  Encoding: ${config.deepgram.encoding} (${config.deepgram.encoding === 'opus' ? '48kHz raw Opus' : '24kHz PCM'})`);
-		logger.info(`  Language: ${config.deepgram.language}`);
-		logger.info(`  Include Language: ${config.deepgram.includeLanguage}`);
-		logger.info(`  Punctuate: ${config.deepgram.punctuate}`);
-		logger.info(`  Diarize: ${config.deepgram.diarize}`);
-	} else if (config.transcriptionBackend === 'dummy') {
-		logger.info('  (Testing/statistics backend - decodes audio but does not transcribe)');
+	// Provider configuration
+	const availableProviders = getAvailableProviders();
+	const defaultProvider = getDefaultProvider();
+
+	if (availableProviders.length === 0) {
+		logger.error('No providers are available! Please configure at least one provider with API keys.');
+		logger.error('Set OPENAI_API_KEY, GEMINI_API_KEY, or DEEPGRAM_API_KEY in your environment.');
+		process.exit(1);
+	}
+
+	logger.info(`Available providers: ${availableProviders.join(', ')}`);
+	if (defaultProvider) {
+		logger.info(`Default provider: ${defaultProvider}`);
+	} else {
+		logger.error('No default provider available! Check PROVIDERS_PRIORITY configuration.');
+		process.exit(1);
 	}
 	logger.info('');
 

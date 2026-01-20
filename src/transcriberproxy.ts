@@ -1,7 +1,7 @@
 import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
-import { config } from './config';
+import { config, type Provider } from './config';
 import * as fs from 'fs';
 import logger from './logger';
 
@@ -19,6 +19,7 @@ export interface TranscriptionMessage {
 export interface TranscriberProxyOptions {
 	language: string | null;
 	sessionId?: string;
+	provider?: Provider;
 }
 
 export class TranscriberProxy extends EventEmitter {
