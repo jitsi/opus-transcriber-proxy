@@ -105,7 +105,7 @@ jobs:
                   accountId: ${{ secrets[env.CF_ACCOUNT] }}
                   preCommands: ${{ inputs.preCommand }}
                   postCommands: ${{ inputs.postCommand }}
-                  command: deploy --config wrangler-container.jsonc
+                  command: deploy --config wrangler.jsonc
 
             - name: Upload Wrangler Logs
               if: always()
