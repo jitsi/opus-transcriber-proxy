@@ -31,6 +31,11 @@ on:
                 type: string
                 required: false
                 default: "4.0.20"
+            custom_domain:
+                description: Custom domain to attach to the worker (e.g., transcribe.example.com)
+                type: string
+                required: false
+                default: ""
 jobs:
     deploy:
         runs-on: "ubuntu-latest"
@@ -106,6 +111,15 @@ jobs:
                   preCommands: ${{ inputs.preCommand }}
                   postCommands: ${{ inputs.postCommand }}
                   command: deploy --config wrangler.jsonc
+
+            - name: Attach Custom Domain
+              if: ${{ inputs.custom_domain != '' }}
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  wranglerVersion: "4.51.0"
+                  apiToken: ${{ secrets[env.CF_TOKEN] }}
+                  accountId: ${{ secrets[env.CF_ACCOUNT] }}
+                  command: domains add ${{ inputs.custom_domain }} --config wrangler.jsonc
 
             - name: Upload Wrangler Logs
               if: always()
