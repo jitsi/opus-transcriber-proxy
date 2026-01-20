@@ -97,7 +97,7 @@ export class TranscriberContainer extends Container {
 async function selectContainerInstance(request: Request, env: Env): Promise<string> {
 	const url = new URL(request.url);
 	const sessionId = url.searchParams.get('sessionId');
-	const routingMode = env.ROUTING_MODE || 'pool'; // 'pool', 'session', 'shared', or 'autoscale'
+	const routingMode = env.ROUTING_MODE || 'session'; // 'pool', 'session', 'shared', or 'autoscale'
 
 	switch (routingMode) {
 		case 'autoscale':
@@ -166,7 +166,7 @@ export default {
 			} else {
 				return Response.json({
 					error: 'Stats only available in autoscale mode',
-					routingMode: env.ROUTING_MODE || 'pool',
+					routingMode: env.ROUTING_MODE || 'session',
 				});
 			}
 		}
@@ -189,7 +189,7 @@ export default {
 		// This requires more complex WebSocket handling with Cloudflare Containers
 
 		// Report connection tracking for autoscale mode
-		const routingMode = env.ROUTING_MODE || 'pool';
+		const routingMode = env.ROUTING_MODE || 'session';
 		const upgradeHeader = request.headers.get('Upgrade');
 		if (routingMode === 'autoscale' && upgradeHeader === 'websocket') {
 			const coordinator = env.CONTAINER_COORDINATOR.get(env.CONTAINER_COORDINATOR.idFromName('global'));
