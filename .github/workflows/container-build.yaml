@@ -32,7 +32,7 @@ on:
                 required: false
                 default: "4.0.20"
             custom_domain:
-                description: Custom domain to attach to the worker (e.g., transcribe.example.com)
+                description: Custom domain for the worker - leave empty to skip
                 type: string
                 required: false
                 default: ""
@@ -102,6 +102,55 @@ jobs:
               run: |
                   npm ci
 
+            - name: Configure Custom Domain
+              if: ${{ inputs.custom_domain != '' }}
+              run: |
+                  echo "Configuring custom domain: ${{ inputs.custom_domain }}"
+
+                  # Create a temporary Python script to modify the JSON
+                  cat > modify_wrangler.py << 'EOF'
+                  import json
+                  import sys
+
+                  domain = sys.argv[1]
+
+                  # Read wrangler.jsonc (strip comments)
+                  with open('wrangler.jsonc', 'r') as f:
+                      content = f.read()
+
+                  # Remove single-line comments
+                  lines = []
+                  for line in content.split('\n'):
+                      # Keep line if it doesn't start with // (after stripping whitespace)
+                      stripped = line.strip()
+                      if not stripped.startswith('//'):
+                          lines.append(line)
+
+                  clean_content = '\n'.join(lines)
+
+                  # Parse JSON
+                  config = json.loads(clean_content)
+
+                  # Add routes configuration
+                  config['routes'] = [
+                      {
+                          'pattern': f'{domain}/*',
+                          'custom_domain': True
+                      }
+                  ]
+
+                  # Write back as JSON (no comments)
+                  with open('wrangler.json', 'w') as f:
+                      json.dump(config, f, indent=2)
+
+                  print(f"✅ Added custom domain route: {domain}/*")
+                  EOF
+
+                  python3 modify_wrangler.py "${{ inputs.custom_domain }}"
+
+                  echo "Modified wrangler.json (routes section):"
+                  jq '.routes' wrangler.json
+
             - name: Wrangler Deploy
               uses: cloudflare/wrangler-action@v3
               with:
@@ -110,51 +159,7 @@ jobs:
                   accountId: ${{ secrets[env.CF_ACCOUNT] }}
                   preCommands: ${{ inputs.preCommand }}
                   postCommands: ${{ inputs.postCommand }}
-                  command: deploy --config wrangler.jsonc
-
-            - name: Attach Custom Domain
-              if: ${{ inputs.custom_domain != '' }}
-              run: |
-                  # Extract root zone from domain (e.g., "8x8.vc" from "opus-transcriber-proxy.stage.8x8.vc")
-                  ROOT_ZONE=$(echo "${{ inputs.custom_domain }}" | awk -F. '{print $(NF-1)"."$NF}')
-                  echo "Looking up zone: $ROOT_ZONE"
-
-                  # Get zone ID
-                  ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_ZONE" \
-                    -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
-                    -H "Content-Type: application/json")
-
-                  ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id')
-
-                  if [ "$ZONE_ID" = "null" ] || [ -z "$ZONE_ID" ]; then
-                    echo "Error: Could not find zone for $ROOT_ZONE"
-                    echo "API Response: $ZONE_RESPONSE"
-                    exit 1
-                  fi
-
-                  echo "Zone ID: $ZONE_ID"
-
-                  # Attach custom domain to worker
-                  RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${{ secrets[env.CF_ACCOUNT] }}/workers/domains/records" \
-                    -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
-                    -H "Content-Type: application/json" \
-                    --data '{
-                      "zone_id": "'"$ZONE_ID"'",
-                      "hostname": "${{ inputs.custom_domain }}",
-                      "service": "opus-transcriber-proxy",
-                      "environment": "production"
-                    }')
-
-                  echo "Domain attachment response: $RESPONSE"
-
-                  # Check if successful
-                  if echo "$RESPONSE" | jq -e '.success == true' > /dev/null; then
-                    echo "✅ Successfully attached custom domain: ${{ inputs.custom_domain }}"
-                  else
-                    echo "❌ Failed to attach custom domain"
-                    echo "$RESPONSE" | jq .
-                    exit 1
-                  fi
+                  command: deploy --config ${{ inputs.custom_domain != '' && 'wrangler.json' || 'wrangler.jsonc' }}
 
             - name: Upload Wrangler Logs
               if: always()
