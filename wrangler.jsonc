@@ -20,21 +20,18 @@
 			{
 				"class_name": "TranscriberContainer",
 				"name": "TRANSCRIBER"
-			},
-			{
-				"class_name": "ContainerCoordinator",
-				"name": "CONTAINER_COORDINATOR"
 			}
 		]
 	},
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["TranscriberContainer"]
+			"new_sqlite_classes": ["Transcriptionator"]
 		},
 		{
 			"tag": "v2",
-			"new_sqlite_classes": ["ContainerCoordinator"]
+			"deleted_classes": ["Transcriptionator"],
+			"new_sqlite_classes": ["TranscriberContainer"]
 		}
 	],
 	// Service bindings for calling other workers
