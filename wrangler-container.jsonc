@@ -1,5 +1,5 @@
 {
-	"name": "opus-transcriber-proxy-container",
+	"name": "opus-transcriber-proxy",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-01-09",
 	"observability": {
