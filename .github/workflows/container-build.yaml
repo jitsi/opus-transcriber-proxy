@@ -115,23 +115,46 @@ jobs:
             - name: Attach Custom Domain
               if: ${{ inputs.custom_domain != '' }}
               run: |
-                  # Extract zone ID from domain
-                  ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$(echo ${{ inputs.custom_domain }} | rev | cut -d. -f1,2 | rev)" \
+                  # Extract root zone from domain (e.g., "8x8.vc" from "opus-transcriber-proxy.stage.8x8.vc")
+                  ROOT_ZONE=$(echo "${{ inputs.custom_domain }}" | awk -F. '{print $(NF-1)"."$NF}')
+                  echo "Looking up zone: $ROOT_ZONE"
+
+                  # Get zone ID
+                  ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_ZONE" \
                     -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
-                    -H "Content-Type: application/json" | jq -r '.result[0].id')
+                    -H "Content-Type: application/json")
+
+                  ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id')
+
+                  if [ "$ZONE_ID" = "null" ] || [ -z "$ZONE_ID" ]; then
+                    echo "Error: Could not find zone for $ROOT_ZONE"
+                    echo "API Response: $ZONE_RESPONSE"
+                    exit 1
+                  fi
 
                   echo "Zone ID: $ZONE_ID"
 
                   # Attach custom domain to worker
-                  curl -X PUT "https://api.cloudflare.com/client/v4/accounts/${{ secrets[env.CF_ACCOUNT] }}/workers/domains/records" \
+                  RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${{ secrets[env.CF_ACCOUNT] }}/workers/domains/records" \
                     -H "Authorization: Bearer ${{ secrets[env.CF_TOKEN] }}" \
                     -H "Content-Type: application/json" \
                     --data '{
-                      "zone_id": "'$ZONE_ID'",
+                      "zone_id": "'"$ZONE_ID"'",
                       "hostname": "${{ inputs.custom_domain }}",
                       "service": "opus-transcriber-proxy",
                       "environment": "production"
-                    }'
+                    }')
+
+                  echo "Domain attachment response: $RESPONSE"
+
+                  # Check if successful
+                  if echo "$RESPONSE" | jq -e '.success == true' > /dev/null; then
+                    echo "✅ Successfully attached custom domain: ${{ inputs.custom_domain }}"
+                  else
+                    echo "❌ Failed to attach custom domain"
+                    echo "$RESPONSE" | jq .
+                    exit 1
+                  fi
 
             - name: Upload Wrangler Logs
               if: always()
