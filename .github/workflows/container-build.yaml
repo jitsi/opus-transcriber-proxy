@@ -134,7 +134,7 @@ jobs:
                   # Add routes configuration
                   config['routes'] = [
                       {
-                          'pattern': f'{domain}/*',
+                          'pattern': domain,
                           'custom_domain': True
                       }
                   ]
@@ -143,7 +143,7 @@ jobs:
                   with open('wrangler.json', 'w') as f:
                       json.dump(config, f, indent=2)
 
-                  print(f"✅ Added custom domain route: {domain}/*")
+                  print(f"✅ Added custom domain route: {domain}")
                   EOF
 
                   python3 modify_wrangler.py "${{ inputs.custom_domain }}"
