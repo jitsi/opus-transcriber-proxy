@@ -1,38 +1,24 @@
-name: "Build and deploy container"
+name: "Build and push Docker container"
 on:
     workflow_dispatch:
         inputs:
-            cf_env:
-                description: Choose environment
-                type: choice
-                required: true
-                options:
-                    - dev
-                    - staging
-                    - prod
-                default: dev
             branch:
-                description: Choose branch or tag, defaults to container
+                description: Choose branch or tag, defaults to main
                 type: string
                 required: true
-                default: container
-            preCommand:
-                description: Provide a bash script to execute before running wrangler
-                type: string
-                required: false
-                default: echo "No script provided for execution before running Wrangler. Moving along."
-            postCommand:
-                description: Provide a bash script to execute after running wrangler
-                type: string
-                required: false
-                default: echo "Nothing to execute after running Wrangler. Finishing..."
+                default: main
             emsdk_version:
                 description: Emscripten SDK version, defaults to 4.0.20
                 type: string
                 required: false
                 default: "4.0.20"
+            docker_tag:
+                description: Docker tag to use, defaults to latest
+                type: string
+                required: false
+                default: "latest"
 jobs:
-    deploy:
+    build:
         runs-on: "ubuntu-latest"
         steps:
             - name: Checkout
@@ -40,22 +26,6 @@ jobs:
               with:
                   ref: ${{ inputs.branch }}
                   submodules: 'true'
-
-            - name: Set environment variables
-              run: |
-                  if [[ "${{ inputs.cf_env }}" == "dev" ]]; then
-                    echo "CF_ACCOUNT=DEV_ACCOUNT_ID" >> "$GITHUB_ENV"
-                    echo "CF_TOKEN=JITSI_CF_DEV_TOKEN" >> "$GITHUB_ENV"
-                  elif [[ "${{ inputs.cf_env }}" == "staging" ]]; then
-                    echo "CF_ACCOUNT=STAGE_ACCOUNT_ID" >> "$GITHUB_ENV"
-                    echo "CF_TOKEN=JITSI_CF_STAGING_TOKEN" >> "$GITHUB_ENV"
-                  elif [[ "${{ inputs.cf_env }}" == "prod" ]]; then
-                    echo "CF_ACCOUNT=PROD_ACCOUNT_ID" >> "$GITHUB_ENV"
-                    echo "CF_TOKEN=JITSI_CF_PROD_TOKEN" >> "$GITHUB_ENV"
-                  else
-                    echo "Invalid environment specified: ${{ inputs.cf_env }}, exiting."
-                    exit 1
-                  fi
 
             - name: Install Linux deps
               run: |
@@ -88,30 +58,29 @@ jobs:
                 source "$EMSDK/emsdk_env.sh"
                 npm run build:wasm
 
-            - name: Build main worker
+            - name: Build main worker bundle
               run: |
-                  npm run build
+                  npm run build:bundle
 
-            - name: Install Worker Container Dependencies
-              working-directory: worker
-              run: |
-                  npm ci
-
-            - name: Wrangler Deploy
-              uses: cloudflare/wrangler-action@v3
+            - name: Login to Docker Hub
+              uses: docker/login-action@v3
               with:
-                  wranglerVersion: "4.51.0"
-                  apiToken: ${{ secrets[env.CF_TOKEN] }}
-                  accountId: ${{ secrets[env.CF_ACCOUNT] }}
-                  preCommands: ${{ inputs.preCommand }}
-                  postCommands: ${{ inputs.postCommand }}
-                  command: deploy --config wrangler-container.jsonc
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-            - name: Upload Wrangler Logs
-              if: always()
-              uses: actions/upload-artifact@v4
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v3
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Build and push Docker image
+              uses: docker/build-push-action@v6
               with:
-                  name: wrangler-logs-${{ github.run_id }}
-                  path: /home/runner/.config/.wrangler/logs/
-                  retention-days: 7
-                  if-no-files-found: ignore
+                  context: ./
+                  platforms: linux/amd64,linux/arm64
+                  pull: true
+                  push: true
+                  tags: |
+                      jitsi/opus-transcriber-proxy:${{ inputs.docker_tag }}
+                      jitsi/opus-transcriber-proxy:${{ github.sha }}

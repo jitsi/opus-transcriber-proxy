@@ -1,0 +1,40 @@
+# Node modules
+node_modules/
+worker/node_modules/
+
+# Source files (we only need the compiled output in dist/)
+src/
+
+# Other build artifacts
+dist-node/
+
+# Development files
+.dev.vars
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+
+# Tests
+test/
+*.test.ts
+*.spec.ts
+
+# Cloudflare specific
+wrangler.jsonc
+wrangler-container.jsonc
+worker/
+
+# CI/CD
+.github/

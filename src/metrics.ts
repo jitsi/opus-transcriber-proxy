@@ -6,6 +6,8 @@
  * a separate environment (dev, staging, prod).
  */
 
+import logger from './logger';
+
 /**
  * Internal debug state for logging metric writes
  */
@@ -32,9 +34,14 @@ export type MetricName =
 	| 'opus_packet_decoded'
 	| 'opus_decode_failure'
 	| 'opus_packet_discarded'
-	| 'openai_audio_queued'
-	| 'openai_audio_sent'
-	| 'openai_api_error';
+	| 'backend_audio_queued' // Audio queued for transcription backend
+	| 'backend_audio_sent' // Audio sent to transcription backend (decoded PCM)
+	| 'backend_opus_sent' // Raw Opus frames sent to transcription backend
+	| 'openai_audio_queued' // Deprecated: use backend_audio_queued
+	| 'openai_audio_sent' // Deprecated: use backend_audio_sent
+	| 'openai_api_error' // OpenAI-specific API errors
+	| 'gemini_api_error' // Gemini-specific API errors
+	| 'deepgram_api_error'; // Deepgram-specific API errors
 
 export interface MetricEvent {
 	name: MetricName;
@@ -46,9 +53,9 @@ export interface MetricEvent {
 }
 
 /**
- * Writes a metric data point to Analytics Engine
+ * Writes a metric data point (Node.js version - logs to console instead of Analytics Engine)
  *
- * Schema:
+ * Schema (for reference, not used in Node.js):
  * - blob1: metric_name (e.g., 'ingester_success', 'transcription_failure')
  * - blob2: worker_name (e.g., 'webhook-ingester')
  * - blob3: error_type (optional, for failures)
@@ -58,15 +65,12 @@ export interface MetricEvent {
  * - double2: latency_ms (optional)
  * - index1: session_id (for sampling)
  */
-export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event: MetricEvent, count: number = 1): void {
-	if (!analytics) {
-		console.warn('Analytics Engine not configured, skipping metric:', event.name);
-		return;
-	}
-
+export function writeMetric(analytics: undefined, event: MetricEvent, count: number = 1): void {
+	// In Node.js, we log metrics when debug is enabled
+	// Cloudflare Analytics Engine is not available
 	if (debugMetrics) {
-		console.log(
-			'Writing metric:',
+		logger.debug(
+			'[METRIC]',
 			JSON.stringify({
 				name: event.name,
 				worker: event.worker,
@@ -77,16 +81,5 @@ export function writeMetric(analytics: AnalyticsEngineDataset | undefined, event
 				latencyMs: event.latencyMs,
 			}),
 		);
-	}
-
-	try {
-		analytics.writeDataPoint({
-			blobs: [event.name, event.worker, event.errorType ?? '', event.sessionId ?? '', event.targetName ?? ''],
-			doubles: [count, event.latencyMs ?? 0],
-			indexes: [event.sessionId ?? ''],
-		});
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		console.error('Failed to write metric:', message);
 	}
 }

@@ -1,0 +1,19 @@
+{
+	"name": "opus-transcriber-worker",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy --config ../wrangler-container.jsonc",
+		"dev": "wrangler dev --config ../wrangler-container.jsonc",
+		"tail": "wrangler tail --config ../wrangler-container.jsonc"
+	},
+	"dependencies": {
+		"@cloudflare/containers": "latest"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250106.0",
+		"typescript": "^5.9.3",
+		"wrangler": "^4.38.0"
+	}
+}

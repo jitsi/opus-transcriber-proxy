@@ -8,6 +8,7 @@ export interface ISessionParameters {
 	sendBack: boolean;
 	sendBackInterim: boolean;
 	language: string | null;
+	provider: string | null;
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -20,6 +21,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const sendBack = parsedUrl.searchParams.get('sendBack');
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
 	const lang = parsedUrl.searchParams.get('lang');
+	const provider = parsedUrl.searchParams.get('provider');
 
 	return {
 		url: parsedUrl,
@@ -31,36 +33,13 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
 		language: lang,
+		provider,
 	};
 }
 
-export function getTurnDetectionConfig(env: Env) {
-	const defaultTurnDetection = {
-		type: 'server_vad',
-		threshold: 0.85,
-		prefix_padding_ms: 300,
-		silence_duration_ms: 300,
-	};
-
-	let turnDetection = defaultTurnDetection;
-
-	if (env.OPENAI_TURN_DETECTION) {
-		if (typeof env.OPENAI_TURN_DETECTION === 'string') {
-			try {
-				turnDetection = JSON.parse(env.OPENAI_TURN_DETECTION);
-			} catch (error) {
-				console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults: ${error}`);
-				return defaultTurnDetection;
-			}
-		}
-		// JSON object from CF
-		turnDetection = env.OPENAI_TURN_DETECTION;
-	}
-
-	if (typeof turnDetection !== 'object' || typeof turnDetection.type !== 'string') {
-		console.warn(`Invalid OPENAI_TURN_DETECTION JSON, using defaults`);
-		return defaultTurnDetection;
-	}
-
-	return turnDetection;
+export function getTurnDetectionConfig() {
+	// Configuration is loaded from environment variables in config.ts
+	// Import dynamically to avoid circular dependencies
+	const { config } = require('./config');
+	return config.openai.turnDetection;
 }

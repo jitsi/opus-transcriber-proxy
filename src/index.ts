@@ -1,9 +1,15 @@
+// NOTE: This file contains the original Cloudflare Worker code.
+// The Node.js implementation is in src/server.ts.
+// Dispatcher, Transcriptionator, outbound relay, and /events observer code are commented out below.
+
 import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
-import { Transcriptionator } from './transcriptionator';
-import { WorkerEntrypoint } from 'cloudflare:workers';
+// import { Transcriptionator } from './transcriptionator';
+// import { WorkerEntrypoint } from 'cloudflare:workers';
 import { writeMetric, setMetricDebug } from './metrics';
 
+/*
+// Dispatcher interfaces (commented out - not used in Node.js version)
 export interface DispatcherTranscriptionMessage {
 	sessionId: string;
 	endpointId: string;
@@ -22,7 +28,11 @@ export interface RPCResponse {
 export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
 	dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse>;
 }
+*/
 
+/*
+// Cloudflare Worker fetch handler (commented out - not used in Node.js version)
+// See src/server.ts for the Node.js implementation
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		// Initialize metric debug logging based on environment
@@ -213,5 +223,6 @@ export default {
 		}
 	},
 } satisfies ExportedHandler<Env>;
+*/
 
-export { Transcriptionator } from './transcriptionator';
+// export { Transcriptionator } from './transcriptionator';
