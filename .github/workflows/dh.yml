@@ -1,22 +1,16 @@
-name: "Build and push Docker container"
+name: "Publish Docker image to Docker Hub"
 on:
+    push:
+        branches:
+            - main
     workflow_dispatch:
         inputs:
-            branch:
-                description: Choose branch or tag, defaults to main
-                type: string
-                required: true
-                default: main
             emsdk_version:
                 description: Emscripten SDK version, defaults to 4.0.20
                 type: string
                 required: false
                 default: "4.0.20"
-            docker_tag:
-                description: Docker tag to use, defaults to latest
-                type: string
-                required: false
-                default: "latest"
+
 jobs:
     build:
         runs-on: "ubuntu-latest"
@@ -24,7 +18,6 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v6
               with:
-                  ref: ${{ inputs.branch }}
                   submodules: 'true'
 
             - name: Install Linux deps
@@ -43,11 +36,12 @@ jobs:
 
             - name: Setup Emscripten SDK
               run: |
+                EMSDK_VERSION="${{ inputs.emsdk_version || '4.0.20' }}"
                 wget https://github.com/emscripten-core/emsdk/archive/main.zip
                 unzip main.zip
                 cd emsdk-main
-                ./emsdk install ${{ inputs.emsdk_version }}
-                ./emsdk activate ${{ inputs.emsdk_version }}
+                ./emsdk install $EMSDK_VERSION
+                ./emsdk activate $EMSDK_VERSION
                 source ./emsdk_env.sh
                 echo "EMSDK=$EMSDK" >> $GITHUB_ENV
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
@@ -82,5 +76,5 @@ jobs:
                   pull: true
                   push: true
                   tags: |
-                      jitsi/opus-transcriber-proxy:${{ inputs.docker_tag }}
+                      jitsi/opus-transcriber-proxy:latest
                       jitsi/opus-transcriber-proxy:${{ github.sha }}
