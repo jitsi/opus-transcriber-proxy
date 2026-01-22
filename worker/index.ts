@@ -33,7 +33,8 @@ export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
  * Transcription message from container
  */
 interface TranscriptionMessage {
-	type: 'transcription' | 'interim_transcription';
+	type: 'transcription-result';
+	is_interim: boolean;
 	participant: {
 		id?: string;
 	};
@@ -41,6 +42,7 @@ interface TranscriptionMessage {
 		text: string;
 	}>;
 	timestamp: number;
+	language?: string;
 }
 
 /**
@@ -218,12 +220,13 @@ async function handleWebSocketWithDispatcher(
 		if (typeof event.data === 'string') {
 			try {
 				const data = JSON.parse(event.data) as TranscriptionMessage;
-				if (data.type === 'transcription') {
+				if (data.type === 'transcription-result' && !data.is_interim) {
 					const dispatcherMessage: DispatcherTranscriptionMessage = {
 						sessionId,
 						endpointId: data.participant?.id || 'unknown',
 						text: data.transcript.map((t) => t.text).join(' '),
 						timestamp: data.timestamp,
+						language: data.language,
 					};
 
 					// Fire and forget - don't block the client
