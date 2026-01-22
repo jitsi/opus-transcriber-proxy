@@ -286,7 +286,10 @@ export class ContainerCoordinator extends DurableObject {
 				return new Response('Not Found', { status: 404 });
 			}
 		} catch (error) {
-			console.error('Coordinator error:', error);
+			// Properly serialize error for Cloudflare Workers logging
+			const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			const errorStack = error instanceof Error ? error.stack : undefined;
+			console.error('Coordinator error:', errorMessage, errorStack || '');
 			return Response.json(
 				{
 					error: error instanceof Error ? error.message : String(error),

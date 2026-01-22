@@ -102,7 +102,15 @@ export class TranscriberContainer extends Container {
 	}
 
 	override onError(error: unknown) {
-		console.error('Transcriber container error:', error);
+		// Properly serialize error for Cloudflare Workers logging
+		if (error instanceof Error) {
+			console.error('Transcriber container error:', error.message, error.stack);
+		} else if (typeof error === 'string') {
+			console.error('Transcriber container error:', error);
+		} else {
+			// For other types (Date, objects, etc.), stringify them
+			console.error('Transcriber container error:', JSON.stringify(error));
+		}
 	}
 }
 
@@ -246,15 +254,19 @@ async function handleWebSocketWithDispatcher(
 						.dispatch(dispatcherMessage)
 						.then((response) => {
 							if (!response.success || response.errors) {
-								console.error('Dispatcher error:', {
-									message: response.message,
-									errors: response.errors,
-								});
+								console.error(
+									'Dispatcher error:',
+									JSON.stringify({
+										message: response.message,
+										errors: response.errors,
+									}),
+								);
 							}
 						})
 						.catch((error) => {
 							const msg = error instanceof Error ? error.message : String(error);
-							console.error('Dispatcher RPC failed:', msg);
+							const stack = error instanceof Error ? error.stack : undefined;
+							console.error('Dispatcher RPC failed:', msg, stack || '');
 						});
 				}
 			} catch {
@@ -350,7 +362,9 @@ export default {
 						body: JSON.stringify({ sessionId, containerId: containerInstanceId }),
 					})
 					.catch((error) => {
-						console.error('Failed to report connection opened:', error);
+						const msg = error instanceof Error ? error.message : JSON.stringify(error);
+						const stack = error instanceof Error ? error.stack : undefined;
+						console.error('Failed to report connection opened:', msg, stack || '');
 					}),
 			);
 		}
