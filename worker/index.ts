@@ -189,7 +189,19 @@ async function handleWebSocketWithDispatcher(
 	serverWs.accept();
 
 	// Forward the upgrade request to the container
-	const containerResponse = await container.fetch(request);
+	let containerResponse: Response;
+	try {
+		containerResponse = await container.fetch(request);
+	} catch (error) {
+		// Container connection failed - close client WebSocket with error
+		const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
+		console.error('Container fetch failed during WebSocket upgrade:', errorMsg);
+		serverWs.close(1011, `Container unreachable: ${errorMsg}`);
+		return new Response('Service Unavailable: Container connection failed', {
+			status: 503,
+			statusText: 'Container Unreachable',
+		});
+	}
 
 	if (containerResponse.status !== 101 || !containerResponse.webSocket) {
 		// Container didn't upgrade - return error to client
@@ -308,7 +320,20 @@ export default {
 
 		// Start the container and wait for ports to be ready
 		// This is required for the fetch to work properly
-		await container.startAndWaitForPorts();
+		try {
+			await container.startAndWaitForPorts();
+		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
+			const errorStack = error instanceof Error ? error.stack : undefined;
+			console.error('Container failed to start:', errorMsg, errorStack || '');
+			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
+				status: 503,
+				statusText: 'Container Start Failed',
+				headers: {
+					'Content-Type': 'text/plain',
+				},
+			});
+		}
 
 		// Report connection tracking for autoscale mode
 		const routingMode = env.ROUTING_MODE || 'session';
@@ -336,7 +361,29 @@ export default {
 		}
 
 		// Forward request directly to container (pass-through mode)
-		return container.fetch(request);
+		try {
+			return await container.fetch(request);
+		} catch (error) {
+			// Container connection failed
+			const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
+			const errorStack = error instanceof Error ? error.stack : undefined;
+			console.error('Container fetch failed:', errorMsg, errorStack || '');
+
+			// Return appropriate error response
+			const isWebSocket = upgradeHeader === 'websocket';
+			return new Response(
+				isWebSocket
+					? `WebSocket Upgrade Failed: Container unreachable (${errorMsg})`
+					: `Service Unavailable: Container connection failed (${errorMsg})`,
+				{
+					status: 503,
+					statusText: 'Container Unreachable',
+					headers: {
+						'Content-Type': 'text/plain',
+					},
+				},
+			);
+		}
 
 	},
 } satisfies ExportedHandler<Env>;
