@@ -33,7 +33,8 @@ export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
  * Transcription message from container
  */
 interface TranscriptionMessage {
-	type: 'transcription' | 'interim_transcription';
+	type: 'transcription-result';
+	is_interim: boolean;
 	participant: {
 		id?: string;
 	};
@@ -41,6 +42,7 @@ interface TranscriptionMessage {
 		text: string;
 	}>;
 	timestamp: number;
+	language?: string;
 }
 
 /**
@@ -168,6 +170,112 @@ async function selectContainerInstance(request: Request, env: Env): Promise<stri
 	}
 }
 
+/**
+ * Handle WebSocket connection with dispatcher interception.
+ * Creates a proxy between client and container, dispatching transcriptions asynchronously.
+ */
+async function handleWebSocketWithDispatcher(
+	request: Request,
+	container: ReturnType<typeof getContainer>,
+	env: Env,
+	ctx: ExecutionContext,
+	sessionId: string,
+): Promise<Response> {
+	// Create WebSocket pair for the client
+	const clientPair = new WebSocketPair();
+	const [clientWs, serverWs] = Object.values(clientPair);
+
+	// Accept the server side of the client connection
+	serverWs.accept();
+
+	// Forward the upgrade request to the container
+	const containerResponse = await container.fetch(request);
+
+	if (containerResponse.status !== 101 || !containerResponse.webSocket) {
+		// Container didn't upgrade - return error to client
+		serverWs.close(1011, 'Container failed to upgrade WebSocket');
+		return containerResponse;
+	}
+
+	const containerWs = containerResponse.webSocket;
+	containerWs.accept();
+
+	const dispatcher = env.TRANSCRIPTION_DISPATCHER!;
+
+	// Pipe: client → container (upstream, no interception needed)
+	serverWs.addEventListener('message', (event) => {
+		if (containerWs.readyState === WebSocket.READY_STATE_OPEN) {
+			containerWs.send(event.data);
+		}
+	});
+
+	// Pipe: container → client (downstream, intercept for dispatcher)
+	containerWs.addEventListener('message', (event) => {
+		// Forward to client immediately
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+			serverWs.send(event.data);
+		}
+
+		// Dispatch transcriptions asynchronously (non-blocking)
+		if (typeof event.data === 'string') {
+			try {
+				const data = JSON.parse(event.data) as TranscriptionMessage;
+				if (data.type === 'transcription-result' && !data.is_interim) {
+					const dispatcherMessage: DispatcherTranscriptionMessage = {
+						sessionId,
+						endpointId: data.participant?.id || 'unknown',
+						text: data.transcript.map((t) => t.text).join(' '),
+						timestamp: data.timestamp,
+						language: data.language,
+					};
+
+					// Fire and forget - don't block the client
+					dispatcher
+						.dispatch(dispatcherMessage)
+						.then((response) => {
+							if (!response.success || response.errors) {
+								console.error('Dispatcher error:', {
+									message: response.message,
+									errors: response.errors,
+								});
+							}
+						})
+						.catch((error) => {
+							const msg = error instanceof Error ? error.message : String(error);
+							console.error('Dispatcher RPC failed:', msg);
+						});
+				}
+			} catch {
+				// Not JSON or parse error - ignore, still forwarded to client
+			}
+		}
+	});
+
+	// Handle close events
+	serverWs.addEventListener('close', (event) => {
+		containerWs.close(event.code, event.reason);
+	});
+
+	containerWs.addEventListener('close', (event) => {
+		serverWs.close(event.code, event.reason);
+	});
+
+	// Handle errors
+	serverWs.addEventListener('error', () => {
+		containerWs.close(1011, 'Client WebSocket error');
+	});
+
+	containerWs.addEventListener('error', () => {
+		serverWs.close(1011, 'Container WebSocket error');
+	});
+
+	// Return the client WebSocket
+	return new Response(null, {
+		status: 101,
+		webSocket: clientWs,
+	});
+}
+
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
@@ -185,7 +293,11 @@ export default {
 			}
 		}
 
-		const useDispatcher = url.searchParams.get('useDispatcher') === 'true';
+		// Check query param first, fall back to env var
+		const useDispatcherParam = url.searchParams.get('useDispatcher');
+		const useDispatcher = useDispatcherParam !== null
+			? useDispatcherParam === 'true'
+			: env.USE_DISPATCHER === 'true';
 		const sessionId = url.searchParams.get('sessionId') || 'unknown';
 
 		// Select which container instance to use based on routing strategy
@@ -194,13 +306,9 @@ export default {
 		// Get the container instance
 		const container = getContainer(env.TRANSCRIBER, containerInstanceId);
 
-	// Start the container and wait for ports to be ready
-	// This is required for the fetch to work properly
-	await container.startAndWaitForPorts();
-
-		// For now, just forward all requests directly to the container
-		// TODO: Implement WebSocket interception for dispatcher fan-out
-		// This requires more complex WebSocket handling with Cloudflare Containers
+		// Start the container and wait for ports to be ready
+		// This is required for the fetch to work properly
+		await container.startAndWaitForPorts();
 
 		// Report connection tracking for autoscale mode
 		const routingMode = env.ROUTING_MODE || 'session';
@@ -220,13 +328,14 @@ export default {
 						console.error('Failed to report connection opened:', error);
 					}),
 			);
-
-			// Note: We can't easily detect when WebSocket closes from here
-			// The container would need to report back, or we'd need WebSocket interception
-			// For now, rely on scale-down idle timeout
 		}
 
-		// Forward request directly to container
+		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
+		if (useDispatcher && upgradeHeader === 'websocket' && env.TRANSCRIPTION_DISPATCHER) {
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
+		}
+
+		// Forward request directly to container (pass-through mode)
 		return container.fetch(request);
 
 	},
