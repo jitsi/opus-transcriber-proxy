@@ -94,29 +94,46 @@ containerClientWs.addEventListener('message', (event) => {
 
 ## Configuration
 
-### 1. Enable Dispatcher in Worker Config
+### 1. Add Service Binding
 
-Edit `wrangler-container.jsonc`:
+Add the `TRANSCRIPTION_DISPATCHER` service binding to your `wrangler.jsonc`:
 
 ```jsonc
 {
   "services": [
     {
       "binding": "TRANSCRIPTION_DISPATCHER",
-      "service": "your-dispatcher-worker-name",
-      "environment": "production"
+      "service": "transcription-dispatcher"
     }
   ]
 }
 ```
 
-### 2. Connect with Dispatcher Enabled
+### 2. Enable Dispatcher
+
+The dispatcher can be enabled in two ways:
+
+**Option A: Environment Variable (recommended for global enable)**
+
+Add `USE_DISPATCHER` to your wrangler.jsonc vars:
+
+```jsonc
+{
+  "vars": {
+    "USE_DISPATCHER": "true"
+  }
+}
+```
+
+**Option B: Query Parameter (per-request control)**
 
 Add `useDispatcher=true` query parameter:
 
 ```
-wss://your-worker.workers.dev/transcribe?sessionId=test&transcribe=true&sendBack=true&useDispatcher=true
+wss://your-worker.workers.dev/transcribe?sessionId=test&useDispatcher=true
 ```
+
+**Precedence:** Query parameter overrides the environment variable. If neither is set, dispatcher is disabled by default.
 
 ### 3. Implement Dispatcher Worker
 
@@ -242,15 +259,24 @@ interface DispatcherTranscriptionMessage {
 ### Without Dispatcher
 
 ```bash
-# Media server receives transcripts directly
-wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&transcribe=true&sendBack=true"
+# Media server receives transcripts directly (dispatcher disabled)
+wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true"
 ```
 
-### With Dispatcher
+### With Dispatcher (via query param)
 
 ```bash
 # Media server receives transcripts + dispatcher gets notified
-wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&transcribe=true&sendBack=true&useDispatcher=true"
+wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true&useDispatcher=true"
+```
+
+### With Dispatcher (via env var)
+
+If `USE_DISPATCHER=true` is set in wrangler.jsonc, all connections will dispatch:
+
+```bash
+# Dispatcher enabled globally via env var
+wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true"
 ```
 
 Check dispatcher logs:
