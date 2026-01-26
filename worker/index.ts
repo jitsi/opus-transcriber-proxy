@@ -305,20 +305,38 @@ async function handleWebSocketWithDispatcher(
 
 	// Handle close events
 	serverWs.addEventListener('close', (event) => {
-		containerWs.close(event.code, event.reason);
+		console.log(`Client WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}`);
+		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+			containerWs.close(event.code, event.reason);
+		}
 	});
 
 	containerWs.addEventListener('close', (event) => {
-		serverWs.close(event.code, event.reason);
+		console.log(`Container WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+			serverWs.close(event.code, event.reason || 'Container connection closed');
+		}
 	});
 
-	// Handle errors
-	serverWs.addEventListener('error', () => {
-		containerWs.close(1011, 'Client WebSocket error');
+	// Handle errors - these fire when connection fails abnormally
+	serverWs.addEventListener('error', (event) => {
+		console.error(`Client WebSocket error, closing both connections, sessionId=${sessionId}`);
+		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+			containerWs.close(1011, 'Client WebSocket error');
+		}
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+			serverWs.close(1011, 'Client WebSocket error');
+		}
 	});
 
-	containerWs.addEventListener('error', () => {
-		serverWs.close(1011, 'Container WebSocket error');
+	containerWs.addEventListener('error', (event) => {
+		console.error(`Container WebSocket error, closing client connection, sessionId=${sessionId}`);
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+			serverWs.close(1011, 'Container connection error');
+		}
+		if (containerWs.readyState === WebSocket.READY_STATE_OPEN) {
+			containerWs.close(1011, 'Container WebSocket error');
+		}
 	});
 
 	// Return the client WebSocket
