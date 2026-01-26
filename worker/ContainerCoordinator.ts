@@ -164,7 +164,7 @@ export class ContainerCoordinator extends DurableObject {
 	async connectionOpened(sessionId: string, containerId: string): Promise<void> {
 		const container = this.containers.get(containerId);
 		if (!container) {
-			console.error(`Container ${containerId} not found for session ${sessionId}`);
+			console.error(`Container not found: containerId=${containerId}, sessionId=${sessionId}`);
 			return;
 		}
 
@@ -289,7 +289,7 @@ export class ContainerCoordinator extends DurableObject {
 			// Properly serialize error for Cloudflare Workers logging
 			const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			const errorStack = error instanceof Error ? error.stack : undefined;
-			console.error('Coordinator error:', errorMessage, errorStack || '');
+			console.error(`Coordinator error: ${errorMessage}${errorStack ? '\n' + errorStack : ''}`);
 			return Response.json(
 				{
 					error: error instanceof Error ? error.message : String(error),
