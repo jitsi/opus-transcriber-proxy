@@ -356,7 +356,11 @@ export default {
 		// Start the container and wait for ports to be ready
 		// This is required for the fetch to work properly
 		try {
-			await container.startAndWaitForPorts();
+			await container.startAndWaitForPorts({
+				cancellationOptions: {
+					waitInterval: 100, // Poll every 100ms (default: 1000ms)
+				},
+			});
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
