@@ -112,6 +112,20 @@ export class TranscriberContainer extends Container {
 			console.error('Transcriber container error:', JSON.stringify(error));
 		}
 	}
+
+	override async alarm(...args: any[]) {
+		// Override the default alarm handler to catch errors
+		try {
+			await super.alarm(...args);
+		} catch (error) {
+			if (error instanceof Error) {
+				console.error(`Container alarm error: ${error.message} ${error.stack || ''}`);
+			} else {
+				console.error(`Container alarm error: ${JSON.stringify(error)}`);
+			}
+			throw error;
+		}
+	}
 }
 
 /**
@@ -203,7 +217,7 @@ async function handleWebSocketWithDispatcher(
 	} catch (error) {
 		// Container connection failed - close client WebSocket with error
 		const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
-		console.error('Container fetch failed during WebSocket upgrade:', errorMsg);
+		console.error(`Container fetch failed during WebSocket upgrade: ${errorMsg}`);
 		serverWs.close(1011, `Container unreachable: ${errorMsg}`);
 		return new Response('Service Unavailable: Container connection failed', {
 			status: 503,
@@ -255,7 +269,7 @@ async function handleWebSocketWithDispatcher(
 					if (queue) {
 						queue.send(dispatcherMessage).catch((error) => {
 							const msg = error instanceof Error ? error.message : String(error);
-							console.error('Queue send failed:', msg);
+							console.error(`Queue send failed: ${msg}`);
 						});
 					} else if (dispatcher) {
 						// Fall back to RPC (has subrequest limit)
@@ -264,18 +278,17 @@ async function handleWebSocketWithDispatcher(
 							.then((response) => {
 								if (!response.success || response.errors) {
 									console.error(
-										'Dispatcher error:',
-										JSON.stringify({
+										`Dispatcher error: ${JSON.stringify({
 											message: response.message,
 											errors: response.errors,
-										}),
+										})}`,
 									);
 								}
 							})
 							.catch((error) => {
 								const msg = error instanceof Error ? error.message : String(error);
 								const stack = error instanceof Error ? error.stack : undefined;
-								console.error('Dispatcher RPC failed:', msg, stack || '');
+								console.error(`Dispatcher RPC failed: ${msg}${stack ? '\n' + stack : ''}`);
 							});
 					}
 				}
@@ -347,7 +360,7 @@ export default {
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
-			console.error('Container failed to start:', errorMsg, errorStack || '');
+			console.error(`Container failed to start: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
 			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
 				status: 503,
 				statusText: 'Container Start Failed',
@@ -374,7 +387,7 @@ export default {
 					.catch((error) => {
 						const msg = error instanceof Error ? error.message : JSON.stringify(error);
 						const stack = error instanceof Error ? error.stack : undefined;
-						console.error('Failed to report connection opened:', msg, stack || '');
+						console.error(`Failed to report connection opened: ${msg}${stack ? '\n' + stack : ''}`);
 					}),
 			);
 		}
@@ -391,7 +404,7 @@ export default {
 			// Container connection failed
 			const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
 			const errorStack = error instanceof Error ? error.stack : undefined;
-			console.error('Container fetch failed:', errorMsg, errorStack || '');
+			console.error(`Container fetch failed: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
 
 			// Return appropriate error response
 			const isWebSocket = upgradeHeader === 'websocket';
