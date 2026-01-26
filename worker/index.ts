@@ -114,12 +114,17 @@ export class TranscriberContainer extends Container {
 	}
 
 	override async alarm(...args: any[]) {
-		// Override the default alarm handler to catch errors
+		// The base Container class alarm handler logs timestamps improperly
+		// We override it to provide better context and suppress the base logging
+		const scheduledTime = args[0]?.scheduledTime || args[0] || new Date();
+		console.log(`Container alarm triggered for sleep/wake cycle at ${scheduledTime instanceof Date ? scheduledTime.toISOString() : scheduledTime}`);
+
 		try {
 			await super.alarm(...args);
+			console.log(`Container alarm completed successfully`);
 		} catch (error) {
 			if (error instanceof Error) {
-				console.error(`Container alarm error: ${error.message} ${error.stack || ''}`);
+				console.error(`Container alarm error: ${error.message}${error.stack ? '\n' + error.stack : ''}`);
 			} else {
 				console.error(`Container alarm error: ${JSON.stringify(error)}`);
 			}
@@ -361,6 +366,7 @@ export default {
 					waitInterval: 100, // Poll every 100ms (default: 1000ms)
 				},
 			});
+			console.log(`Container started and ready: ${containerInstanceId}`);
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
