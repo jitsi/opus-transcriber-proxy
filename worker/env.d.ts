@@ -1,13 +1,16 @@
 // Environment types for the Cloudflare Worker
 
-import type { TranscriptionDispatcher } from './index';
+import type { TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
 
 interface Env {
 	// Durable Object binding for the container
 	TRANSCRIBER: DurableObjectNamespace;
 
-	// Service bindings
+	// Service bindings (kept for backwards compatibility, prefer queue)
 	TRANSCRIPTION_DISPATCHER?: Service<TranscriptionDispatcher>;
+
+	// Queue binding for transcription dispatch (preferred)
+	TRANSCRIPTION_QUEUE?: Queue<DispatcherTranscriptionMessage>;
 
 	// Durable Object for auto-scaling
 	CONTAINER_COORDINATOR: DurableObjectNamespace;

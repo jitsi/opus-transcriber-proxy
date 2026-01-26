@@ -220,7 +220,9 @@ async function handleWebSocketWithDispatcher(
 	const containerWs = containerResponse.webSocket;
 	containerWs.accept();
 
-	const dispatcher = env.TRANSCRIPTION_DISPATCHER!;
+	// Prefer queue over RPC (queue doesn't count against subrequest limit)
+	const queue = env.TRANSCRIPTION_QUEUE;
+	const dispatcher = env.TRANSCRIPTION_DISPATCHER;
 
 	// Pipe: client → container (upstream, no interception needed)
 	serverWs.addEventListener('message', (event) => {
@@ -249,25 +251,33 @@ async function handleWebSocketWithDispatcher(
 						language: data.language,
 					};
 
-					// Fire and forget - don't block the client
-					dispatcher
-						.dispatch(dispatcherMessage)
-						.then((response) => {
-							if (!response.success || response.errors) {
-								console.error(
-									'Dispatcher error:',
-									JSON.stringify({
-										message: response.message,
-										errors: response.errors,
-									}),
-								);
-							}
-						})
-						.catch((error) => {
+					// Use queue if available (preferred - no subrequest limit)
+					if (queue) {
+						queue.send(dispatcherMessage).catch((error) => {
 							const msg = error instanceof Error ? error.message : String(error);
-							const stack = error instanceof Error ? error.stack : undefined;
-							console.error('Dispatcher RPC failed:', msg, stack || '');
+							console.error('Queue send failed:', msg);
 						});
+					} else if (dispatcher) {
+						// Fall back to RPC (has subrequest limit)
+						dispatcher
+							.dispatch(dispatcherMessage)
+							.then((response) => {
+								if (!response.success || response.errors) {
+									console.error(
+										'Dispatcher error:',
+										JSON.stringify({
+											message: response.message,
+											errors: response.errors,
+										}),
+									);
+								}
+							})
+							.catch((error) => {
+								const msg = error instanceof Error ? error.message : String(error);
+								const stack = error instanceof Error ? error.stack : undefined;
+								console.error('Dispatcher RPC failed:', msg, stack || '');
+							});
+					}
 				}
 			} catch {
 				// Not JSON or parse error - ignore, still forwarded to client
@@ -370,7 +380,7 @@ export default {
 		}
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && env.TRANSCRIPTION_DISPATCHER) {
+		if (useDispatcher && upgradeHeader === 'websocket' && (env.TRANSCRIPTION_QUEUE || env.TRANSCRIPTION_DISPATCHER)) {
 			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
 		}
 
