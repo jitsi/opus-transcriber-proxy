@@ -166,36 +166,71 @@ The Worker can fan out transcriptions to a separate Transcription Dispatcher wor
 2. Container decodes audio and gets transcriptions from OpenAI
 3. Worker intercepts transcriptions and:
    - Forwards to media server via WebSocket (low latency path)
-   - Asynchronously dispatches to Dispatcher worker via RPC (doesn't block)
+   - Asynchronously dispatches to Dispatcher worker (doesn't block)
 
-**Setup:**
-1. Deploy your Transcription Dispatcher worker (must implement the `dispatch()` RPC method)
-2. Update `wrangler-container.jsonc` to point to your dispatcher:
+**Dispatch Methods (in order of preference):**
+
+1. **Cloudflare Queue** (recommended) - Messages sent to a queue, consumed by Dispatcher
+   - Doesn't count against the 50 subrequest limit per WebSocket connection
+   - Better for high-throughput scenarios
+
+2. **Service Binding RPC** (fallback) - Direct RPC call to Dispatcher worker
+   - Each dispatch counts as a subrequest (50 limit per WebSocket lifetime)
+   - Use only for low-traffic scenarios
+
+**Setup with Queue (Recommended):**
+
+1. Deploy your Transcription Dispatcher worker with queue consumer configured
+2. Update `wrangler.jsonc` to add a queue producer:
    ```jsonc
-   "services": [{
-     "binding": "TRANSCRIPTION_DISPATCHER",
-     "service": "your-dispatcher-worker-name",
-     "environment": "production"
-   }]
+   "queues": {
+     "producers": [{
+       "binding": "TRANSCRIPTION_QUEUE",
+       "queue": "transcription-dispatch-queue-staging"
+     }]
+   }
    ```
-3. Connect with `useDispatcher=true`:
+3. Set `USE_DISPATCHER` environment variable:
+   ```jsonc
+   "vars": {
+     "USE_DISPATCHER": "true"
+   }
+   ```
+4. Or enable per-connection with query parameter:
    ```
    wss://your-worker.workers.dev/transcribe?sessionId=test&transcribe=true&sendBack=true&useDispatcher=true
    ```
 
-**Dispatcher Interface:**
-Your dispatcher worker must implement:
-```typescript
-export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
-  dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse>;
-}
+**Setup with RPC (Fallback):**
 
+1. Deploy your Transcription Dispatcher worker (must implement the `dispatch()` RPC method)
+2. Update `wrangler.jsonc` to add a service binding:
+   ```jsonc
+   "services": [{
+     "binding": "TRANSCRIPTION_DISPATCHER",
+     "service": "transcription-dispatcher"
+   }]
+   ```
+3. Enable with `USE_DISPATCHER=true` or `useDispatcher=true` query param
+
+**Environment Variables:**
+- `USE_DISPATCHER` - Set to `"true"` to enable dispatching by default (can be overridden per-connection via URL param)
+
+**Message Format:**
+```typescript
 interface DispatcherTranscriptionMessage {
   sessionId: string;
   endpointId: string;  // participant ID
   text: string;        // full transcript text
   timestamp: number;
   language?: string;
+}
+```
+
+**Dispatcher Interface (for RPC fallback):**
+```typescript
+export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
+  dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse>;
 }
 
 interface RPCResponse {
@@ -206,7 +241,7 @@ interface RPCResponse {
 }
 ```
 
-See the original dispatcher implementation on the `main` branch for a reference implementation.
+See the [transcription-dispatcher](https://github.com/jitsi/vo_meetings_cf-transcription-dispatcher) repository for the dispatcher implementation.
 
 ### Monitoring
 
@@ -341,7 +376,7 @@ Media Server (WebSocket)
     ↓
 Cloudflare Worker (intercepts & fans out)
     ↓                           ↓
-    ↓ (audio)         (transcripts via RPC)
+    ↓ (audio)         (transcripts via Queue/RPC)
     ↓                           ↓
 Container Instance        Transcription Dispatcher
     ↓                      (optional, parallel)
@@ -364,7 +399,7 @@ Media Server (receives transcripts)
 3. OpenAI returns transcripts → Container → Worker
 4. Worker fans out transcripts to:
    - Media server (via WebSocket, low latency)
-   - Dispatcher (via Service Binding RPC, async, optional)
+   - Dispatcher (via Queue or RPC, async, optional)
 
 Each container instance:
 - Runs the full Node.js application
