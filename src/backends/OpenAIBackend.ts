@@ -25,6 +25,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
 	onError?: (errorType: string, errorMessage: string) => void;
+	onClosed?: () => void;
 
 	constructor(tag: string, participantInfo: any) {
 		this.tag = tag;
@@ -76,6 +77,8 @@ export class OpenAIBackend implements TranscriptionBackend {
 					);
 					this.status = 'failed';
 					this.close();
+					// Notify OutgoingConnection that the backend has closed
+					this.onClosed?.();
 				});
 			} catch (error) {
 				logger.error(`Failed to create OpenAI WebSocket connection for tag ${this.tag}:`, error);

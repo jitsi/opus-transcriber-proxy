@@ -129,6 +129,12 @@ export class OutgoingConnection {
 				this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
 			};
 
+			this.backend.onClosed = () => {
+				logger.info(`Backend closed for tag ${this.localTag}, cleaning up OutgoingConnection`);
+				// Close this OutgoingConnection and notify TranscriberProxy to remove it
+				this.doClose(true);
+			};
+
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;

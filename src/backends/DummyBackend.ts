@@ -31,6 +31,7 @@ export class DummyBackend implements TranscriptionBackend {
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
 	onError?: (errorType: string, errorMessage: string) => void;
+	onClosed?: () => void;
 
 	constructor(tag: string, participantInfo: any) {
 		this.tag = tag;
