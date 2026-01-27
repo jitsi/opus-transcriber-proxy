@@ -177,3 +177,5 @@ transcript.jsonl
 tmp/
 
 .DS_Store
+
+.idea/
