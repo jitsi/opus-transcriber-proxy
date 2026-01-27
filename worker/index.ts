@@ -131,6 +131,15 @@ export class TranscriberContainer extends Container {
 			throw error;
 		}
 	}
+
+	/**
+	 * Keep the container alive by renewing the activity timeout.
+	 * Call this periodically for long-lived WebSocket connections
+	 * where messages bypass the Container class's fetch method.
+	 */
+	keepAlive() {
+		this.renewActivityTimeout();
+	}
 }
 
 /**
@@ -243,6 +252,15 @@ async function handleWebSocketWithDispatcher(
 	const queue = env.TRANSCRIPTION_QUEUE;
 	const dispatcher = env.TRANSCRIPTION_DISPATCHER;
 
+	// Keep container alive by periodically renewing activity timeout
+	// WebSocket messages bypass the Container class, so sleepAfter doesn't reset automatically
+	const keepAliveInterval = setInterval(() => {
+		container.keepAlive().catch((error) => {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`Container keepAlive failed: ${msg}`);
+		});
+	}, 10_000); // Every 10 seconds
+
 	// Pipe: client → container (upstream, no interception needed)
 	serverWs.addEventListener('message', (event) => {
 		if (containerWs.readyState === WebSocket.READY_STATE_OPEN) {
@@ -305,6 +323,7 @@ async function handleWebSocketWithDispatcher(
 
 	// Handle close events
 	serverWs.addEventListener('close', (event) => {
+		clearInterval(keepAliveInterval);
 		console.log(`Client WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}`);
 		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			containerWs.close(event.code, event.reason);
@@ -312,6 +331,7 @@ async function handleWebSocketWithDispatcher(
 	});
 
 	containerWs.addEventListener('close', (event) => {
+		clearInterval(keepAliveInterval);
 		console.log(`Container WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			serverWs.close(event.code, event.reason || 'Container connection closed');
@@ -320,6 +340,7 @@ async function handleWebSocketWithDispatcher(
 
 	// Handle errors - these fire when connection fails abnormally
 	serverWs.addEventListener('error', (event) => {
+		clearInterval(keepAliveInterval);
 		console.error(`Client WebSocket error, closing both connections, sessionId=${sessionId}`);
 		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			containerWs.close(1011, 'Client WebSocket error');
@@ -330,6 +351,7 @@ async function handleWebSocketWithDispatcher(
 	});
 
 	containerWs.addEventListener('error', (event) => {
+		clearInterval(keepAliveInterval);
 		console.error(`Container WebSocket error, closing client connection, sessionId=${sessionId}`);
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			serverWs.close(1011, 'Container connection error');
