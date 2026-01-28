@@ -61,6 +61,12 @@ export class OutgoingConnection {
 	onBackendError?: (errorType: string, errorMessage: string) => void = undefined;
 	onError?: (tag: string, error: any) => void = undefined;
 
+	// stats callbacks (optional)
+	onPacketReceived?: () => void = undefined;
+	onPacketDecoded?: () => void = undefined;
+	onPacketLost?: (count: number) => void = undefined;
+	onDecodeError?: () => void = undefined;
+
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
 
@@ -189,6 +195,7 @@ export class OutgoingConnection {
 			name: 'opus_packet_received',
 			worker: 'opus-transcriber-proxy',
 		});
+		this.onPacketReceived?.(); // update stats
 
 		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
 			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
@@ -206,6 +213,7 @@ export class OutgoingConnection {
 				// Packets lost, do concealment
 				if (this.decoderStatus == 'ready') {
 					const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
+				this.onPacketLost?.(chunkDelta - 1); // record packet loss
 					// TODO: enqueue concealment actions?  Not sure this is needed in practice.
 					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
 				}
@@ -273,6 +281,7 @@ export class OutgoingConnection {
 					name: 'opus_decode_failure',
 					worker: 'opus-transcriber-proxy',
 				});
+			this.onDecodeError?.(); // count decode error
 			} else {
 				this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
 				writeMetric(undefined, {
@@ -309,6 +318,7 @@ export class OutgoingConnection {
 				name: 'opus_packet_decoded',
 				worker: 'opus-transcriber-proxy',
 			});
+			this.onPacketDecoded?.(); // count successful decode
 			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
 			this.sendOrEnqueueDecodedAudio(decodedAudio.pcmData);
 		} catch (error) {

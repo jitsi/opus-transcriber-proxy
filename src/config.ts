@@ -73,6 +73,7 @@ export const config = {
 	dumpBasePath: process.env.DUMP_BASE_PATH || '/tmp',
 	logLevel: process.env.LOG_LEVEL || 'info',
 	debug: process.env.DEBUG === 'true',
+	enableSessionStats: process.env.ENABLE_SESSION_STATS === 'true', // Session statistics tracking
 } as const;
 
 /**
