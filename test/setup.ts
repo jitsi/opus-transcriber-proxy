@@ -5,6 +5,20 @@
 
 import { afterEach, beforeEach, vi } from 'vitest';
 
+// Define ErrorEvent for Node.js environment (it exists in browsers but not Node)
+if (typeof ErrorEvent === 'undefined') {
+	(global as any).ErrorEvent = class ErrorEvent extends Event {
+		message: string;
+		error?: Error;
+
+		constructor(type: string, init?: { message?: string; error?: Error }) {
+			super(type);
+			this.message = init?.message || '';
+			this.error = init?.error;
+		}
+	};
+}
+
 // Reset all mocks between tests
 afterEach(() => {
 	vi.clearAllMocks();

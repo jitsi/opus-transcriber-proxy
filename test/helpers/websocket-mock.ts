@@ -72,8 +72,7 @@ export class MockWebSocket extends EventEmitter {
 		}
 		this.eventListeners.get(event)!.add(handler);
 
-		// Also use EventEmitter's on() for compatibility
-		this.on(event, handler as any);
+		// Don't also add to EventEmitter - triggerEvent will handle both
 	}
 
 	/**
@@ -85,8 +84,7 @@ export class MockWebSocket extends EventEmitter {
 			listeners.delete(handler);
 		}
 
-		// Also use EventEmitter's off() for compatibility
-		this.off(event, handler as any);
+		// Don't remove from EventEmitter - triggerEvent handles both
 	}
 
 	// Test helper methods
@@ -106,7 +104,25 @@ export class MockWebSocket extends EventEmitter {
 	 */
 	simulateError(error: Error | string): void {
 		const errorMessage = error instanceof Error ? error.message : error;
-		const errorEvent = Object.assign(new Error(errorMessage), { type: 'error' });
+		const errorObj = error instanceof Error ? error : new Error(errorMessage);
+
+		// Create a proper ErrorEvent (defined in test/setup.ts for Node.js)
+		const ErrorEventClass = (global as any).ErrorEvent || class {
+			message: string;
+			error: Error;
+			type: string;
+			constructor(type: string, init: any) {
+				this.type = type;
+				this.message = init.message || '';
+				this.error = init.error;
+			}
+		};
+
+		const errorEvent = new ErrorEventClass('error', {
+			message: errorMessage,
+			error: errorObj,
+		});
+
 		this.triggerEvent('error', errorEvent);
 	}
 
@@ -171,13 +187,17 @@ export class MockWebSocket extends EventEmitter {
 	 * Helper to trigger events on all listeners
 	 */
 	private triggerEvent(event: string, data: any): void {
-		// Trigger EventEmitter listeners
-		this.emit(event, data);
-
-		// Trigger addEventListener listeners
+		// Trigger addEventListener listeners (primary for WebSocket API)
 		const listeners = this.eventListeners.get(event);
 		if (listeners) {
 			listeners.forEach((listener) => listener(data));
+		}
+
+		// Also trigger EventEmitter listeners for compatibility
+		// Skip 'error' events to avoid "Unhandled error" exceptions
+		// (EventEmitter throws if no 'error' listeners exist)
+		if (event !== 'error') {
+			this.emit(event, data);
 		}
 	}
 }
@@ -189,12 +209,58 @@ export function createMockWebSocket(options: MockWebSocketOptions = {}): MockWeb
 	return new MockWebSocket(options);
 }
 
+// Track the last created WebSocket instance
+let lastWebSocketInstance: MockWebSocket | null = null;
+
+/**
+ * WebSocket constructor type that tracks instances
+ */
+class TrackingMockWebSocket extends MockWebSocket {
+	constructor(url: string, protocols?: string | string[]) {
+		// Convert protocols to our options format
+		const protocolString = Array.isArray(protocols) ? protocols[0] : protocols;
+		super({ url, protocol: protocolString || '', autoConnect: false });
+		lastWebSocketInstance = this;
+
+		// Store the protocols array for inspection
+		(this as any).protocols = Array.isArray(protocols) ? protocols : (protocols ? [protocols] : []);
+	}
+}
+
+export interface MockWebSocketInstance extends MockWebSocket {
+	protocols?: string[];
+}
+
 /**
  * Mock the global WebSocket constructor for backend tests
+ * Returns an object with the mock instance and an unmock function
  */
-export function mockGlobalWebSocket(): typeof MockWebSocket {
-	(global as any).WebSocket = MockWebSocket;
-	return MockWebSocket;
+export function mockGlobalWebSocket(): { mockWs: MockWebSocketInstance; unmock: () => void } {
+	lastWebSocketInstance = null;
+
+	// Replace global WebSocket with our tracking version
+	const originalWebSocket = (global as any).WebSocket;
+	(global as any).WebSocket = TrackingMockWebSocket;
+
+	// Create a proxy that returns the last instance and allows cleanup
+	const result = {
+		get mockWs(): MockWebSocketInstance {
+			if (!lastWebSocketInstance) {
+				throw new Error('No WebSocket instance has been created yet');
+			}
+			return lastWebSocketInstance as MockWebSocketInstance;
+		},
+		unmock: () => {
+			if (originalWebSocket) {
+				(global as any).WebSocket = originalWebSocket;
+			} else {
+				delete (global as any).WebSocket;
+			}
+			lastWebSocketInstance = null;
+		},
+	};
+
+	return result;
 }
 
 /**
@@ -202,4 +268,5 @@ export function mockGlobalWebSocket(): typeof MockWebSocket {
  */
 export function restoreGlobalWebSocket(): void {
 	delete (global as any).WebSocket;
+	lastWebSocketInstance = null;
 }
