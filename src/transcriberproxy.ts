@@ -4,6 +4,7 @@ import { WebSocket } from 'ws';
 import { config, type Provider } from './config';
 import * as fs from 'fs';
 import logger from './logger';
+import { SessionStats } from './SessionStats';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -29,6 +30,7 @@ export class TranscriberProxy extends EventEmitter {
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
 	private sessionId?: string;
+	private stats?: SessionStats; // Session statistics tracker
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -36,6 +38,12 @@ export class TranscriberProxy extends EventEmitter {
 		this.options = options;
 		this.sessionId = options.sessionId;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
+
+		// set up stats tracking if it's turned on
+		if (config.enableSessionStats && this.sessionId) {
+			this.stats = new SessionStats(this.sessionId, options.provider || 'default');
+			logger.debug(`Session stats enabled for session: ${this.sessionId}`);
+		}
 
 		// Initialize dump streams if enabled
 		if (config.dumpWebSocketMessages || config.dumpTranscripts) {
@@ -151,12 +159,24 @@ export class TranscriberProxy extends EventEmitter {
 		};
 		newConnection.onClosed = (tag) => {
 			this.outgoingConnections.delete(tag);
+			this.stats?.setActiveConnections(this.outgoingConnections.size);
 		};
 		newConnection.onError = (tag, error) => {
+			this.stats?.incrementConnectionErrors();
 			this.emit('error', tag, error);
 		};
 
+
+		// hook up stats callbacks
+		if (this.stats) {
+			newConnection.onPacketReceived = () => this.stats!.incrementPacketsReceived();
+			newConnection.onPacketDecoded = () => this.stats!.incrementPacketsDecoded();
+			newConnection.onPacketLost = (count) => this.stats!.incrementPacketsLost(count);
+			newConnection.onDecodeError = () => this.stats!.incrementDecodeErrors();
+		}
+
 		this.outgoingConnections.set(tag, newConnection);
+		this.stats?.setActiveConnections(this.outgoingConnections.size);
 		logger.info(`Created outgoing connection for tag: ${tag} (total connections: ${this.outgoingConnections.size})`);
 		return newConnection;
 	}
@@ -216,5 +236,10 @@ export class TranscriberProxy extends EventEmitter {
 		}
 
 		this.emit('closed');
+	}
+
+	// get stats for this session
+	getStats(): SessionStats | undefined {
+		return this.stats;
 	}
 }

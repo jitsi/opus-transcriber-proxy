@@ -20,6 +20,41 @@ const server = http.createServer((req, res) => {
 		res.end('OK');
 		return;
 	}
+
+	// stats endpoints
+	if (config.enableSessionStats) {
+		if (req.url === '/stats') {
+			// get all session stats
+			const allStats: Record<string, any> = {}; // collect stats from all sessions
+			activeSessions.forEach((session, sessionId) => {
+				const stats = session.getStats();
+				if (stats) {
+					allStats[sessionId] = stats.toJSON();
+				}
+			});
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ sessions: allStats, count: Object.keys(allStats).length }, null, 2));
+			return;
+		}
+
+		// specific session stats
+		const statsMatch = req.url?.match(/^\/stats\/([^/]+)$/);
+		if (statsMatch) {
+			const sessionId = statsMatch[1];
+			const session = activeSessions.get(sessionId);
+			if (session) {
+				const stats = session.getStats();
+				if (stats) {
+					res.writeHead(200, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify(stats.toJSON(), null, 2));
+					return;
+				}
+			}
+			res.writeHead(404, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ error: 'Session not found or stats not enabled' }));
+			return;
+		}
+	}
 	res.writeHead(426, { 'Content-Type': 'text/plain' });
 	res.end('Upgrade Required: Expected WebSocket connection');
 });
@@ -27,6 +62,9 @@ const server = http.createServer((req, res) => {
 // Create WebSocket server
 const wss = new WebSocketServer({ noServer: true });
 
+
+// keep track of active sessions for the stats endpoint
+const activeSessions = new Map<string, TranscriberProxy>();
 // Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
 	logger.debug('UPGRADE EVENT TRIGGERED!');
@@ -105,6 +143,11 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Each tag gets its own backend connection, and transcripts are shared between tags
 	const session = new TranscriberProxy(ws, { language, sessionId, provider });
 
+	// track this session
+	if (sessionId && config.enableSessionStats) {
+		activeSessions.set(sessionId, session);
+	}
+
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {
 		logger.info(`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
@@ -135,6 +178,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Handle session closed event
 	session.on('closed', () => {
 		logger.info(`[WS-${connectionId}] Session closed event received, closing WebSocket`);
+		if (sessionId) activeSessions.delete(sessionId);
 		ws.close();
 	});
 
