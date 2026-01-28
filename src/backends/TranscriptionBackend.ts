@@ -71,4 +71,5 @@ export interface TranscriptionBackend {
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
 	onError?: (errorType: string, errorMessage: string) => void;
+	onClosed?: () => void;
 }
