@@ -10,6 +10,7 @@
  */
 
 import type { TranscriptionMessage } from '../transcriberproxy';
+import type { AudioEncoding } from '../utils';
 
 export interface BackendConfig {
 	/** Language hint for transcription (null = auto-detect) */
@@ -18,6 +19,8 @@ export interface BackendConfig {
 	prompt?: string;
 	/** Model to use for transcription */
 	model?: string;
+	/** Audio encoding format ('opus' for raw frames, 'ogg-opus' for containerized) */
+	encoding?: AudioEncoding;
 }
 
 export interface TranscriptionBackend {
@@ -38,12 +41,13 @@ export interface TranscriptionBackend {
 	sendAudio(audioBase64: string): Promise<void>;
 
 	/**
-	 * Optional: Indicates if this backend wants raw Opus frames instead of decoded PCM
-	 * If true, sendAudio will receive base64-encoded Opus frames
+	 * Optional: Indicates if this backend wants raw audio instead of decoded PCM
+	 * If true, sendAudio will receive base64-encoded raw audio (Opus frames or Ogg-Opus container)
 	 * If false/undefined (default), sendAudio receives base64-encoded PCM
-	 * @returns true if backend prefers raw Opus frames
+	 * @param encoding - The audio encoding format being used (opus or ogg-opus)
+	 * @returns true if backend prefers raw audio in this encoding
 	 */
-	wantsRawOpus?(): boolean;
+	wantsRawOpus?(encoding?: AudioEncoding): boolean;
 
 	/**
 	 * Force the backend to commit/finalize pending audio and generate transcription

@@ -2,6 +2,7 @@ import { OutgoingConnection } from './OutgoingConnection';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
 import { config, type Provider } from './config';
+import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 
@@ -20,6 +21,7 @@ export interface TranscriberProxyOptions {
 	language: string | null;
 	sessionId?: string;
 	provider?: Provider;
+	encoding?: AudioEncoding;
 }
 
 export class TranscriberProxy extends EventEmitter {

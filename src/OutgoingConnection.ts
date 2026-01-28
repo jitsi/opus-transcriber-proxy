@@ -102,7 +102,7 @@ export class OutgoingConnection {
 			this.backend = createBackend(this.localTag, this.participant, this.options.provider);
 
 			// Check if backend wants raw Opus frames or decoded PCM
-			const wantsRawOpus = this.backend.wantsRawOpus?.() ?? false;
+			const wantsRawOpus = this.backend.wantsRawOpus?.(this.options.encoding) ?? false;
 
 			if (wantsRawOpus) {
 				logger.info(`Backend wants raw Opus frames for tag: ${this.localTag}, skipping Opus decoder initialization`);
@@ -138,6 +138,7 @@ export class OutgoingConnection {
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
+			backendConfig.encoding = this.options.encoding;
 
 			// Connect the backend
 			await this.backend.connect(backendConfig);
@@ -214,7 +215,7 @@ export class OutgoingConnection {
 		}
 
 		// Check if backend wants raw Opus or decoded PCM
-		const wantsRawOpus = this.backend?.wantsRawOpus?.() ?? false;
+		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
 		const backendStatus = this.backend?.getStatus();
 
 		if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'connected') {
@@ -358,7 +359,7 @@ export class OutgoingConnection {
 		this.pendingOpusFrames = []; // Clear the queue
 
 		// Check if backend wants raw Opus or decoded PCM
-		const wantsRawOpus = this.backend?.wantsRawOpus?.() ?? false;
+		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
 
 		for (const binaryData of queuedPayloads) {
 			if (wantsRawOpus) {
