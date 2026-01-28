@@ -101,9 +101,10 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
 
 **Technical Details:**
 - Uses WebSocket API: `wss://api.deepgram.com/v1/listen`
-- Audio encoding options:
+- Audio encoding options (via `DEEPGRAM_ENCODING` env var or `encoding` URL parameter):
   - **linear16** (default): Sends decoded PCM audio at 24kHz, 16-bit, mono. Uses more CPU for Opus decoding but universally compatible.
   - **opus**: Sends raw Opus frames at 48kHz. More efficient (skips decoding step), lower CPU usage, native Opus support.
+  - **ogg-opus**: Sends containerized Ogg-Opus audio (e.g., from Voximplant). Deepgram auto-detects encoding from the container header - no `encoding` or `sample_rate` params are sent to Deepgram.
 - Returns both interim and final transcriptions
 - Supports KeepAlive, Finalize, and CloseStream control messages
 - Authentication via Sec-WebSocket-Protocol header
@@ -121,6 +122,15 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
 All backends implement the `TranscriptionBackend` interface:
 
 ```typescript
+type AudioEncoding = 'opus' | 'ogg-opus';
+
+interface BackendConfig {
+  language: string | null;
+  prompt?: string;
+  model?: string;
+  encoding?: AudioEncoding;  // Audio format from client
+}
+
 interface TranscriptionBackend {
   // Lifecycle
   connect(config: BackendConfig): Promise<void>;
@@ -130,6 +140,7 @@ interface TranscriptionBackend {
   // Audio
   sendAudio(audioBase64: string): Promise<void>;
   forceCommit(): void;
+  wantsRawOpus?(encoding?: AudioEncoding): boolean;  // Opt-in to raw audio
 
   // Configuration
   updatePrompt(prompt: string): void;
@@ -138,16 +149,25 @@ interface TranscriptionBackend {
   onInterimTranscription?: (message: TranscriptionMessage) => void;
   onCompleteTranscription?: (message: TranscriptionMessage) => void;
   onError?: (errorType: string, errorMessage: string) => void;
+  onClosed?: () => void;
 }
 ```
 
 ### Audio Format
-All backends receive **24 kHz, 16-bit, mono PCM audio** encoded as base64 strings.
+By default, backends receive **24 kHz, 16-bit, mono PCM audio** encoded as base64 strings.
 
 The opus-transcriber-proxy handles:
 1. Receiving Opus-encoded packets from clients
-2. Decoding to PCM
-3. Sending PCM to the transcription backend
+2. Decoding to PCM (unless backend opts out)
+3. Sending audio to the transcription backend
+
+**Raw Audio Mode:** Backends can implement `wantsRawOpus(encoding?: AudioEncoding): boolean` to receive raw audio instead of decoded PCM. This is useful for backends like Deepgram that natively support Opus or Ogg-Opus formats.
+
+**URL Parameter:** Clients can specify the audio encoding format via the `encoding` URL parameter:
+- `encoding=opus` (default): Raw Opus frames at 48kHz
+- `encoding=ogg-opus`: Containerized Ogg-Opus audio (e.g., from Voximplant)
+
+Example: `wss://host/transcribe?transcribe=true&sendBack=true&encoding=ogg-opus`
 
 ### Transcription Messages
 Backends must produce `TranscriptionMessage` objects:

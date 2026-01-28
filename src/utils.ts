@@ -1,3 +1,5 @@
+export type AudioEncoding = 'opus' | 'ogg-opus';
+
 export interface ISessionParameters {
 	url: URL;
 	sessionId: string | null;
@@ -9,6 +11,7 @@ export interface ISessionParameters {
 	sendBackInterim: boolean;
 	language: string | null;
 	provider: string | null;
+	encoding: AudioEncoding;
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -22,6 +25,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
 	const lang = parsedUrl.searchParams.get('lang');
 	const provider = parsedUrl.searchParams.get('provider');
+	const encodingParam = parsedUrl.searchParams.get('encoding');
+	// Default to 'opus' (raw opus frames) for backwards compatibility
+	const encoding: AudioEncoding = encodingParam === 'ogg-opus' ? 'ogg-opus' : 'opus';
 
 	return {
 		url: parsedUrl,
@@ -34,6 +40,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		sendBackInterim: sendBackInterim === 'true',
 		language: lang,
 		provider,
+		encoding,
 	};
 }
 

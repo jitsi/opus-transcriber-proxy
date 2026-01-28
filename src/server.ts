@@ -68,10 +68,10 @@ server.on('upgrade', (request, socket, head) => {
 let wsConnectionId = 0;
 
 function handleWebSocketConnection(ws: WebSocket, parameters: any) {
-	const { sessionId, sendBack, sendBackInterim, language, provider: requestedProvider } = parameters;
+	const { sessionId, sendBack, sendBackInterim, language, provider: requestedProvider, encoding } = parameters;
 	const connectionId = ++wsConnectionId;
 
-	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}`);
+	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}, encoding=${encoding}`);
 
 	// Determine which provider to use
 	let provider: Provider | undefined;
@@ -103,7 +103,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Create transcription session
 	// Within this session, multiple participants (tags) can send audio
 	// Each tag gets its own backend connection, and transcripts are shared between tags
-	const session = new TranscriberProxy(ws, { language, sessionId, provider });
+	const session = new TranscriberProxy(ws, { language, sessionId, provider, encoding });
 
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {

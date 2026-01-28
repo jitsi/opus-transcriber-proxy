@@ -46,15 +46,23 @@ export class DeepgramBackend implements TranscriptionBackend {
 		return new Promise((resolve, reject) => {
 			try {
 				// Build query parameters based on encoding type
-				const encoding = config.deepgram.encoding;
-				const sampleRate = encoding === 'opus' ? '48000' : '24000';
+				// Use per-connection encoding if specified, otherwise use global config
+				const encoding = backendConfig.encoding || config.deepgram.encoding;
+				const isContainerized = encoding === 'ogg-opus';
 
 				const params = new URLSearchParams({
-					encoding: encoding,
-					sample_rate: sampleRate,
 					channels: '1',
 					interim_results: 'true',
 				});
+
+				// For containerized audio (ogg-opus), omit encoding and sample_rate
+				// Deepgram will auto-detect from the container header
+				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
+				if (!isContainerized) {
+					params.set('encoding', encoding);
+					const sampleRate = encoding === 'opus' ? '48000' : '24000';
+					params.set('sample_rate', sampleRate);
+				}
 
 				// Add model if specified
 				if (backendConfig.model) {
@@ -207,9 +215,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 		return this.status;
 	}
 
-	wantsRawOpus(): boolean {
-		// Return true if encoding is opus, otherwise false (use decoded PCM)
-		return config.deepgram.encoding === 'opus';
+	wantsRawOpus(encoding?: 'opus' | 'ogg-opus'): boolean {
+		// Return true for raw opus or containerized ogg-opus (both skip decoding)
+		// Use provided encoding or fall back to global config
+		const effectiveEncoding = encoding || config.deepgram.encoding;
+		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
 	}
 
 	private startKeepAlive(): void {
