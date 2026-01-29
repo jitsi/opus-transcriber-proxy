@@ -23,9 +23,7 @@ export type Provider = 'openai' | 'gemini' | 'deepgram' | 'dummy';
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
 	// Example: "openai,gemini,deepgram" means try openai first, then gemini, then deepgram
-	providersPriority: (process.env.PROVIDERS_PRIORITY || 'openai,deepgram,gemini')
-		.split(',')
-		.map((p) => p.trim()) as Provider[],
+	providersPriority: (process.env.PROVIDERS_PRIORITY || 'openai,deepgram,gemini').split(',').map((p) => p.trim()) as Provider[],
 
 	// Enable dummy provider (for testing/statistics only)
 	enableDummyProvider: process.env.ENABLE_DUMMY_PROVIDER === 'true',
@@ -73,6 +71,7 @@ export const config = {
 	dumpBasePath: process.env.DUMP_BASE_PATH || '/tmp',
 	logLevel: process.env.LOG_LEVEL || 'info',
 	debug: process.env.DEBUG === 'true',
+	useDispatcher: process.env.USE_DISPATCHER === 'true'
 } as const;
 
 /**
