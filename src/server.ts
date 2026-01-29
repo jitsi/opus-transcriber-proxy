@@ -45,13 +45,6 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
-	// Validate transcribe flag
-	if (!parameters.transcribe) {
-		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nMissing transcribe parameter');
-		socket.destroy();
-		return;
-	}
-
 	// Validate output method
 	if (!parameters.sendBack && !parameters.sendBackInterim) {
 		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nNo transcription output method specified');

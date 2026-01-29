@@ -15,22 +15,6 @@ describe('utils', () => {
 			expect(params.sessionId).toBe('test-session-123');
 		});
 
-		it('should detect /transcribe path', () => {
-			const url = 'http://localhost:8080/transcribe';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.transcribe).toBe(true);
-		});
-
-		it('should detect non-transcribe path', () => {
-			const url = 'http://localhost:8080/events';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.transcribe).toBe(false);
-		});
-
 		it('should extract connect parameter', () => {
 			const url = 'http://localhost:8080/transcribe?connect=ws://example.com/websocket';
 
@@ -108,7 +92,6 @@ describe('utils', () => {
 			const params = extractSessionParameters(url);
 
 			expect(params.sessionId).toBe('abc123');
-			expect(params.transcribe).toBe(true);
 			expect(params.connect).toBe('ws://example.com');
 			expect(params.useTranscriptionator).toBe(false);
 			expect(params.useDispatcher).toBe(true);
@@ -144,7 +127,6 @@ describe('utils', () => {
 
 			expect(params.sessionId).toBeNull();
 			expect(params.connect).toBeNull();
-			expect(params.transcribe).toBe(false);
 		});
 	});
 

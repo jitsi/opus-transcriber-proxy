@@ -102,7 +102,6 @@ describe('OutgoingConnection', () => {
 
 		options = {
 			sessionId: null,
-			transcribe: true,
 			connect: null,
 			useTranscriptionator: false,
 			useDispatcher: false,
