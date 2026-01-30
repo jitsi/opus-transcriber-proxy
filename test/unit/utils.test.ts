@@ -25,11 +25,10 @@ describe('utils', () => {
 
 		it('should parse boolean flags correctly (true)', () => {
 			const url =
-				'http://localhost:8080/transcribe?useTranscriptionator=true&useDispatcher=true&sendBack=true&sendBackInterim=true';
+				'http://localhost:8080/transcribe?useDispatcher=true&sendBack=true&sendBackInterim=true';
 
 			const params = extractSessionParameters(url);
 
-			expect(params.useTranscriptionator).toBe(true);
 			expect(params.useDispatcher).toBe(true);
 			expect(params.sendBack).toBe(true);
 			expect(params.sendBackInterim).toBe(true);
@@ -37,11 +36,10 @@ describe('utils', () => {
 
 		it('should parse boolean flags correctly (false)', () => {
 			const url =
-				'http://localhost:8080/transcribe?useTranscriptionator=false&useDispatcher=false&sendBack=false&sendBackInterim=false';
+				'http://localhost:8080/transcribe?useDispatcher=false&sendBack=false&sendBackInterim=false';
 
 			const params = extractSessionParameters(url);
 
-			expect(params.useTranscriptionator).toBe(false);
 			expect(params.useDispatcher).toBe(false);
 			expect(params.sendBack).toBe(false);
 			expect(params.sendBackInterim).toBe(false);
@@ -52,7 +50,6 @@ describe('utils', () => {
 
 			const params = extractSessionParameters(url);
 
-			expect(params.useTranscriptionator).toBe(false);
 			expect(params.useDispatcher).toBe(false);
 			expect(params.sendBack).toBe(false);
 			expect(params.sendBackInterim).toBe(false);
@@ -93,7 +90,6 @@ describe('utils', () => {
 
 			expect(params.sessionId).toBe('abc123');
 			expect(params.connect).toBe('ws://example.com');
-			expect(params.useTranscriptionator).toBe(false);
 			expect(params.useDispatcher).toBe(true);
 			expect(params.sendBack).toBe(true);
 			expect(params.sendBackInterim).toBe(false);

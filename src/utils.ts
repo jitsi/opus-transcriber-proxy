@@ -4,7 +4,6 @@ export interface ISessionParameters {
 	url: URL;
 	sessionId: string | null;
 	connect: string | null;
-	useTranscriptionator: boolean;
 	useDispatcher: boolean;
 	sendBack: boolean;
 	sendBackInterim: boolean;
@@ -17,7 +16,6 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const parsedUrl = new URL(url);
 	const sessionId = parsedUrl.searchParams.get('sessionId');
 	const connect = parsedUrl.searchParams.get('connect');
-	const useTranscriptionator = parsedUrl.searchParams.get('useTranscriptionator');
 	const useDispatcher = parsedUrl.searchParams.get('useDispatcher');
 	const sendBack = parsedUrl.searchParams.get('sendBack');
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
@@ -31,7 +29,6 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		url: parsedUrl,
 		sessionId,
 		connect,
-		useTranscriptionator: useTranscriptionator === 'true',
 		useDispatcher: useDispatcher === 'true',
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
