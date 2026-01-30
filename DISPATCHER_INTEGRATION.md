@@ -297,24 +297,9 @@ Look for:
 - `"Dispatcher error:"` - Dispatcher RPC failures
 - `"Error dispatching transcription:"` - Parse or call errors
 
-## Migration from Old Code
+## Reference Implementation
 
-The old Worker (commented in `src/index.ts`) had dispatcher code inline:
-
-```typescript
-// Old approach (lines 182-207)
-if (useDispatcher) {
-  dispatcher?.dispatch(dispatcherMessage)
-    .then(response => { /* handle */ })
-    .catch(error => { /* handle */ });
-}
-```
-
-Now extracted to `worker/index.ts` with WebSocket interception, making it:
+The dispatcher integration is implemented in `worker/index.ts` with WebSocket interception, making it:
 - More maintainable (separated concerns)
 - More flexible (easy to add consumers)
 - More testable (clear interfaces)
-
-## Reference Implementation
-
-See the original dispatcher implementation on the `main` branch for a complete example of a dispatcher worker.
