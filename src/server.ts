@@ -45,15 +45,8 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
-	// Validate transcribe flag
-	if (!parameters.transcribe) {
-		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nMissing transcribe parameter');
-		socket.destroy();
-		return;
-	}
-
 	// Validate output method
-	if (!parameters.sendBack && !parameters.sendBackInterim) {
+	if (!parameters.sendBack && !parameters.sendBackInterim && !config.useDispatcher && !parameters.useDispatcher) {
 		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nNo transcription output method specified');
 		socket.destroy();
 		return;
@@ -71,7 +64,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	const { sessionId, sendBack, sendBackInterim, language, provider: requestedProvider, encoding } = parameters;
 	const connectionId = ++wsConnectionId;
 
-	logger.info(`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}, encoding=${encoding}`);
+	logger.info(
+		`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}, encoding=${encoding}`,
+	);
 
 	// Determine which provider to use
 	let provider: Provider | undefined;
@@ -107,7 +102,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {
-		logger.info(`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`);
+		logger.info(
+			`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
+		);
 		clearInterval(stateCheckInterval);
 		session.close();
 	});
@@ -121,7 +118,9 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	});
 
 	// Log initial WebSocket state
-	logger.debug(`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`);
+	logger.debug(
+		`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`,
+	);
 
 	// Monitor WebSocket state changes
 	let lastReadyState = ws.readyState;
