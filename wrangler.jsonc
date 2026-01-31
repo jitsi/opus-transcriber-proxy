@@ -20,6 +20,12 @@
 				"class_name": "TranscriberContainer",
 				"name": "TRANSCRIBER"
 			}
+			// Uncomment to enable WebSocket connection to Dispatcher DO (avoids subrequest limit)
+			// {
+			// 	"name": "DISPATCHER_DO",
+			// 	"class_name": "TranscriptionDispatcherDO",
+			// 	"script_name": "transcription-dispatcher"
+			// }
 		]
 	},
 	"migrations": [

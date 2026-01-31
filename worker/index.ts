@@ -248,7 +248,31 @@ async function handleWebSocketWithDispatcher(
 	const containerWs = containerResponse.webSocket;
 	containerWs.accept();
 
-	// Prefer queue over RPC (queue doesn't count against subrequest limit)
+	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
+	let dispatcherWs: WebSocket | null = null;
+	if (env.DISPATCHER_DO) {
+		try {
+			const doId = env.DISPATCHER_DO.idFromName('global');
+			const stub = env.DISPATCHER_DO.get(doId);
+
+			const upgradeRequest = new Request('http://dispatcher/websocket', {
+				headers: { 'Upgrade': 'websocket' },
+			});
+			const doResponse = await stub.fetch(upgradeRequest);
+
+			if (doResponse.webSocket) {
+				dispatcherWs = doResponse.webSocket;
+				dispatcherWs.accept();
+				console.log(`Connected to Dispatcher DO via WebSocket for session: ${sessionId}`);
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`Failed to connect to Dispatcher DO: ${msg}`);
+			// Fall back to queue/RPC
+		}
+	}
+
+	// Fallback: queue over RPC (queue doesn't count against subrequest limit)
 	const queue = env.TRANSCRIPTION_QUEUE;
 	const dispatcher = env.TRANSCRIPTION_DISPATCHER;
 
@@ -288,8 +312,11 @@ async function handleWebSocketWithDispatcher(
 						language: data.language,
 					};
 
-					// Use queue if available (preferred - no subrequest limit)
-					if (queue) {
+					// Use DO WebSocket if connected (preferred - avoids subrequest limit)
+					if (dispatcherWs && dispatcherWs.readyState === WebSocket.READY_STATE_OPEN) {
+						dispatcherWs.send(JSON.stringify(dispatcherMessage));
+					} else if (queue) {
+						// Fall back to queue (doesn't count against subrequest limit)
 						queue.send(dispatcherMessage).catch((error) => {
 							const msg = error instanceof Error ? error.message : String(error);
 							console.error(`Queue send failed: ${msg}`);
@@ -328,6 +355,7 @@ async function handleWebSocketWithDispatcher(
 		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			containerWs.close(event.code, event.reason);
 		}
+		dispatcherWs?.close(1000, 'Session ended');
 	});
 
 	containerWs.addEventListener('close', (event) => {
@@ -336,6 +364,7 @@ async function handleWebSocketWithDispatcher(
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			serverWs.close(event.code, event.reason || 'Container connection closed');
 		}
+		dispatcherWs?.close(1000, 'Container disconnected');
 	});
 
 	// Handle errors - these fire when connection fails abnormally
