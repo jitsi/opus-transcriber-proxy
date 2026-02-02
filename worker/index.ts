@@ -1,5 +1,4 @@
 import { Container, getContainer } from '@cloudflare/containers';
-import { WorkerEntrypoint } from 'cloudflare:workers';
 
 /**
  * Dispatcher message format for transcription events
@@ -10,23 +9,6 @@ export interface DispatcherTranscriptionMessage {
 	text: string;
 	timestamp: number;
 	language?: string;
-}
-
-/**
- * Response from dispatcher RPC call
- */
-export interface RPCResponse {
-	success: boolean;
-	dispatched: number;
-	errors?: string[];
-	message?: string;
-}
-
-/**
- * Transcription Dispatcher worker interface
- */
-export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
-	dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse>;
 }
 
 /**
@@ -268,13 +250,8 @@ async function handleWebSocketWithDispatcher(
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			console.error(`Failed to connect to Dispatcher DO: ${msg}`);
-			// Fall back to queue/RPC
 		}
 	}
-
-	// Fallback: queue over RPC (queue doesn't count against subrequest limit)
-	const queue = env.TRANSCRIPTION_QUEUE;
-	const dispatcher = env.TRANSCRIPTION_DISPATCHER;
 
 	// Keep container alive by periodically renewing activity timeout
 	// WebSocket messages bypass the Container class, so sleepAfter doesn't reset automatically
@@ -299,8 +276,8 @@ async function handleWebSocketWithDispatcher(
 			serverWs.send(event.data);
 		}
 
-		// Dispatch transcriptions asynchronously (non-blocking)
-		if (typeof event.data === 'string') {
+		// Dispatch transcriptions via DO WebSocket
+		if (dispatcherWs && dispatcherWs.readyState === WebSocket.READY_STATE_OPEN && typeof event.data === 'string') {
 			try {
 				const data = JSON.parse(event.data) as TranscriptionMessage;
 				if (data.type === 'transcription-result' && !data.is_interim) {
@@ -311,36 +288,7 @@ async function handleWebSocketWithDispatcher(
 						timestamp: data.timestamp,
 						language: data.language,
 					};
-
-					// Use DO WebSocket if connected (preferred - avoids subrequest limit)
-					if (dispatcherWs && dispatcherWs.readyState === WebSocket.READY_STATE_OPEN) {
-						dispatcherWs.send(JSON.stringify(dispatcherMessage));
-					} else if (queue) {
-						// Fall back to queue (doesn't count against subrequest limit)
-						queue.send(dispatcherMessage).catch((error) => {
-							const msg = error instanceof Error ? error.message : String(error);
-							console.error(`Queue send failed: ${msg}`);
-						});
-					} else if (dispatcher) {
-						// Fall back to RPC (has subrequest limit)
-						dispatcher
-							.dispatch(dispatcherMessage)
-							.then((response) => {
-								if (!response.success || response.errors) {
-									console.error(
-										`Dispatcher error: ${JSON.stringify({
-											message: response.message,
-											errors: response.errors,
-										})}`,
-									);
-								}
-							})
-							.catch((error) => {
-								const msg = error instanceof Error ? error.message : String(error);
-								const stack = error instanceof Error ? error.stack : undefined;
-								console.error(`Dispatcher RPC failed: ${msg}${stack ? '\n' + stack : ''}`);
-							});
-					}
+					dispatcherWs.send(JSON.stringify(dispatcherMessage));
 				}
 			} catch {
 				// Not JSON or parse error - ignore, still forwarded to client
@@ -472,7 +420,7 @@ export default {
 		}
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && (env.TRANSCRIPTION_QUEUE || env.TRANSCRIPTION_DISPATCHER)) {
+		if (useDispatcher && upgradeHeader === 'websocket' && env.DISPATCHER_DO) {
 			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
 		}
 

@@ -15,7 +15,7 @@ The transcriber is **platform-agnostic** and can connect to any WebSocket-compat
 │                  │                                          │
 │                  │ (final transcriptions)                   │
 │                  ↓                                          │
-│         Dispatcher Connection (WebSocket or RPC)            │
+│         Dispatcher Connection (WebSocket)                   │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ↓
@@ -48,21 +48,15 @@ DISPATCHER_HEADERS='{"Authorization": "Bearer your-token"}'
 
 ### Cloudflare Worker Deployment
 
-When deployed as a Cloudflare Worker, the transcriber supports multiple dispatch methods:
+When deployed as a Cloudflare Worker, the transcriber connects to a Dispatcher Durable Object via WebSocket.
 
-| Priority | Method | Binding | Notes |
-|----------|--------|---------|-------|
-| 1 | WebSocket to DO | `DISPATCHER_DO` | Internal connection, avoids subrequest limit |
-| 2 | Queue | `TRANSCRIPTION_QUEUE` | Counts against subrequest limit |
-| 3 | RPC | `TRANSCRIPTION_DISPATCHER` | Counts against subrequest limit |
-
-**Note on Cloudflare Limits:** Cloudflare Workers have a subrequest limit per invocation (1000 on enterprise, lower on other plans). For long-running sessions with many transcriptions, both RPC calls and queue pushes count against this limit. The WebSocket-to-Durable-Object approach avoids this because each incoming WebSocket message grants fresh subrequest quota to the DO.
+**Why WebSocket to DO?** Cloudflare Workers have a subrequest limit per invocation (1000 on enterprise, lower on other plans). For long-running sessions with many transcriptions, RPC calls and queue pushes count against this limit. The WebSocket-to-Durable-Object approach avoids this because each incoming WebSocket message grants fresh subrequest quota to the DO.
 
 ## Configuration
 
 ### Cloudflare Worker
 
-Add bindings to your `wrangler.jsonc`:
+Add the DO binding to your `wrangler.jsonc`:
 
 ```jsonc
 {
@@ -72,20 +66,6 @@ Add bindings to your `wrangler.jsonc`:
         "name": "DISPATCHER_DO",
         "class_name": "TranscriptionDispatcherDO",
         "script_name": "your-dispatcher-worker"
-      }
-    ]
-  },
-  "services": [
-    {
-      "binding": "TRANSCRIPTION_DISPATCHER",
-      "service": "your-dispatcher-worker"
-    }
-  ],
-  "queues": {
-    "producers": [
-      {
-        "binding": "TRANSCRIPTION_QUEUE",
-        "queue": "your-transcription-queue"
       }
     ]
   },
@@ -165,21 +145,6 @@ export class TranscriptionDispatcherDO extends DurableObject<Env> {
 }
 ```
 
-### RPC Dispatcher (Legacy)
-
-For simpler setups or when subrequest limits aren't a concern:
-
-```typescript
-import { WorkerEntrypoint } from 'cloudflare:workers';
-
-export class TranscriptionDispatcher extends WorkerEntrypoint {
-  async dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse> {
-    // Forward to webhook, database, etc.
-    return { success: true, dispatched: 1 };
-  }
-}
-```
-
 ### Generic WebSocket Server (Any Platform)
 
 For Node.js or other platforms, implement a WebSocket server:
@@ -226,4 +191,4 @@ wrangler tail --name=your-dispatcher-worker-name
 Look for these log messages:
 - `Connected to Dispatcher DO via WebSocket` - WebSocket connection established
 - `Dispatcher connection closed` - Connection lost
-- `Queue send failed` / `Dispatcher RPC failed` - Fallback method errors
+- `Failed to connect to Dispatcher DO` - DO connection error
