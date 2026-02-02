@@ -39,7 +39,6 @@ When running as a standalone Node.js server, the transcriber connects to the dis
 |----------|-------------|---------|
 | `DISPATCHER_WS_URL` | WebSocket URL of your dispatcher | (empty - disabled) |
 | `DISPATCHER_HEADERS` | JSON object with auth headers | `{}` |
-| `DISPATCHER_RECONNECT_INTERVAL` | Reconnect delay in ms | 1800000 (30 min) |
 
 **Example:**
 ```bash

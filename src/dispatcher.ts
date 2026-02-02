@@ -21,6 +21,7 @@ export interface DispatcherMessage {
 export class DispatcherConnection {
 	private ws: WebSocket | null = null;
 	private reconnectTimer: NodeJS.Timeout | null = null;
+	private reconnectAttempts = 0;
 	private sessionId: string;
 	private closed = false;
 	private messageQueue: DispatcherMessage[] = [];
@@ -49,6 +50,7 @@ export class DispatcherConnection {
 
 				this.ws.on('open', () => {
 					logger.info(`Connected to dispatcher for session ${this.sessionId}`);
+					this.reconnectAttempts = 0; // Reset on successful connection
 					this.flushMessageQueue();
 					resolve();
 				});
@@ -135,16 +137,19 @@ export class DispatcherConnection {
 
 	private scheduleReconnect(): void {
 		if (this.closed) {
-			logger.debug(`Not reconnecting dispatcher for session ${this.sessionId} - connection closed`);
 			return;
 		}
 
-		logger.info(`Scheduling dispatcher reconnect for session ${this.sessionId} in ${config.dispatcher.reconnectInterval}ms`);
+		// Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+		const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+		this.reconnectAttempts++;
+
+		logger.info(`Scheduling dispatcher reconnect for session ${this.sessionId} in ${delay}ms (attempt ${this.reconnectAttempts})`);
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
 			this.connect().catch((error) => {
 				logger.error(`Reconnect failed for session ${this.sessionId}:`, error.message);
 			});
-		}, config.dispatcher.reconnectInterval);
+		}, delay);
 	}
 }

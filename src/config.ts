@@ -77,7 +77,6 @@ export const config = {
 	dispatcher: {
 		wsUrl: process.env.DISPATCHER_WS_URL || '', // e.g., wss://dispatcher.example.com/ws
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
-		reconnectInterval: parseIntOrDefault(process.env.DISPATCHER_RECONNECT_INTERVAL, 30 * 60 * 1000), // 30 minutes
 	},
 } as const;
 
