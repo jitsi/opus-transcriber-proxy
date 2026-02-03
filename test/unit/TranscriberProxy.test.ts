@@ -31,6 +31,10 @@ vi.mock('../../src/config', () => ({
 		dumpWebSocketMessages: false,
 		dumpTranscripts: false,
 		dumpBasePath: '/tmp/opus-transcriber-proxy-test',
+		dispatcher: {
+			wsUrl: '',
+			headers: {},
+		},
 	},
 }));
 

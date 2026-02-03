@@ -1,121 +1,83 @@
 # Dispatcher Integration
 
-This document explains how the Worker intercepts and fans out transcriptions to both the media server and a Transcription Dispatcher worker.
+This document explains how the transcriber forwards transcriptions to an external dispatcher service for further processing (webhooks, storage, analytics, etc.).
+
+The transcriber is **platform-agnostic** and can connect to any WebSocket-compatible dispatcher. The dispatcher implementation is separate and must be provided by you.
 
 ## Architecture Overview
 
-### Before: Direct Pass-through
 ```
-Media Server ←→ Worker ←→ Container ←→ OpenAI
-```
-
-### After: Worker Intercepts & Fans Out
-```
-Media Server ←→ Worker ←→ Container ←→ OpenAI
-                  ↓
-                  ↓ (RPC)
-                  ↓
-         Transcription Dispatcher
-```
-
-## How It Works
-
-### 1. WebSocket Interception
-
-The Worker creates two WebSocket pairs:
-- **Client Pair**: Connects to the media server
-- **Container Pair**: Connects to the container
-
-```typescript
-// Create interception points
-const clientPair = new WebSocketPair();
-const [clientWs, clientServerWs] = Object.values(clientPair);
-
-const containerPair = new WebSocketPair();
-const [containerClientWs, containerServerWs] = Object.values(containerPair);
+┌─────────────────────────────────────────────────────────────┐
+│                     Transcriber                              │
+│  (Node.js server or Cloudflare Worker with Container)       │
+│                                                             │
+│  Client WS ←→ [Proxy] ←→ Backend (OpenAI/Deepgram/Gemini)  │
+│                  │                                          │
+│                  │ (final transcriptions)                   │
+│                  ↓                                          │
+│         Dispatcher Connection (WebSocket)                   │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ↓
+┌─────────────────────────────────────────────────────────────┐
+│              Your Dispatcher Implementation                  │
+│                                                             │
+│  - Receives transcription messages                          │
+│  - Fans out to webhooks, databases, analytics, etc.        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 2. Message Flow
+## Deployment Modes
 
-**Upstream (Media Server → Container):**
-```typescript
-// Forward audio data from client to container
-clientServerWs.addEventListener('message', (event) => {
-  containerClientWs.send(event.data);  // High bandwidth, no interception needed
-});
+### Node.js Deployment
+
+When running as a standalone Node.js server, the transcriber connects to the dispatcher via a configurable WebSocket URL.
+
+**Configuration:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DISPATCHER_WS_URL` | WebSocket URL of your dispatcher | (empty - disabled) |
+| `DISPATCHER_HEADERS` | JSON object with auth headers | `{}` |
+
+**Example:**
+```bash
+DISPATCHER_WS_URL=wss://your-dispatcher.example.com/ws
+DISPATCHER_HEADERS='{"Authorization": "Bearer your-token"}'
 ```
 
-**Downstream (Container → Media Server + Dispatcher):**
-```typescript
-// Intercept transcriptions from container
-containerClientWs.addEventListener('message', (event) => {
-  // 1. Forward to media server immediately (low latency)
-  clientServerWs.send(event.data);
+### Cloudflare Worker Deployment
 
-  // 2. Fan out to dispatcher asynchronously (doesn't block)
-  if (dispatcher) {
-    ctx.waitUntil(
-      (async () => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'transcription') {
-          await dispatcher.dispatch({
-            sessionId: sessionId,
-            endpointId: data.participant?.id || 'unknown',
-            text: data.transcript.map(t => t.text).join(' '),
-            timestamp: data.timestamp,
-          });
-        }
-      })()
-    );
-  }
-});
-```
+When deployed as a Cloudflare Worker, the transcriber connects to a Dispatcher Durable Object via WebSocket.
 
-### 3. Key Design Decisions
-
-**✅ Low Latency for Media Server**
-- Transcripts are immediately forwarded to the media server
-- Dispatcher call happens asynchronously and doesn't block
-
-**✅ Container Remains Simple**
-- Container only knows about OpenAI
-- No routing logic in the container
-- Easy to test and maintain
-
-**✅ Worker Controls Distribution**
-- All routing logic is in one place
-- Easy to add more consumers later
-- No container changes needed
-
-**✅ Service Binding Performance**
-- Uses Cloudflare Service Bindings for zero-latency RPC
-- No HTTP overhead
-- Direct worker-to-worker communication
+**Why WebSocket to DO?** Cloudflare Workers have a subrequest limit per invocation (1000 on enterprise, lower on other plans). For long-running sessions with many transcriptions, RPC calls and queue pushes count against this limit. The WebSocket-to-Durable-Object approach avoids this because each incoming WebSocket message grants fresh subrequest quota to the DO.
 
 ## Configuration
 
-### 1. Add Service Binding
+### Cloudflare Worker
 
-Add the `TRANSCRIPTION_DISPATCHER` service binding to your `wrangler.jsonc`:
+Add the DO binding to your `wrangler.jsonc`:
 
 ```jsonc
 {
-  "services": [
-    {
-      "binding": "TRANSCRIPTION_DISPATCHER",
-      "service": "transcription-dispatcher"
-    }
-  ]
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISPATCHER_DO",
+        "class_name": "TranscriptionDispatcherDO",
+        "script_name": "your-dispatcher-worker"
+      }
+    ]
+  },
+  "vars": {
+    "USE_DISPATCHER": "true"
+  }
 }
 ```
 
-### 2. Enable Dispatcher
+### Enable Dispatcher
 
-The dispatcher can be enabled in two ways:
-
-**Option A: Environment Variable (recommended for global enable)**
-
-Add `USE_DISPATCHER` to your wrangler.jsonc vars:
+**Option A: Environment Variable (recommended)**
 
 ```jsonc
 {
@@ -125,196 +87,108 @@ Add `USE_DISPATCHER` to your wrangler.jsonc vars:
 }
 ```
 
-**Option B: Query Parameter (per-request control)**
-
-Add `useDispatcher=true` query parameter:
+**Option B: Query Parameter (per-request)**
 
 ```
 wss://your-worker.workers.dev/transcribe?sessionId=test&useDispatcher=true
 ```
 
-**Precedence:** Query parameter overrides the environment variable. If neither is set, dispatcher is disabled by default.
+**Precedence:** Query parameter overrides the environment variable.
 
-### 3. Implement Dispatcher Worker
+## Implementing Your Dispatcher
 
-Your dispatcher worker must implement the `dispatch()` RPC method:
+### Message Format
 
-```typescript
-import { WorkerEntrypoint } from 'cloudflare:workers';
-
-export interface DispatcherTranscriptionMessage {
-  sessionId: string;
-  endpointId: string;
-  text: string;
-  timestamp: number;
-  language?: string;
-}
-
-export interface RPCResponse {
-  success: boolean;
-  dispatched: number;
-  errors?: string[];
-  message?: string;
-}
-
-export class TranscriptionDispatcher extends WorkerEntrypoint {
-  async dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse> {
-    // Your implementation here
-    console.log('Received transcription:', message);
-
-    // Forward to webhook, database, etc.
-
-    return {
-      success: true,
-      dispatched: 1,
-    };
-  }
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    return new Response('Transcription Dispatcher');
-  },
-};
-```
-
-## Message Format
-
-### Transcription Message (from Container)
-
-```typescript
-interface TranscriptionMessage {
-  type: 'transcription' | 'interim_transcription';
-  participant: {
-    id?: string;
-  };
-  transcript: Array<{
-    text: string;
-  }>;
-  timestamp: number;
-}
-```
-
-### Dispatcher Message (to Dispatcher)
+The transcriber sends messages in this format:
 
 ```typescript
 interface DispatcherTranscriptionMessage {
   sessionId: string;      // Session identifier
-  endpointId: string;     // Participant ID (from participant.id)
-  text: string;           // Joined transcript text
-  timestamp: number;      // Timestamp in milliseconds
+  endpointId: string;     // Participant ID
+  text: string;           // Transcription text
+  timestamp: number;      // Unix timestamp in milliseconds
   language?: string;      // Optional language code
 }
 ```
 
-## Benefits of This Approach
+### WebSocket Dispatcher (Recommended for Cloudflare)
 
-1. **Separation of Concerns**
-   - Container: Audio processing and transcription
-   - Worker: Routing and distribution
-   - Dispatcher: Business logic and forwarding
+Implement a Durable Object that accepts WebSocket connections:
 
-2. **Scalability**
-   - Easy to add more consumers without touching container code
-   - Worker fan-out is lightweight and fast
-   - Service Bindings provide zero-latency RPC
+```typescript
+import { DurableObject } from 'cloudflare:workers';
 
-3. **Maintainability**
-   - Clear boundaries between components
-   - Easy to test each component independently
-   - Changes to routing don't require container redeployment
+export class TranscriptionDispatcherDO extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 426 });
+    }
 
-4. **Performance**
-   - Media server gets transcripts with minimal latency
-   - Dispatcher calls don't block the critical path
-   - High-bandwidth audio data bypasses interception
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
 
-## Comparison to Alternatives
+    server.accept();
 
-### ❌ Alternative 1: Container → Dispatcher Directly
+    server.addEventListener('message', async (event) => {
+      const message = JSON.parse(event.data as string);
+      // Forward to webhooks, databases, etc.
+      await this.fanOut(message);
+    });
 
-**Problems:**
-- Container becomes complex (routing logic)
-- Need to pass dispatcher URL to container
-- Tight coupling between container and dispatcher
-- Hard to add more consumers later
+    return new Response(null, { status: 101, webSocket: client });
+  }
 
-### ❌ Alternative 2: Media Server → Dispatcher
+  private async fanOut(message: DispatcherTranscriptionMessage) {
+    // Your fan-out logic here
+    // Each WebSocket message grants fresh subrequest quota
+  }
+}
+```
 
-**Problems:**
-- Media server must know about dispatcher
-- Extra network hop for dispatcher
-- Media server becomes a distribution point
+### Generic WebSocket Server (Any Platform)
 
-### ✅ Our Approach: Worker Fan-out
+For Node.js or other platforms, implement a WebSocket server:
 
-**Advantages:**
-- Container stays simple and focused
-- Worker is natural distribution point
-- Easy to extend with more consumers
-- Leverages Cloudflare Service Bindings
+```typescript
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', (ws, req) => {
+  const sessionId = new URL(req.url, 'http://localhost').searchParams.get('sessionId');
+
+  ws.on('message', async (data) => {
+    const message = JSON.parse(data.toString());
+    // Forward to webhooks, databases, etc.
+  });
+});
+```
 
 ## Testing
 
 ### Without Dispatcher
 
 ```bash
-# Media server receives transcripts directly (dispatcher disabled)
-wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true"
+# Transcripts returned to client only (dispatcher disabled)
+wscat -c "wss://your-endpoint/transcribe?sessionId=test&sendBack=true"
 ```
 
-### With Dispatcher (via query param)
+### With Dispatcher
 
 ```bash
-# Media server receives transcripts + dispatcher gets notified
-wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true&useDispatcher=true"
+# Transcripts returned to client + forwarded to dispatcher
+wscat -c "wss://your-endpoint/transcribe?sessionId=test&sendBack=true&useDispatcher=true"
 ```
 
-### With Dispatcher (via env var)
+### Check Dispatcher Logs (Cloudflare)
 
-If `USE_DISPATCHER=true` is set in wrangler.jsonc, all connections will dispatch:
-
-```bash
-# Dispatcher enabled globally via env var
-wscat -c "wss://your-worker.workers.dev/transcribe?sessionId=test&sendBack=true"
-```
-
-Check dispatcher logs:
 ```bash
 wrangler tail --name=your-dispatcher-worker-name
 ```
 
 ## Monitoring
 
-View Worker logs to see dispatcher calls:
-```bash
-cd worker
-npm run tail
-```
-
-Look for:
-- `"Using dispatcher for sessionId: XXX"` - Dispatcher enabled
-- `"Dispatcher error:"` - Dispatcher RPC failures
-- `"Error dispatching transcription:"` - Parse or call errors
-
-## Migration from Old Code
-
-The old Worker (commented in `src/index.ts`) had dispatcher code inline:
-
-```typescript
-// Old approach (lines 182-207)
-if (useDispatcher) {
-  dispatcher?.dispatch(dispatcherMessage)
-    .then(response => { /* handle */ })
-    .catch(error => { /* handle */ });
-}
-```
-
-Now extracted to `worker/index.ts` with WebSocket interception, making it:
-- More maintainable (separated concerns)
-- More flexible (easy to add consumers)
-- More testable (clear interfaces)
-
-## Reference Implementation
-
-See the original dispatcher implementation on the `main` branch for a complete example of a dispatcher worker.
+Look for these log messages:
+- `Connected to Dispatcher DO via WebSocket` - WebSocket connection established
+- `Dispatcher connection closed` - Connection lost
+- `Failed to connect to Dispatcher DO` - DO connection error

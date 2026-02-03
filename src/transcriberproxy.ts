@@ -5,6 +5,7 @@ import { config, type Provider } from './config';
 import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
+import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -31,6 +32,7 @@ export class TranscriberProxy extends EventEmitter {
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
 	private sessionId?: string;
+	private dispatcherConnection?: DispatcherConnection;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -42,6 +44,14 @@ export class TranscriberProxy extends EventEmitter {
 		// Initialize dump streams if enabled
 		if (config.dumpWebSocketMessages || config.dumpTranscripts) {
 			this.initializeDumpStreams();
+		}
+
+		// Initialize dispatcher connection if configured
+		if (config.dispatcher.wsUrl && this.sessionId) {
+			this.dispatcherConnection = new DispatcherConnection(this.sessionId);
+			this.dispatcherConnection.connect().catch((error) => {
+				logger.error(`Failed to connect to dispatcher for session ${this.sessionId}:`, error.message);
+			});
 		}
 
 		this.ws.addEventListener('close', () => {
@@ -143,6 +153,19 @@ export class TranscriberProxy extends EventEmitter {
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
+			// Send to dispatcher if connected
+			if (this.dispatcherConnection && this.sessionId) {
+				const transcriptText = message.transcript.map((t) => t.text).join(' ');
+				const dispatcherMessage: DispatcherMessage = {
+					sessionId: this.sessionId,
+					endpointId: message.participant?.id || tag,
+					text: transcriptText,
+					timestamp: message.timestamp,
+					language: message.language,
+				};
+				this.dispatcherConnection.send(dispatcherMessage);
+			}
+
 			// Broadcast this transcript to all OTHER tags in the same session
 			const sourceTag = message.participant?.id || tag;
 			const transcriptText = message.transcript.map((t) => t.text).join(' ');
@@ -206,6 +229,12 @@ export class TranscriberProxy extends EventEmitter {
 		});
 		this.outgoingConnections.clear();
 		this.ws.close();
+
+		// Close dispatcher connection if open
+		if (this.dispatcherConnection) {
+			this.dispatcherConnection.close();
+			this.dispatcherConnection = undefined;
+		}
 
 		// Close dump streams if open
 		if (this.dumpStream) {
