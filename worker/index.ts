@@ -42,7 +42,7 @@ export class TranscriberContainer extends Container {
 	// Longer = Fewer cold starts, but uses more resources when idle
 	// For pool-based routing: Keep this longer (containers serve many sessions)
 	// For session-based routing: Keep this shorter (containers are session-specific)
-	sleepAfter = '10m';
+	sleepAfter = this.env.SLEEP_AFTER || '1m';
 
 	// Pass environment variables to the container
 	envVars = {

@@ -39,4 +39,5 @@ interface Env {
 	SCALE_DOWN_IDLE_TIME?: string;
 	TRANSLATION_MIXING_MODE?: string;
 	USE_DISPATCHER?: string;
+	SLEEP_AFTER?: string;
 }
