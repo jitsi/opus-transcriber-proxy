@@ -25,6 +25,7 @@
 		"cf:tail": "cd worker && npm run tail"
 	},
 	"dependencies": {
+		"@cloudflare/containers": "^0.1.0",
 		"dotenv": "^16.4.5",
 		"winston": "^3.19.0",
 		"ws": "^8.18.0"
