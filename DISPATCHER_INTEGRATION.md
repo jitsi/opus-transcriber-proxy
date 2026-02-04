@@ -188,6 +188,23 @@ wrangler tail --name=your-dispatcher-worker-name
 
 ## Monitoring
 
+View Worker logs to see dispatcher calls:
+```bash
+cd worker
+npm run tail
+```
+
+Look for:
+- `"Using dispatcher for sessionId: XXX"` - Dispatcher enabled
+- `"Dispatcher error:"` - Dispatcher RPC failures
+- `"Error dispatching transcription:"` - Parse or call errors
+
+## Reference Implementation
+
+The dispatcher integration is implemented in `worker/index.ts` with WebSocket interception, making it:
+- More maintainable (separated concerns)
+- More flexible (easy to add consumers)
+- More testable (clear interfaces)
 Look for these log messages:
 - `Connected to Dispatcher DO via WebSocket` - WebSocket connection established
 - `Dispatcher connection closed` - Connection lost
