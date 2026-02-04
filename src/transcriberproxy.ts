@@ -23,10 +23,12 @@ export interface TranscriberProxyOptions {
 	sessionId?: string;
 	provider?: Provider;
 	encoding?: AudioEncoding;
+	sendBack?: boolean;
+	sendBackInterim?: boolean;
 }
 
 export class TranscriberProxy extends EventEmitter {
-	private readonly ws: WebSocket;
+	private ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
 	private options: TranscriberProxyOptions;
 	private dumpStream?: fs.WriteStream;
@@ -54,6 +56,15 @@ export class TranscriberProxy extends EventEmitter {
 			});
 		}
 
+		// Set up WebSocket event listeners
+		this.setupWebSocketListeners();
+	}
+
+	/**
+	 * Set up WebSocket event listeners
+	 * Can be called during construction or when reattaching a new WebSocket
+	 */
+	private setupWebSocketListeners(): void {
 		this.ws.addEventListener('close', () => {
 			this.ws.close();
 			this.emit('closed');
@@ -221,6 +232,46 @@ export class TranscriberProxy extends EventEmitter {
 		if (broadcastCount > 0) {
 			logger.debug(`Broadcasted "${contextMessage}" to ${broadcastCount} other tag(s) in the same session`);
 		}
+	}
+
+	/**
+	 * Get the current WebSocket connection
+	 */
+	getWebSocket(): WebSocket {
+		return this.ws;
+	}
+
+	/**
+	 * Get session options
+	 */
+	getOptions(): TranscriberProxyOptions {
+		return this.options;
+	}
+
+	/**
+	 * Reattach this session to a new WebSocket connection
+	 * Used for session resumption after temporary disconnection
+	 */
+	reattachWebSocket(newWs: WebSocket): void {
+		logger.info(`Reattaching WebSocket to session ${this.sessionId}`);
+
+		// Close old WebSocket (may already be closed)
+		try {
+			this.ws.close();
+		} catch (e) {
+			// Ignore - WebSocket might already be closed
+			logger.debug('Old WebSocket already closed during reattach');
+		}
+
+		// Update reference
+		this.ws = newWs;
+
+		// Re-setup listeners on new WebSocket
+		this.setupWebSocketListeners();
+
+		logger.info(
+			`WebSocket reattached to session ${this.sessionId}, ${this.outgoingConnections.size} active connections preserved`,
+		);
 	}
 
 	close(): void {
