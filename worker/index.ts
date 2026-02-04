@@ -258,7 +258,19 @@ async function handleWebSocketWithDispatcher(
 	const keepAliveInterval = setInterval(() => {
 		container.keepAlive().catch((error) => {
 			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`Container keepAlive failed: ${msg}`);
+			console.error(`Container keepAlive failed: ${msg}, closing connections, sessionId=${sessionId}`);
+
+			// Clean up interval to prevent further keepAlive attempts
+			clearInterval(keepAliveInterval);
+
+			// Close all WebSocket connections when container connection is lost
+			if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+				serverWs.close(1011, `Container connection lost: ${msg}`);
+			}
+			if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+				containerWs.close(1011, 'Container keepAlive failed');
+			}
+			dispatcherWs?.close(1000, 'Container connection lost');
 		});
 	}, 10_000); // Every 10 seconds
 
