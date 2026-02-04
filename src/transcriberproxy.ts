@@ -5,6 +5,7 @@ import { config, type Provider } from './config';
 import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
+import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -22,15 +23,18 @@ export interface TranscriberProxyOptions {
 	sessionId?: string;
 	provider?: Provider;
 	encoding?: AudioEncoding;
+	sendBack?: boolean;
+	sendBackInterim?: boolean;
 }
 
 export class TranscriberProxy extends EventEmitter {
-	private readonly ws: WebSocket;
+	private ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
 	private options: TranscriberProxyOptions;
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
 	private sessionId?: string;
+	private dispatcherConnection?: DispatcherConnection;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -44,6 +48,23 @@ export class TranscriberProxy extends EventEmitter {
 			this.initializeDumpStreams();
 		}
 
+		// Initialize dispatcher connection if configured
+		if (config.dispatcher.wsUrl && this.sessionId) {
+			this.dispatcherConnection = new DispatcherConnection(this.sessionId);
+			this.dispatcherConnection.connect().catch((error) => {
+				logger.error(`Failed to connect to dispatcher for session ${this.sessionId}:`, error.message);
+			});
+		}
+
+		// Set up WebSocket event listeners
+		this.setupWebSocketListeners();
+	}
+
+	/**
+	 * Set up WebSocket event listeners
+	 * Can be called during construction or when reattaching a new WebSocket
+	 */
+	private setupWebSocketListeners(): void {
 		this.ws.addEventListener('close', () => {
 			this.ws.close();
 			this.emit('closed');
@@ -143,6 +164,19 @@ export class TranscriberProxy extends EventEmitter {
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
+			// Send to dispatcher if connected
+			if (this.dispatcherConnection && this.sessionId) {
+				const transcriptText = message.transcript.map((t) => t.text).join(' ');
+				const dispatcherMessage: DispatcherMessage = {
+					sessionId: this.sessionId,
+					endpointId: message.participant?.id || tag,
+					text: transcriptText,
+					timestamp: message.timestamp,
+					language: message.language,
+				};
+				this.dispatcherConnection.send(dispatcherMessage);
+			}
+
 			// Broadcast this transcript to all OTHER tags in the same session
 			const sourceTag = message.participant?.id || tag;
 			const transcriptText = message.transcript.map((t) => t.text).join(' ');
@@ -200,12 +234,58 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
+	/**
+	 * Get the current WebSocket connection
+	 */
+	getWebSocket(): WebSocket {
+		return this.ws;
+	}
+
+	/**
+	 * Get session options
+	 */
+	getOptions(): TranscriberProxyOptions {
+		return this.options;
+	}
+
+	/**
+	 * Reattach this session to a new WebSocket connection
+	 * Used for session resumption after temporary disconnection
+	 */
+	reattachWebSocket(newWs: WebSocket): void {
+		logger.info(`Reattaching WebSocket to session ${this.sessionId}`);
+
+		// Close old WebSocket (may already be closed)
+		try {
+			this.ws.close();
+		} catch (e) {
+			// Ignore - WebSocket might already be closed
+			logger.debug('Old WebSocket already closed during reattach');
+		}
+
+		// Update reference
+		this.ws = newWs;
+
+		// Re-setup listeners on new WebSocket
+		this.setupWebSocketListeners();
+
+		logger.info(
+			`WebSocket reattached to session ${this.sessionId}, ${this.outgoingConnections.size} active connections preserved`,
+		);
+	}
+
 	close(): void {
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
 		});
 		this.outgoingConnections.clear();
 		this.ws.close();
+
+		// Close dispatcher connection if open
+		if (this.dispatcherConnection) {
+			this.dispatcherConnection.close();
+			this.dispatcherConnection = undefined;
+		}
 
 		// Close dump streams if open
 		if (this.dumpStream) {

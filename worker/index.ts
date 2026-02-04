@@ -1,5 +1,4 @@
 import { Container, getContainer } from '@cloudflare/containers';
-import { WorkerEntrypoint } from 'cloudflare:workers';
 
 /**
  * Dispatcher message format for transcription events
@@ -10,23 +9,6 @@ export interface DispatcherTranscriptionMessage {
 	text: string;
 	timestamp: number;
 	language?: string;
-}
-
-/**
- * Response from dispatcher RPC call
- */
-export interface RPCResponse {
-	success: boolean;
-	dispatched: number;
-	errors?: string[];
-	message?: string;
-}
-
-/**
- * Transcription Dispatcher worker interface
- */
-export interface TranscriptionDispatcher extends WorkerEntrypoint<Env> {
-	dispatch(message: DispatcherTranscriptionMessage): Promise<RPCResponse>;
 }
 
 /**
@@ -60,7 +42,7 @@ export class TranscriberContainer extends Container {
 	// Longer = Fewer cold starts, but uses more resources when idle
 	// For pool-based routing: Keep this longer (containers serve many sessions)
 	// For session-based routing: Keep this shorter (containers are session-specific)
-	sleepAfter = '10m';
+	sleepAfter = this.env.SLEEP_AFTER || '1m';
 
 	// Pass environment variables to the container
 	envVars = {
@@ -248,16 +230,47 @@ async function handleWebSocketWithDispatcher(
 	const containerWs = containerResponse.webSocket;
 	containerWs.accept();
 
-	// Prefer queue over RPC (queue doesn't count against subrequest limit)
-	const queue = env.TRANSCRIPTION_QUEUE;
-	const dispatcher = env.TRANSCRIPTION_DISPATCHER;
+	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
+	let dispatcherWs: WebSocket | null = null;
+	if (env.DISPATCHER_DO) {
+		try {
+			const doId = env.DISPATCHER_DO.idFromName('global');
+			const stub = env.DISPATCHER_DO.get(doId);
+
+			const upgradeRequest = new Request('http://dispatcher/websocket', {
+				headers: { 'Upgrade': 'websocket' },
+			});
+			const doResponse = await stub.fetch(upgradeRequest);
+
+			if (doResponse.webSocket) {
+				dispatcherWs = doResponse.webSocket;
+				dispatcherWs.accept();
+				console.log(`Connected to Dispatcher DO via WebSocket for session: ${sessionId}`);
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`Failed to connect to Dispatcher DO: ${msg}`);
+		}
+	}
 
 	// Keep container alive by periodically renewing activity timeout
 	// WebSocket messages bypass the Container class, so sleepAfter doesn't reset automatically
 	const keepAliveInterval = setInterval(() => {
 		container.keepAlive().catch((error) => {
 			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`Container keepAlive failed: ${msg}`);
+			console.error(`Container keepAlive failed: ${msg}, closing connections, sessionId=${sessionId}`);
+
+			// Clean up interval to prevent further keepAlive attempts
+			clearInterval(keepAliveInterval);
+
+			// Close all WebSocket connections when container connection is lost
+			if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+				serverWs.close(1011, `Container connection lost: ${msg}`);
+			}
+			if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
+				containerWs.close(1011, 'Container keepAlive failed');
+			}
+			dispatcherWs?.close(1000, 'Container connection lost');
 		});
 	}, 10_000); // Every 10 seconds
 
@@ -275,8 +288,8 @@ async function handleWebSocketWithDispatcher(
 			serverWs.send(event.data);
 		}
 
-		// Dispatch transcriptions asynchronously (non-blocking)
-		if (typeof event.data === 'string') {
+		// Dispatch transcriptions via DO WebSocket
+		if (dispatcherWs && dispatcherWs.readyState === WebSocket.READY_STATE_OPEN && typeof event.data === 'string') {
 			try {
 				const data = JSON.parse(event.data) as TranscriptionMessage;
 				if (data.type === 'transcription-result' && !data.is_interim) {
@@ -287,33 +300,7 @@ async function handleWebSocketWithDispatcher(
 						timestamp: data.timestamp,
 						language: data.language,
 					};
-
-					// Use queue if available (preferred - no subrequest limit)
-					if (queue) {
-						queue.send(dispatcherMessage).catch((error) => {
-							const msg = error instanceof Error ? error.message : String(error);
-							console.error(`Queue send failed: ${msg}`);
-						});
-					} else if (dispatcher) {
-						// Fall back to RPC (has subrequest limit)
-						dispatcher
-							.dispatch(dispatcherMessage)
-							.then((response) => {
-								if (!response.success || response.errors) {
-									console.error(
-										`Dispatcher error: ${JSON.stringify({
-											message: response.message,
-											errors: response.errors,
-										})}`,
-									);
-								}
-							})
-							.catch((error) => {
-								const msg = error instanceof Error ? error.message : String(error);
-								const stack = error instanceof Error ? error.stack : undefined;
-								console.error(`Dispatcher RPC failed: ${msg}${stack ? '\n' + stack : ''}`);
-							});
-					}
+					dispatcherWs.send(JSON.stringify(dispatcherMessage));
 				}
 			} catch {
 				// Not JSON or parse error - ignore, still forwarded to client
@@ -328,6 +315,7 @@ async function handleWebSocketWithDispatcher(
 		if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			containerWs.close(event.code, event.reason);
 		}
+		dispatcherWs?.close(1000, 'Session ended');
 	});
 
 	containerWs.addEventListener('close', (event) => {
@@ -336,6 +324,7 @@ async function handleWebSocketWithDispatcher(
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
 			serverWs.close(event.code, event.reason || 'Container connection closed');
 		}
+		dispatcherWs?.close(1000, 'Container disconnected');
 	});
 
 	// Handle errors - these fire when connection fails abnormally
@@ -443,7 +432,7 @@ export default {
 		}
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && (env.TRANSCRIPTION_QUEUE || env.TRANSCRIPTION_DISPATCHER)) {
+		if (useDispatcher && upgradeHeader === 'websocket' && env.DISPATCHER_DO) {
 			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
 		}
 

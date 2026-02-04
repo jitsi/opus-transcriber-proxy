@@ -71,7 +71,17 @@ export const config = {
 	dumpBasePath: process.env.DUMP_BASE_PATH || '/tmp',
 	logLevel: process.env.LOG_LEVEL || 'info',
 	debug: process.env.DEBUG === 'true',
-	useDispatcher: process.env.USE_DISPATCHER === 'true'
+	useDispatcher: process.env.USE_DISPATCHER === 'true',
+
+	// Dispatcher WebSocket configuration (for Node.js deployment)
+	dispatcher: {
+		wsUrl: process.env.DISPATCHER_WS_URL || '', // e.g., wss://dispatcher.example.com/ws
+		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
+	},
+
+	// Session resumption configuration
+	sessionResumeEnabled: process.env.SESSION_RESUME_ENABLED !== 'false', // Default true
+	sessionResumeGracePeriod: parseIntOrDefault(process.env.SESSION_RESUME_GRACE_PERIOD, 15), // seconds
 } as const;
 
 /**

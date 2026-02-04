@@ -6,10 +6,14 @@ interface Env {
 	// Durable Object binding for the container
 	TRANSCRIBER: DurableObjectNamespace;
 
-	// Service bindings (kept for backwards compatibility, prefer queue)
+	// Dispatcher Durable Object (for WebSocket connection - preferred)
+	// This avoids the 1000 subrequest limit by using WebSocket messages
+	DISPATCHER_DO?: DurableObjectNamespace;
+
+	// Service bindings (kept for backwards compatibility)
 	TRANSCRIPTION_DISPATCHER?: Service<TranscriptionDispatcher>;
 
-	// Queue binding for transcription dispatch (preferred)
+	// Queue binding for transcription dispatch (fallback)
 	TRANSCRIPTION_QUEUE?: Queue<DispatcherTranscriptionMessage>;
 
 	// Durable Object for auto-scaling
@@ -35,4 +39,5 @@ interface Env {
 	SCALE_DOWN_IDLE_TIME?: string;
 	TRANSLATION_MIXING_MODE?: string;
 	USE_DISPATCHER?: string;
+	SLEEP_AFTER?: string;
 }
