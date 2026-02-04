@@ -5,6 +5,7 @@ import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger from './logger';
+import { sessionManager } from './SessionManager';
 
 // Initialize metric debug logging
 setMetricDebug(config.debug);
@@ -60,67 +61,38 @@ server.on('upgrade', (request, socket, head) => {
 
 let wsConnectionId = 0;
 
-function handleWebSocketConnection(ws: WebSocket, parameters: any) {
-	const { sessionId, sendBack, sendBackInterim, language, provider: requestedProvider, encoding } = parameters;
-	const connectionId = ++wsConnectionId;
-
-	logger.info(
-		`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}, encoding=${encoding}`,
-	);
-
-	// Determine which provider to use
-	let provider: Provider | undefined;
-
-	if (requestedProvider) {
-		// Provider specified in URL
-		if (!isValidProvider(requestedProvider)) {
-			const errorMessage = `Invalid provider: ${requestedProvider}. Valid providers are: openai, gemini, deepgram, dummy`;
-			logger.error(`[WS-${connectionId}] ${errorMessage}`);
-			ws.close(1002, errorMessage);
-			return;
-		}
-
-		if (!isProviderAvailable(requestedProvider)) {
-			const errorMessage = `Provider '${requestedProvider}' is not available. Available providers: ${getAvailableProviders().join(', ')}`;
-			logger.error(`[WS-${connectionId}] ${errorMessage}`);
-			ws.close(1002, errorMessage);
-			return;
-		}
-
-		provider = requestedProvider;
-		logger.info(`[WS-${connectionId}] Using requested provider: ${provider}`);
-	} else {
-		// No provider specified, use default
-		provider = getDefaultProvider() || undefined;
-		logger.info(`[WS-${connectionId}] Using default provider: ${provider}`);
-	}
-
-	// Create transcription session
-	// Within this session, multiple participants (tags) can send audio
-	// Each tag gets its own backend connection, and transcripts are shared between tags
-	const session = new TranscriberProxy(ws, { language, sessionId, provider, encoding });
-
+/**
+ * Set up WebSocket-specific event handlers (called for every connection/reconnection)
+ */
+function setupWebSocketEventListeners(ws: WebSocket, session: TranscriberProxy, connectionId: number, sessionId: string | undefined) {
 	// Handle WebSocket close
 	ws.addEventListener('close', (event) => {
 		logger.info(
 			`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 		);
 		clearInterval(stateCheckInterval);
-		session.close();
+
+		// Detach session instead of closing immediately (if session resumption enabled)
+		if (sessionId && config.sessionResumeEnabled) {
+			sessionManager.detachSession(sessionId, session, connectionId);
+		} else {
+			// No sessionId or resumption disabled - close immediately
+			sessionManager.unregisterSession(sessionId);
+			session.close();
+		}
 	});
 
 	// Handle WebSocket error
 	ws.addEventListener('error', (event) => {
 		const errorMessage = 'WebSocket error';
 		logger.error(`[WS-${connectionId}] Client WebSocket error:`, errorMessage, event);
+		sessionManager.unregisterSession(sessionId);
 		session.close();
 		ws.close(1011, errorMessage);
 	});
 
 	// Log initial WebSocket state
-	logger.debug(
-		`[WS-${connectionId}] Connection established. readyState=${ws.readyState}, sendBack=${sendBack}, sendBackInterim=${sendBackInterim}`,
-	);
+	logger.debug(`[WS-${connectionId}] Connection established. readyState=${ws.readyState}`);
 
 	// Monitor WebSocket state changes
 	let lastReadyState = ws.readyState;
@@ -130,6 +102,17 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 			lastReadyState = ws.readyState;
 		}
 	}, 100);
+}
+
+/**
+ * Set up session event handlers (called only once for new sessions)
+ * Uses parameters stored in session.options
+ */
+function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, connectionId: number, sessionId: string | undefined) {
+	// Get the original parameters from the session options
+	const options = session.getOptions();
+	const sendBack = options.sendBack;
+	const sendBackInterim = options.sendBackInterim;
 
 	// Handle session closed event
 	session.on('closed', () => {
@@ -142,6 +125,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		try {
 			const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 			logger.error(`[WS-${connectionId}] ${message}`);
+			sessionManager.unregisterSession(sessionId);
 			ws.close(1011, message);
 		} catch (closeError) {
 			// Error handlers do not themselves catch errors, so log with logger
@@ -154,17 +138,18 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 	// Handle interim transcriptions
 	if (sendBackInterim) {
 		session.on('interim_transcription', (data: TranscriptionMessage) => {
-			logger.debug(`[WS-${connectionId}] Received interim transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
+			logger.debug(`[WS-${connectionId}] Received interim transcription`);
 			if (sendBack) {
-				// Only send if WebSocket is OPEN (readyState === 1)
-				if (ws.readyState !== 1) {
-					logger.warn(`[WS-${connectionId}] Cannot send interim: not open (readyState=${ws.readyState})`);
+				// Get current WebSocket (may have been reattached)
+				const currentWs = session.getWebSocket();
+				if (!currentWs || currentWs.readyState !== 1) {
+					logger.warn(`[WS-${connectionId}] Cannot send interim: not open (readyState=${currentWs?.readyState})`);
 					return;
 				}
 				try {
 					const message = JSON.stringify(data);
 					logger.debug(`[WS-${connectionId}] Sending interim for ${data.participant?.id}:`, message);
-					ws.send(message);
+					currentWs.send(message);
 					logger.debug(`[WS-${connectionId}] Sent interim successfully`);
 				} catch (error) {
 					logger.error(`[WS-${connectionId}] Failed to send interim:`, error);
@@ -177,7 +162,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 
 	// Handle final transcriptions
 	session.on('transcription', (data: TranscriptionMessage) => {
-		logger.debug(`[WS-${connectionId}] Received final transcription. sendBack=${sendBack}, readyState=${ws.readyState}`);
+		logger.debug(`[WS-${connectionId}] Received final transcription`);
 
 		// Track successful transcription
 		writeMetric(undefined, {
@@ -187,15 +172,16 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		});
 
 		if (sendBack) {
-			// Only send if WebSocket is OPEN (readyState === 1)
-			if (ws.readyState !== 1) {
-				logger.warn(`[WS-${connectionId}] Cannot send final: not open (readyState=${ws.readyState})`);
+			// Get current WebSocket (may have been reattached)
+			const currentWs = session.getWebSocket();
+			if (!currentWs || currentWs.readyState !== 1) {
+				logger.warn(`[WS-${connectionId}] Cannot send final: not open (readyState=${currentWs?.readyState})`);
 				return;
 			}
 			try {
 				const message = JSON.stringify(data);
 				logger.debug(`[WS-${connectionId}] Sending final for ${data.participant?.id}:`, message);
-				ws.send(message);
+				currentWs.send(message);
 				logger.debug(`[WS-${connectionId}] Sent final successfully`);
 			} catch (error) {
 				logger.error(`[WS-${connectionId}] Failed to send final:`, error);
@@ -207,6 +193,85 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
 	});
+}
+
+function handleWebSocketConnection(ws: WebSocket, parameters: any) {
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim } = parameters;
+	const connectionId = ++wsConnectionId;
+
+	logger.info(
+		`[WS-${connectionId}] New WebSocket connection, sessionId=${sessionId}, provider=${requestedProvider || 'default'}, encoding=${encoding}`,
+	);
+
+	let session: TranscriberProxy;
+	let isResume = false;
+
+	// Check for existing session (detached OR active)
+	if (sessionId && sessionManager.hasSession(sessionId)) {
+		// Detached session - resume from grace period
+		try {
+			session = sessionManager.reattachSession(sessionId, ws);
+			isResume = true;
+			logger.info(`[WS-${connectionId}] Session ${sessionId} resumed from detached state (original params will be used)`);
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			logger.error(`[WS-${connectionId}] Failed to resume session ${sessionId}: ${msg}`);
+			ws.close(1011, `Failed to resume session: ${msg}`);
+			return;
+		}
+	} else if (sessionId && sessionManager.hasActiveSession(sessionId)) {
+		// Active session - force-close existing connection and attach new one
+		session = sessionManager.getActiveSession(sessionId)!;
+		session.reattachWebSocket(ws);
+		isResume = true;
+		logger.warn(`[WS-${connectionId}] Duplicate connection for ${sessionId}, force-closing previous connection (original params will be used)`);
+	} else {
+		// Create new session
+		// Determine which provider to use
+		let provider: Provider | undefined;
+
+		if (requestedProvider) {
+			// Provider specified in URL
+			if (!isValidProvider(requestedProvider)) {
+				const errorMessage = `Invalid provider: ${requestedProvider}. Valid providers are: openai, gemini, deepgram, dummy`;
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+
+			if (!isProviderAvailable(requestedProvider)) {
+				const errorMessage = `Provider '${requestedProvider}' is not available. Available providers: ${getAvailableProviders().join(', ')}`;
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+
+			provider = requestedProvider;
+			logger.info(`[WS-${connectionId}] Using requested provider: ${provider}`);
+		} else {
+			// No provider specified, use default
+			provider = getDefaultProvider() || undefined;
+			logger.info(`[WS-${connectionId}] Using default provider: ${provider}`);
+		}
+
+		// Create transcription session
+		// Within this session, multiple participants (tags) can send audio
+		// Each tag gets its own backend connection, and transcripts are shared between tags
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim });
+
+		// Register the new session
+		sessionManager.registerSession(sessionId, session);
+
+		logger.info(`[WS-${connectionId}] Created new session ${sessionId}`);
+	}
+
+	// Setup WebSocket event handlers (always for every connection)
+	setupWebSocketEventListeners(ws, session, connectionId, sessionId);
+
+	// Setup session event handlers (only for new sessions to avoid accumulation)
+	if (!isResume) {
+		setupSessionEventHandlers(ws, session, connectionId, sessionId);
+	}
 }
 
 // Start server
@@ -251,6 +316,14 @@ server.listen(PORT, HOST, () => {
 	}
 	logger.info('');
 
+	// Session resumption settings
+	logger.info('Session Resumption:');
+	logger.info(`  Enabled: ${config.sessionResumeEnabled}`);
+	if (config.sessionResumeEnabled) {
+		logger.info(`  Grace Period: ${config.sessionResumeGracePeriod}s`);
+	}
+	logger.info('');
+
 	// Debug/Development settings
 	logger.info('Debug Settings:');
 	logger.info(`  Log Level: ${config.logLevel}`);
@@ -267,6 +340,10 @@ server.listen(PORT, HOST, () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
 	logger.info('SIGTERM received, closing server...');
+
+	// Shutdown SessionManager first (cleanup detached sessions)
+	sessionManager.shutdown();
+
 	server.close(() => {
 		logger.info('Server closed');
 		process.exit(0);

@@ -78,6 +78,10 @@ export const config = {
 		wsUrl: process.env.DISPATCHER_WS_URL || '', // e.g., wss://dispatcher.example.com/ws
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
 	},
+
+	// Session resumption configuration
+	sessionResumeEnabled: process.env.SESSION_RESUME_ENABLED !== 'false', // Default true
+	sessionResumeGracePeriod: parseIntOrDefault(process.env.SESSION_RESUME_GRACE_PERIOD, 15), // seconds
 } as const;
 
 /**
