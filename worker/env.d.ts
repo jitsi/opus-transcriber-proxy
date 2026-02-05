@@ -1,10 +1,11 @@
 // Environment types for the Cloudflare Worker
 
-import type { TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
+import type { TranscriberContainer, TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
+import type { ContainerCoordinator } from './ContainerCoordinator';
 
-interface Env {
+export interface Env {
 	// Durable Object binding for the container
-	TRANSCRIBER: DurableObjectNamespace;
+	TRANSCRIBER: DurableObjectNamespace<TranscriberContainer>;
 
 	// Dispatcher Durable Object (for WebSocket connection - preferred)
 	// This avoids the 1000 subrequest limit by using WebSocket messages
@@ -17,7 +18,7 @@ interface Env {
 	TRANSCRIPTION_QUEUE?: Queue<DispatcherTranscriptionMessage>;
 
 	// Durable Object for auto-scaling
-	CONTAINER_COORDINATOR: DurableObjectNamespace;
+	CONTAINER_COORDINATOR: DurableObjectNamespace<ContainerCoordinator>;
 
 	// Environment variables
 	OPENAI_API_KEY: string;

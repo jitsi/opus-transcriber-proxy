@@ -1,4 +1,5 @@
 import { Container, getContainer } from '@cloudflare/containers';
+import type { Env } from './env';
 
 /**
  * Dispatcher message format for transcription events
@@ -9,6 +10,13 @@ export interface DispatcherTranscriptionMessage {
 	text: string;
 	timestamp: number;
 	language?: string;
+}
+
+/**
+ * TranscriptionDispatcher service interface
+ */
+export interface TranscriptionDispatcher {
+	fetch(request: Request): Promise<Response>;
 }
 
 /**
@@ -31,7 +39,7 @@ interface TranscriptionMessage {
  * TranscriberContainer wraps the Node.js transcription server
  * and forwards WebSocket requests to it.
  */
-export class TranscriberContainer extends Container {
+export class TranscriberContainer extends Container<Env> {
 	// Port that the Node.js server listens on
 	defaultPort = 8080;
 
@@ -45,12 +53,12 @@ export class TranscriberContainer extends Container {
 	sleepAfter = this.env.SLEEP_AFTER || '1m';
 
 	// Pass environment variables to the container
-	envVars = {
+	envVars: Record<string, string> = {
 		// These will be available as process.env in the container
 		OPENAI_API_KEY: this.env.OPENAI_API_KEY,
 		OPENAI_MODEL: this.env.OPENAI_MODEL || 'gpt-4o-transcribe',
-		GEMINI_API_KEY: this.env.GEMINI_API_KEY,
-		DEEPGRAM_API_KEY: this.env.DEEPGRAM_API_KEY,
+		GEMINI_API_KEY: this.env.GEMINI_API_KEY || '',
+		DEEPGRAM_API_KEY: this.env.DEEPGRAM_API_KEY || '',
 		DEEPGRAM_MODEL: this.env.DEEPGRAM_MODEL || 'nova-3-general',
 		DEEPGRAM_DETECT_LANGUAGE: this.env.DEEPGRAM_DETECT_LANGUAGE || 'true',
 		DEEPGRAM_INCLUDE_LANGUAGE: this.env.DEEPGRAM_INCLUDE_LANGUAGE || 'false',
@@ -69,12 +77,6 @@ export class TranscriberContainer extends Container {
 		HOST: '0.0.0.0',
 	};
 
-	override async fetch(request: Request): Promise<Response> {
-		// Call the parent Container class's fetch() method
-		// which handles forwarding to the default port (8080)
-		return await super.fetch(request);
-	}
-
 	override onStart() {
 		console.log('Transcriber container started');
 	}
@@ -92,25 +94,6 @@ export class TranscriberContainer extends Container {
 		} else {
 			// For other types (Date, objects, etc.), stringify them
 			console.error('Transcriber container error:', JSON.stringify(error));
-		}
-	}
-
-	override async alarm(...args: any[]) {
-		// The base Container class alarm handler logs timestamps improperly
-		// We override it to provide better context and suppress the base logging
-		const scheduledTime = args[0]?.scheduledTime || args[0] || new Date();
-		console.log(`Container alarm triggered for sleep/wake cycle at ${scheduledTime instanceof Date ? scheduledTime.toISOString() : scheduledTime}`);
-
-		try {
-			await super.alarm(...args);
-			console.log(`Container alarm completed successfully`);
-		} catch (error) {
-			if (error instanceof Error) {
-				console.error(`Container alarm error: ${error.message}${error.stack ? '\n' + error.stack : ''}`);
-			} else {
-				console.error(`Container alarm error: ${JSON.stringify(error)}`);
-			}
-			throw error;
 		}
 	}
 
@@ -194,7 +177,7 @@ async function selectContainerInstance(request: Request, env: Env): Promise<stri
  */
 async function handleWebSocketWithDispatcher(
 	request: Request,
-	container: ReturnType<typeof getContainer>,
+	container: ReturnType<typeof getContainer<TranscriberContainer>>,
 	env: Env,
 	ctx: ExecutionContext,
 	sessionId: string,
@@ -385,7 +368,7 @@ export default {
 		const containerInstanceId = await selectContainerInstance(request, env);
 
 		// Get the container instance
-		const container = getContainer(env.TRANSCRIBER, containerInstanceId);
+		const container = getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
 
 		// Start the container and wait for ports to be ready
 		// This is required for the fetch to work properly
