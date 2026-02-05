@@ -1,4 +1,4 @@
-import { OpusDecoder } from './OpusDecoder/OpusDecoder';
+import { OpusDecoder, type OpusDecoderSampleRate } from './OpusDecoder/OpusDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
@@ -38,7 +38,7 @@ export class OutgoingConnection {
 		return this.participant?.id || this.localTag;
 	}
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
-	private opusDecoder?: OpusDecoder<24000>;
+	private opusDecoder?: OpusDecoder<OpusDecoderSampleRate>;
 	private backend?: TranscriptionBackend;
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingAudioDataBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
@@ -77,15 +77,18 @@ export class OutgoingConnection {
 
 	private async initializeOpusDecoder(): Promise<void> {
 		try {
-			logger.debug(`Creating Opus decoder for tag: ${this.localTag}`);
+			// Query backend for preferred sample rate (defaults to 24000 if not specified)
+			const sampleRate = this.backend?.getPreferredSampleRate?.() ?? 24000;
+
+			logger.debug(`Creating Opus decoder for tag: ${this.localTag} at ${sampleRate}Hz`);
 			this.opusDecoder = new OpusDecoder({
-				sampleRate: 24000,
+				sampleRate,
 				channels: 1,
 			});
 
 			await this.opusDecoder.ready;
 			this.decoderStatus = 'ready';
-			logger.debug(`Opus decoder ready for tag: ${this.localTag}`);
+			logger.debug(`Opus decoder ready for tag: ${this.localTag} at ${sampleRate}Hz`);
 			this.processPendingOpusFrames();
 		} catch (error) {
 			logger.error(`Failed to create Opus decoder for tag ${this.localTag}:`, error);

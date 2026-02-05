@@ -50,6 +50,14 @@ export interface TranscriptionBackend {
 	wantsRawOpus?(encoding?: AudioEncoding): boolean;
 
 	/**
+	 * Optional: Returns the preferred sample rate for decoded PCM audio
+	 * Only relevant when wantsRawOpus() returns false (i.e., backend wants decoded PCM)
+	 * @returns Preferred sample rate in Hz (8000, 12000, 16000, 24000, or 48000)
+	 * @default 24000
+	 */
+	getPreferredSampleRate?(): 8000 | 12000 | 16000 | 24000 | 48000;
+
+	/**
 	 * Force the backend to commit/finalize pending audio and generate transcription
 	 * Used when audio stream goes idle
 	 */
