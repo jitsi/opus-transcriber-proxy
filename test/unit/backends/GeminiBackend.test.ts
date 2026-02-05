@@ -177,7 +177,7 @@ describe('GeminiBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow('Connection failed');
-			expect(backend.getStatus()).toBe('closed');
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should call onError callback on WebSocket error', async () => {
@@ -269,7 +269,7 @@ describe('GeminiBackend', () => {
 			const audioMessage = JSON.parse(sentMessages[0]);
 			expect(audioMessage.realtime_input).toBeDefined();
 			expect(audioMessage.realtime_input.media_chunks).toHaveLength(1);
-			expect(audioMessage.realtime_input.media_chunks[0].mime_type).toBe('audio/pcm;rate=24000');
+			expect(audioMessage.realtime_input.media_chunks[0].mime_type).toBe('audio/pcm;rate=16000');
 			expect(audioMessage.realtime_input.media_chunks[0].data).toBe(audioBase64);
 		});
 
@@ -580,7 +580,7 @@ describe('GeminiBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow();
-			expect(backend.getStatus()).toBe('closed');
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should return closed after close', async () => {
