@@ -103,24 +103,6 @@ export class TranscriberContainer extends Container<Env> {
 		}
 	}
 
-	override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
-		// The base Container class alarm handler logs timestamps improperly
-		// We override it to provide better context and suppress the base logging
-		console.log(`Container alarm triggered for sleep/wake cycle (retry: ${alarmProps.isRetry}, count: ${alarmProps.retryCount})`);
-
-		try {
-			await super.alarm(alarmProps);
-			console.log(`Container alarm completed successfully`);
-		} catch (error) {
-			if (error instanceof Error) {
-				console.error(`Container alarm error: ${error.message}${error.stack ? '\n' + error.stack : ''}`);
-			} else {
-				console.error(`Container alarm error: ${JSON.stringify(error)}`);
-			}
-			throw error;
-		}
-	}
-
 	/**
 	 * Keep the container alive by renewing the activity timeout.
 	 * Call this periodically for long-lived WebSocket connections
