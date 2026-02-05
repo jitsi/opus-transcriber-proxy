@@ -198,7 +198,7 @@ describe('DeepgramBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow('Connection failed');
-			expect(backend.getStatus()).toBe('closed');
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should call onError callback on WebSocket error', async () => {
@@ -617,7 +617,7 @@ describe('DeepgramBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow();
-			expect(backend.getStatus()).toBe('closed');
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should return closed after close', async () => {

@@ -117,16 +117,19 @@ export class DeepgramBackend implements TranscriptionBackend {
 				});
 
 				ws.addEventListener('error', (event) => {
-					const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+					// In Node.js, ErrorEvent is not available - handle error generically
+					const errorMessage =
+						typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent
+							? event.message || 'WebSocket error'
+							: 'WebSocket error';
 					logger.error(`Deepgram WebSocket error for tag ${this.tag}: ${errorMessage}`);
 					writeMetric(undefined, {
 						name: 'deepgram_api_error',
 						worker: 'opus-transcriber-proxy',
 						errorType: 'websocket_error',
 					});
-					this.onError?.('websocket_error', 'WebSocket connection error');
 					this.status = 'failed';
-					this.close();
+					this.onError?.('websocket_error', 'WebSocket connection error');
 					reject(new Error(`WebSocket error: ${errorMessage}`));
 				});
 
@@ -134,7 +137,6 @@ export class DeepgramBackend implements TranscriptionBackend {
 					logger.info(
 						`Deepgram WebSocket closed for tag ${this.tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 					);
-					this.status = 'closed';
 					this.close();
 					// Notify OutgoingConnection that the backend has closed
 					this.onClosed?.();
@@ -189,6 +191,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 	}
 
 	close(): void {
+		if (this.status === 'closed') {
+			return; // Already closed, prevent re-entrancy
+		}
 		logger.debug(`Closing Deepgram backend for tag: ${this.tag}`);
 
 		// Stop KeepAlive timer
@@ -206,9 +211,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 			}
 		}
 
-		this.ws?.close();
-		this.ws = undefined;
 		this.status = 'closed';
+		const ws = this.ws;
+		this.ws = undefined;
+		// Close WebSocket after clearing reference to prevent event loops
+		ws?.close();
 	}
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
@@ -220,6 +227,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 		// Use provided encoding or fall back to global config
 		const effectiveEncoding = encoding || config.deepgram.encoding;
 		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
+	}
+
+	getPreferredSampleRate(): 24000 {
+		// When using decoded PCM (linear16 encoding), use 24kHz
+		return 24000;
 	}
 
 	private startKeepAlive(): void {
