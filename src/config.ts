@@ -18,7 +18,7 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	}
 }
 
-export type Provider = 'openai' | 'gemini' | 'deepgram' | 'dummy';
+export type Provider = 'openai' | 'gemini' | 'deepgram' | 'mistral' | 'dummy';
 
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
@@ -46,6 +46,12 @@ export const config = {
 		apiKey: process.env.GEMINI_API_KEY || '',
 		model: process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
 		transcriptionPrompt: process.env.GEMINI_TRANSCRIPTION_PROMPT || undefined,
+	},
+
+	// Mistral configuration
+	mistral: {
+		apiKey: process.env.MISTRAL_API_KEY || '',
+		model: process.env.MISTRAL_MODEL || 'voxtral-mini-transcribe-realtime-2602',
 	},
 
 	// Deepgram configuration
@@ -95,6 +101,8 @@ export function isProviderAvailable(provider: Provider): boolean {
 			return !!config.gemini.apiKey;
 		case 'deepgram':
 			return !!config.deepgram.apiKey;
+		case 'mistral':
+			return !!config.mistral.apiKey;
 		case 'dummy':
 			return config.enableDummyProvider; // Dummy only available if explicitly enabled
 		default:
@@ -106,7 +114,7 @@ export function isProviderAvailable(provider: Provider): boolean {
  * Get all available providers
  */
 export function getAvailableProviders(): Provider[] {
-	const allProviders: Provider[] = ['openai', 'gemini', 'deepgram', 'dummy'];
+	const allProviders: Provider[] = ['openai', 'gemini', 'deepgram', 'mistral', 'dummy'];
 	return allProviders.filter(isProviderAvailable);
 }
 
@@ -127,5 +135,5 @@ export function getDefaultProvider(): Provider | null {
  * Validate that a provider name is valid
  */
 export function isValidProvider(provider: string): provider is Provider {
-	return provider === 'openai' || provider === 'gemini' || provider === 'deepgram' || provider === 'dummy';
+	return provider === 'openai' || provider === 'gemini' || provider === 'deepgram' || provider === 'mistral' || provider === 'dummy';
 }

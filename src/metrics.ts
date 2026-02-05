@@ -41,7 +41,8 @@ export type MetricName =
 	| 'openai_audio_sent' // Deprecated: use backend_audio_sent
 	| 'openai_api_error' // OpenAI-specific API errors
 	| 'gemini_api_error' // Gemini-specific API errors
-	| 'deepgram_api_error'; // Deepgram-specific API errors
+	| 'deepgram_api_error' // Deepgram-specific API errors
+	| 'mistral_api_error'; // Mistral-specific API errors
 
 export interface MetricEvent {
 	name: MetricName;

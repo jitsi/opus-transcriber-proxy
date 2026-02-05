@@ -8,6 +8,7 @@ import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend
 import { OpenAIBackend } from './OpenAIBackend';
 import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
+import { MistralBackend } from './MistralBackend';
 import { DummyBackend } from './DummyBackend';
 
 export function createBackend(tag: string, participantInfo: any, provider?: Provider): TranscriptionBackend {
@@ -22,6 +23,8 @@ export function createBackend(tag: string, participantInfo: any, provider?: Prov
 			return new GeminiBackend(tag, participantInfo);
 		case 'deepgram':
 			return new DeepgramBackend(tag, participantInfo);
+		case 'mistral':
+			return new MistralBackend(tag, participantInfo);
 		case 'dummy':
 			return new DummyBackend(tag, participantInfo);
 		default:
@@ -50,6 +53,12 @@ export function getBackendConfig(provider?: Provider): BackendConfig {
 				language: null, // Will be set per-connection based on options
 				prompt: undefined, // Deepgram doesn't support prompts
 				model: config.deepgram.model,
+			};
+		case 'mistral':
+			return {
+				language: null, // Will be set per-connection based on options
+				prompt: undefined, // Mistral doesn't support mid-stream prompt updates
+				model: config.mistral.model,
 			};
 		case 'dummy':
 			return {
