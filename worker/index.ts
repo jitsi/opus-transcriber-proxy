@@ -77,12 +77,6 @@ export class TranscriberContainer extends Container<Env> {
 		HOST: '0.0.0.0',
 	};
 
-	override async fetch(request: Request): Promise<Response> {
-		// Call the parent Container class's fetch() method
-		// which handles forwarding to the default port (8080)
-		return await super.fetch(request);
-	}
-
 	override onStart() {
 		console.log('Transcriber container started');
 	}
