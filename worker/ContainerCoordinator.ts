@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import type { Env } from './env';
 
 /**
  * Container metadata tracked by the coordinator
@@ -25,9 +26,8 @@ interface CoordinatorConfig {
  * - Auto-scales up when containers reach capacity
  * - Tracks active connections per container
  */
-export class ContainerCoordinator extends DurableObject {
+export class ContainerCoordinator extends DurableObject<Env> {
 	private state: DurableObjectState;
-	private env: Env;
 	private containers: Map<string, ContainerInfo>;
 	private sessionToContainer: Map<string, string>;
 	private nextContainerId: number;
