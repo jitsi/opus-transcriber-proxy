@@ -93,6 +93,9 @@ export class DummyBackend implements TranscriptionBackend {
 	}
 
 	close(): void {
+		if (this.status === 'closed') {
+			return; // Already closed, prevent re-entrancy
+		}
 		logger.debug(`Closing dummy backend for tag: ${this.tag}`);
 
 		this.stats.endTime = Date.now();
@@ -111,6 +114,10 @@ export class DummyBackend implements TranscriptionBackend {
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	getPreferredSampleRate(): 24000 {
+		return 24000; // Dummy backend uses 24kHz for statistics
 	}
 
 	private printStatistics(): void {

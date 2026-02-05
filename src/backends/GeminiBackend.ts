@@ -66,16 +66,19 @@ export class GeminiBackend implements TranscriptionBackend {
 				});
 
 				ws.addEventListener('error', (event) => {
-					const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+					// In Node.js, ErrorEvent is not available - handle error generically
+					const errorMessage =
+						typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent
+							? event.message || 'WebSocket error'
+							: 'WebSocket error';
 					logger.error(`Gemini WebSocket error for tag ${this.tag}: ${errorMessage}`);
 					writeMetric(undefined, {
 						name: 'gemini_api_error',
 						worker: 'opus-transcriber-proxy',
 						errorType: 'websocket_error',
 					});
-					this.onError?.('websocket_error', 'WebSocket connection error');
 					this.status = 'failed';
-					this.close();
+					this.onError?.('websocket_error', 'WebSocket connection error');
 					reject(new Error(`WebSocket error: ${errorMessage}`));
 				});
 
@@ -83,7 +86,6 @@ export class GeminiBackend implements TranscriptionBackend {
 					logger.info(
 						`Gemini WebSocket closed for tag ${this.tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 					);
-					this.status = 'failed';
 					this.close();
 					// Notify OutgoingConnection that the backend has closed
 					this.onClosed?.();
@@ -108,14 +110,12 @@ export class GeminiBackend implements TranscriptionBackend {
 		}
 
 		try {
-			// Note: We need to resample from 24kHz to 16kHz
-			// For now, sending at 24kHz and letting Gemini handle it
-			// TODO: Add proper resampling if needed
+			// Audio is decoded at 16kHz (configured via getPreferredSampleRate())
 			const realtimeInput = {
 				realtime_input: {
 					media_chunks: [
 						{
-							mime_type: `audio/pcm;rate=24000`, // Using 24kHz for now
+							mime_type: `audio/pcm;rate=${GEMINI_SAMPLE_RATE}`,
 							data: audioBase64,
 						},
 					],
@@ -141,15 +141,24 @@ export class GeminiBackend implements TranscriptionBackend {
 	}
 
 	close(): void {
+		if (this.status === 'closed') {
+			return; // Already closed, prevent re-entrancy
+		}
 		logger.debug(`Closing Gemini backend for tag: ${this.tag}`);
-		this.ws?.close();
-		this.ws = undefined;
 		this.status = 'closed';
+		const ws = this.ws;
+		this.ws = undefined;
 		this.setupComplete = false;
+		// Close WebSocket after clearing reference to prevent event loops
+		ws?.close();
 	}
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	getPreferredSampleRate(): 16000 {
+		return GEMINI_SAMPLE_RATE; // Gemini uses 16kHz PCM
 	}
 
 	private sendSetupMessage(): void {
