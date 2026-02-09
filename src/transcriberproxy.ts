@@ -255,6 +255,34 @@ export class TranscriberProxy extends EventEmitter {
 	reattachWebSocket(newWs: WebSocket): void {
 		logger.info(`Reattaching WebSocket to session ${this.sessionId}`);
 
+		// SIMULATION: Create stale backend connections to test reconnection logic
+		// This simulates what happens when transcription provider dies but cleanup doesn't happen
+		const simEnvVar = process.env.SIMULATE_BACKEND_CLOSE_ON_REATTACH;
+		logger.info(`SIMULATE_BACKEND_CLOSE_ON_REATTACH env var = "${simEnvVar}"`);
+		if (simEnvVar === 'true') {
+			logger.warn(`SIMULATION: Creating stale backends on reattach for session ${this.sessionId}, connections: ${this.outgoingConnections.size}`);
+			this.outgoingConnections.forEach((conn, tag) => {
+				const backend = (conn as any).backend;
+				if (backend) {
+					logger.warn(`SIMULATION: Making backend stale for tag ${tag} (setting status=closed, disabling cleanup callback)`);
+					// Disable the onClosed callback BEFORE closing - prevents cleanup from happening
+					backend.onClosed = undefined;
+					// Make the backend appear dead
+					backend.status = 'closed';
+					// Close the WebSocket but cleanup won't happen because onClosed is disabled
+					if (backend.ws) {
+						backend.ws.close();
+						backend.ws = undefined;
+					}
+					// Clear keepalive timer
+					if (backend.keepAliveTimer) {
+						clearInterval(backend.keepAliveTimer);
+						backend.keepAliveTimer = undefined;
+					}
+				}
+			});
+		}
+
 		// Close old WebSocket (may already be closed)
 		try {
 			this.ws.close();

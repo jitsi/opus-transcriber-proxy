@@ -73,6 +73,8 @@ export class TranscriberContainer extends Container<Env> {
 		MIN_CONTAINERS: this.env.MIN_CONTAINERS || '2',
 		SCALE_DOWN_IDLE_TIME: this.env.SCALE_DOWN_IDLE_TIME || '600000',
 		TRANSLATION_MIXING_MODE: this.env.TRANSLATION_MIXING_MODE || 'true',
+		// Testing env vars
+		SIMULATE_BACKEND_CLOSE_ON_REATTACH: this.env.SIMULATE_BACKEND_CLOSE_ON_REATTACH || '',
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};

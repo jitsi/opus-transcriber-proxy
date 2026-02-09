@@ -55,6 +55,9 @@ export class OutgoingConnection {
 	// Transcript history for context injection
 	private transcriptHistory: string = '';
 
+	// Flag to prevent multiple reconnection attempts
+	private isReconnecting: boolean = false;
+
 	onInterimTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
@@ -115,10 +118,12 @@ export class OutgoingConnection {
 
 			// Set up event handlers
 			this.backend.onInterimTranscription = (message) => {
+				logger.info(`OutgoingConnection received interim transcription for ${this.localTag}`);
 				this.onInterimTranscription?.(message);
 			};
 
 			this.backend.onCompleteTranscription = (message) => {
+				logger.info(`OutgoingConnection received complete transcription for ${this.localTag}: "${message.transcript?.[0]?.text}"`);
 				this.clearIdleCommitTimeout();
 				this.onCompleteTranscription?.(message);
 			};
@@ -159,6 +164,46 @@ export class OutgoingConnection {
 			this.onBackendError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
 			this.doClose(true);
 			this.onError?.(this.localTag, `Error initializing transcription backend: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Attempt to reconnect a dead/stale backend connection.
+	 * Queued audio will be flushed once the connection is re-established.
+	 */
+	private async reconnectBackend(): Promise<void> {
+		if (this.isReconnecting) {
+			return;
+		}
+
+		this.isReconnecting = true;
+		logger.info(`Attempting to reconnect backend for tag ${this.localTag}, queued frames: ${this.pendingOpusFrames.length}`);
+
+		try {
+			// Clean up old backend if it exists
+			if (this.backend) {
+				try {
+					this.backend.close();
+				} catch (e) {
+					// Ignore errors when closing stale backend
+				}
+				this.backend = undefined;
+			}
+
+			// Reinitialize the backend (this will also process pending frames)
+			await this.initializeBackend();
+
+			const newBackendStatus = this.backend?.getStatus();
+			logger.info(
+				`Backend reconnected successfully for tag ${this.localTag}, newStatus=${newBackendStatus}, ` +
+					`decoderStatus=${this.decoderStatus}, remainingQueuedFrames=${this.pendingOpusFrames.length}`,
+			);
+		} catch (error) {
+			logger.error(`Failed to reconnect backend for tag ${this.localTag}:`, error);
+			// Don't close the connection entirely - let more frames queue up
+			// and we'll try again on the next frame
+		} finally {
+			this.isReconnecting = false;
 		}
 	}
 
@@ -218,8 +263,31 @@ export class OutgoingConnection {
 		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
 		const backendStatus = this.backend?.getStatus();
 
+		// INFO-level logging for debugging reconnection issues
+		logger.info(
+			`handleMediaEvent for tag ${this.localTag}: backendStatus=${backendStatus}, decoderStatus=${this.decoderStatus}, ` +
+				`wantsRawOpus=${wantsRawOpus}, isReconnecting=${this.isReconnecting}, queuedFrames=${this.pendingOpusFrames.length}`,
+		);
+
+		// Check if backend is in a bad state and needs reconnection
+		if (backendStatus === 'closed' || backendStatus === 'failed' || !this.backend) {
+			logger.warn(`Backend not ready for tag ${this.localTag} (status: ${backendStatus}), attempting reconnect`);
+			// Queue the frame while we reconnect
+			this.pendingOpusFrames.push(opusFrame);
+			this.metricCache.increment({
+				name: 'opus_packet_queued',
+				worker: 'opus-transcriber-proxy',
+			});
+			// Attempt to reconnect (only once, not for every frame)
+			if (!this.isReconnecting) {
+				this.reconnectBackend();
+			}
+			return;
+		}
+
 		if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'connected') {
 			// Send raw Opus frame directly (no decoding, backend is ready)
+			logger.debug(`Sending raw Opus frame to backend for tag ${this.localTag}`);
 			this.sendRawOpusToBackend(opusFrame);
 		} else if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'pending') {
 			// Queue raw Opus frames until backend is ready
@@ -349,10 +417,14 @@ export class OutgoingConnection {
 
 	private processPendingOpusFrames(): void {
 		if (this.pendingOpusFrames.length === 0) {
+			logger.debug(`No queued frames to process for tag: ${this.localTag}`);
 			return;
 		}
 
-		logger.debug(`Processing ${this.pendingOpusFrames.length} queued media payloads for tag: ${this.localTag}`);
+		const backendStatus = this.backend?.getStatus();
+		logger.info(
+			`Processing ${this.pendingOpusFrames.length} queued media payloads for tag: ${this.localTag}, backendStatus=${backendStatus}`,
+		);
 
 		// Process all queued media payloads
 		const queuedPayloads = [...this.pendingOpusFrames];
@@ -361,15 +433,19 @@ export class OutgoingConnection {
 		// Check if backend wants raw Opus or decoded PCM
 		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
 
+		let sentCount = 0;
 		for (const binaryData of queuedPayloads) {
 			if (wantsRawOpus) {
 				// Send raw Opus frame directly
 				this.sendRawOpusToBackend(binaryData);
+				sentCount++;
 			} else {
 				// Decode and send PCM
 				this.processOpusFrame(binaryData);
+				sentCount++;
 			}
 		}
+		logger.info(`Finished processing queued frames for tag ${this.localTag}: sent ${sentCount} frames`);
 	}
 
 	private sendAudioToBackend(encodedAudio: string): void {
@@ -397,6 +473,11 @@ export class OutgoingConnection {
 			return;
 		}
 
+		const backendStatus = this.backend.getStatus();
+		if (backendStatus !== 'connected') {
+			logger.warn(`sendRawOpusToBackend called but backend status is ${backendStatus} for tag ${this.localTag}`);
+		}
+
 		try {
 			// Convert raw Opus frame to base64 and send to backend
 			const base64Opus = Buffer.from(opusFrame).toString('base64');
@@ -407,7 +488,7 @@ export class OutgoingConnection {
 				worker: 'opus-transcriber-proxy',
 			});
 		} catch (error) {
-			logger.error(`Failed to send raw Opus to backend for tag ${this.localTag}`, error);
+			logger.error(`Failed to send raw Opus to backend for tag ${this.localTag}: ${error}`);
 		}
 	}
 

@@ -41,4 +41,6 @@ export interface Env {
 	TRANSLATION_MIXING_MODE?: string;
 	USE_DISPATCHER?: string;
 	SLEEP_AFTER?: string;
+	// Testing env vars
+	SIMULATE_BACKEND_CLOSE_ON_REATTACH?: string;
 }

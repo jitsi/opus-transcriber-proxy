@@ -162,6 +162,12 @@ export class DeepgramBackend implements TranscriptionBackend {
 			// Convert base64 to binary Buffer
 			const audioBuffer = Buffer.from(audioBase64, 'base64');
 
+			// Log first few bytes to check if it's OGG header
+			const header = audioBuffer.slice(0, 4).toString();
+			if (header === 'OggS') {
+				logger.info(`Sending OGG page to Deepgram for ${this.tag} (${audioBuffer.length} bytes)`);
+			}
+
 			// Send as binary frame
 			this.ws.send(audioBuffer);
 		} catch (error) {
@@ -262,6 +268,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 				parsedMessage = JSON.parse(messageText);
 			}
 
+			// Log all incoming Deepgram messages for debugging
+			logger.info(`Deepgram message received for ${this.tag}: type=${parsedMessage?.type}`);
+
 			// Log the event (sanitized)
 			const sanitized = JSON.parse(
 				JSON.stringify(parsedMessage, (key, value) => {
@@ -303,6 +312,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 		// Extract transcript from results
 		const channel = result.channel;
 		if (!channel || !channel.alternatives || channel.alternatives.length === 0) {
+			logger.debug(`Deepgram result for ${this.tag}: no channel/alternatives`);
 			return;
 		}
 
@@ -311,8 +321,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 		// Skip empty transcripts
 		if (!transcript || transcript.trim() === '') {
+			logger.debug(`Deepgram result for ${this.tag}: empty transcript`);
 			return;
 		}
+
+		logger.info(`Deepgram transcript for ${this.tag}: "${transcript}" (is_final=${result.is_final})`);
 
 		const confidence = alternative.confidence;
 		const isFinal = result.is_final === true;
