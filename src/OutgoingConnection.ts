@@ -541,6 +541,16 @@ export class OutgoingConnection {
 		}
 	}
 
+	/**
+	 * Reset chunk tracking state. Call this when the session is reattached to a new WebSocket
+	 * to prevent frames from being discarded as "reordered" when chunk numbers restart from 0.
+	 */
+	resetChunkTracking(): void {
+		logger.info(`Resetting chunk tracking for tag ${this.localTag} (was lastChunkNo=${this.lastChunkNo})`);
+		this.lastChunkNo = -1;
+		this.lastTimestamp = -1;
+	}
+
 	close(): void {
 		this.doClose(false);
 	}
