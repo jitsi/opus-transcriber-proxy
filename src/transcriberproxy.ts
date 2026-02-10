@@ -269,6 +269,12 @@ export class TranscriberProxy extends EventEmitter {
 		// Re-setup listeners on new WebSocket
 		this.setupWebSocketListeners();
 
+		// Reset chunk tracking on all connections so frames from the new client
+		// aren't discarded as "reordered" (chunk numbers restart from 0)
+		this.outgoingConnections.forEach((connection, tag) => {
+			connection.resetChunkTracking();
+		});
+
 		logger.info(
 			`WebSocket reattached to session ${this.sessionId}, ${this.outgoingConnections.size} active connections preserved`,
 		);
