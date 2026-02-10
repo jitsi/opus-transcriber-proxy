@@ -57,6 +57,7 @@ export const config = {
 		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
 		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
 		includeLanguage: process.env.DEEPGRAM_INCLUDE_LANGUAGE === 'true', // Default false
+		tags: process.env.DEEPGRAM_TAGS ? process.env.DEEPGRAM_TAGS.split(',').map((t) => t.trim()).filter((t) => t) : [],
 	},
 
 	server: {
