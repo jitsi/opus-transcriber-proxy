@@ -34,6 +34,7 @@ vi.mock('../../../src/config', () => ({
 			punctuate: true,
 			diarize: false,
 			includeLanguage: false,
+			tags: ['test-tag-1', 'test-tag-2'],
 		},
 	},
 }));
@@ -142,6 +143,22 @@ describe('DeepgramBackend', () => {
 
 			expect(mockWsManager.mockWs.url).toContain('punctuate=true');
 			expect(mockWsManager.mockWs.url).toContain('diarize=false');
+		});
+
+		it('should include tags in URL if configured', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const config: BackendConfig = {
+				model: 'nova-2',
+				language: null,
+				prompt: undefined,
+			};
+
+			const connectPromise = backend.connect(config);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).toContain('tag=test-tag-1');
+			expect(mockWsManager.mockWs.url).toContain('tag=test-tag-2');
 		});
 
 		it('should start KeepAlive timer on connection', async () => {

@@ -64,6 +64,7 @@ export class TranscriberContainer extends Container<Env> {
 		DEEPGRAM_INCLUDE_LANGUAGE: this.env.DEEPGRAM_INCLUDE_LANGUAGE || 'false',
 		DEEPGRAM_PUNCTUATE: this.env.DEEPGRAM_PUNCTUATE || 'true',
 		DEEPGRAM_ENCODING: this.env.DEEPGRAM_ENCODING || 'opus',
+		DEEPGRAM_TAGS: this.env.DEEPGRAM_TAGS || '',
 		PROVIDERS_PRIORITY: this.env.PROVIDERS_PRIORITY || 'openai',
 		FORCE_COMMIT_TIMEOUT: this.env.FORCE_COMMIT_TIMEOUT || '2',
 		DEBUG: this.env.DEBUG || 'true',

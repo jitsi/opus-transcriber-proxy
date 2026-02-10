@@ -30,6 +30,7 @@ export interface Env {
 	DEEPGRAM_INCLUDE_LANGUAGE?: string;
 	DEEPGRAM_PUNCTUATE?: string;
 	DEEPGRAM_ENCODING?: string;
+	DEEPGRAM_TAGS?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;
