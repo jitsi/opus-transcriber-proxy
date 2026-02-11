@@ -45,4 +45,5 @@ export interface Env {
 	OTLP_ENDPOINT?: string;
 	OTLP_ENV?: string;
 	OTLP_RESOURCE_ATTRIBUTES?: string;
+	OTLP_HEADERS?: string;
 }

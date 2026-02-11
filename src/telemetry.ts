@@ -45,9 +45,17 @@ export function initTelemetry(): void {
 	const resource = new Resource(resourceAttributes);
 
 	// Create OTLP exporter
-	const exporter = new OTLPMetricExporter({
+	const exporterConfig: { url: string; headers?: Record<string, string> } = {
 		url: `${config.otlp.endpoint}/v1/metrics`,
-	});
+	};
+
+	// Add custom headers if configured (for authentication)
+	if (Object.keys(config.otlp.headers).length > 0) {
+		exporterConfig.headers = config.otlp.headers;
+		logger.info('OTLP exporter configured with custom headers');
+	}
+
+	const exporter = new OTLPMetricExporter(exporterConfig);
 
 	// Create metric reader with periodic export
 	const metricReader = new PeriodicExportingMetricReader({

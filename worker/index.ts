@@ -77,6 +77,7 @@ export class TranscriberContainer extends Container<Env> {
 		OTLP_ENDPOINT: this.env.OTLP_ENDPOINT || '',
 		OTLP_ENV: this.env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: this.env.OTLP_RESOURCE_ATTRIBUTES || '',
+		OTLP_HEADERS: this.env.OTLP_HEADERS || '',
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};

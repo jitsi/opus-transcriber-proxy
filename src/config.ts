@@ -92,6 +92,8 @@ export const config = {
 		exportIntervalMs: parseIntOrDefault(process.env.OTLP_EXPORT_INTERVAL_MS, 60000), // Default 60s
 		// Additional resource attributes as JSON
 		resourceAttributes: parseJsonOrDefault<Record<string, string>>(process.env.OTLP_RESOURCE_ATTRIBUTES, {}),
+		// Custom headers for authentication (e.g., CF Zero Trust, API keys)
+		headers: parseJsonOrDefault<Record<string, string>>(process.env.OTLP_HEADERS, {}),
 	},
 } as const;
 
