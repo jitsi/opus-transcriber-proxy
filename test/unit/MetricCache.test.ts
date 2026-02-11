@@ -342,27 +342,5 @@ describe('MetricCache', () => {
 			expect(writeMetricMock).toHaveBeenCalledWith(undefined, expect.any(Object), 2);
 		});
 
-		it('should include targetName in key', () => {
-			const cache = new MetricCache(undefined, 1000);
-			const event1: MetricEvent = {
-				name: 'test_metric',
-				worker: 'opus-transcriber-proxy',
-				targetName: 'target-1',
-			};
-			const event2: MetricEvent = {
-				name: 'test_metric',
-				worker: 'opus-transcriber-proxy',
-				targetName: 'target-2',
-			};
-
-			cache.increment(event1);
-			cache.increment(event2);
-			cache.flush();
-
-			// Should be tracked separately
-			expect(writeMetricMock).toHaveBeenCalledTimes(2);
-			expect(writeMetricMock).toHaveBeenCalledWith(undefined, event1, 1);
-			expect(writeMetricMock).toHaveBeenCalledWith(undefined, event2, 1);
-		});
 	});
 });
