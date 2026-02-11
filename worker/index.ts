@@ -74,6 +74,9 @@ export class TranscriberContainer extends Container<Env> {
 		MIN_CONTAINERS: this.env.MIN_CONTAINERS || '2',
 		SCALE_DOWN_IDLE_TIME: this.env.SCALE_DOWN_IDLE_TIME || '600000',
 		TRANSLATION_MIXING_MODE: this.env.TRANSLATION_MIXING_MODE || 'true',
+		OTLP_ENDPOINT: this.env.OTLP_ENDPOINT || '',
+		OTLP_ENV: this.env.OTLP_ENV || '',
+		OTLP_RESOURCE_ATTRIBUTES: this.env.OTLP_RESOURCE_ATTRIBUTES || '',
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};

@@ -42,4 +42,7 @@ export interface Env {
 	TRANSLATION_MIXING_MODE?: string;
 	USE_DISPATCHER?: string;
 	SLEEP_AFTER?: string;
+	OTLP_ENDPOINT?: string;
+	OTLP_ENV?: string;
+	OTLP_RESOURCE_ATTRIBUTES?: string;
 }
