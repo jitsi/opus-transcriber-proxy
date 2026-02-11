@@ -105,6 +105,17 @@ Set environment variables or use a `.env` file:
 
 See [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) for details.
 
+### Observability (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTLP_ENDPOINT` | (empty) | OTLP HTTP endpoint (disabled if empty) |
+| `OTLP_ENV` | (empty) | Environment label |
+| `OTLP_RESOURCE_ATTRIBUTES` | `{}` | Additional resource attributes (JSON) |
+| `OTLP_HEADERS` | `{}` | Auth headers (JSON) |
+
+See [OBSERVABILITY.md](OBSERVABILITY.md) for available metrics, queries, and authentication.
+
 ## WebSocket Protocol
 
 ### Connection
@@ -258,6 +269,7 @@ See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md
 - [CLOUDFLARE_DEPLOYMENT.md](CLOUDFLARE_DEPLOYMENT.md) - Cloudflare setup
 - [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) - External dispatcher
 - [CONTAINER_ROUTING.md](CONTAINER_ROUTING.md) - Container routing modes
+- [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics and monitoring
 - [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) - Message debugging
 - [AUDIO_MIXING.md](AUDIO_MIXING.md) - Audio extraction tool
 
