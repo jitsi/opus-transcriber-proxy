@@ -6,6 +6,7 @@ import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig } from './backends/BackendFactory';
 import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import { getInstruments } from './telemetry/instruments';
 
 // The maximum number of bytes of audio to buffer before sending.
 // 15 MiB of base64-encoded audio = ~4 minutes of audio at 24000 Hz
@@ -115,15 +116,21 @@ export class OutgoingConnection {
 
 			// Set up event handlers
 			this.backend.onInterimTranscription = (message) => {
+				// OTel metrics: track interim transcription received
+				getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'true' });
 				this.onInterimTranscription?.(message);
 			};
 
 			this.backend.onCompleteTranscription = (message) => {
+				// OTel metrics: track final transcription received
+				getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'false' });
 				this.clearIdleCommitTimeout();
 				this.onCompleteTranscription?.(message);
 			};
 
 			this.backend.onError = (errorType, errorMessage) => {
+				// OTel metrics: track backend errors
+				getInstruments().backendErrorsTotal.add(1, { provider: this.options.provider || 'unknown', type: errorType });
 				this.onBackendError?.(errorType, errorMessage);
 				this.doClose(true);
 				this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
@@ -131,6 +138,8 @@ export class OutgoingConnection {
 
 			this.backend.onClosed = () => {
 				logger.info(`Backend closed for tag ${this.localTag}, cleaning up OutgoingConnection`);
+				// OTel metrics: decrement backend connection count
+				getInstruments().backendConnectionsActive.add(-1);
 				// Close this OutgoingConnection and notify TranscriberProxy to remove it
 				this.doClose(true);
 			};
@@ -141,7 +150,14 @@ export class OutgoingConnection {
 			backendConfig.encoding = this.options.encoding;
 
 			// Connect the backend
+			const connectStartTime = Date.now();
 			await this.backend.connect(backendConfig);
+			const connectDurationSec = (Date.now() - connectStartTime) / 1000;
+
+			// OTel metrics: track backend connection
+			const instruments = getInstruments();
+			instruments.backendConnectionsActive.add(1);
+			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
 
 			logger.info(`Transcription backend connected for tag: ${this.localTag}`);
 
@@ -189,6 +205,11 @@ export class OutgoingConnection {
 			name: 'opus_packet_received',
 			worker: 'opus-transcriber-proxy',
 		});
+
+		// OTel metrics: track audio received from client
+		const instruments = getInstruments();
+		instruments.clientAudioChunksTotal.add(1);
+		instruments.clientAudioBytesTotal.add(opusFrame.length);
 
 		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
 			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
@@ -385,6 +406,11 @@ export class OutgoingConnection {
 				name: 'backend_audio_sent',
 				worker: 'opus-transcriber-proxy',
 			});
+
+			// OTel metrics: estimate raw bytes from base64 length
+			// Base64 encodes 3 bytes as 4 chars, so rawBytes ≈ base64Length * 3/4
+			const estimatedRawBytes = Math.floor((encodedAudio.length * 3) / 4);
+			getInstruments().backendAudioSentBytesTotal.add(estimatedRawBytes, { provider: this.options.provider || 'unknown' });
 		} catch (error) {
 			logger.error(`Failed to send audio to backend for tag ${this.localTag}`, error);
 			// TODO should this call onError?
@@ -406,6 +432,9 @@ export class OutgoingConnection {
 				name: 'backend_opus_sent',
 				worker: 'opus-transcriber-proxy',
 			});
+
+			// OTel metrics: track raw Opus bytes sent
+			getInstruments().backendAudioSentBytesTotal.add(opusFrame.length, { provider: this.options.provider || 'unknown' });
 		} catch (error) {
 			logger.error(`Failed to send raw Opus to backend for tag ${this.localTag}`, error);
 		}

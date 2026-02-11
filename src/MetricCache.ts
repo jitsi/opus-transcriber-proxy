@@ -69,7 +69,6 @@ export class MetricCache {
 			name: event.name,
 			worker: event.worker,
 			errorType: event.errorType ?? '',
-			targetName: event.targetName ?? '',
 		});
 	}
 }

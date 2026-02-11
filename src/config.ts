@@ -83,6 +83,16 @@ export const config = {
 	// Session resumption configuration
 	sessionResumeEnabled: process.env.SESSION_RESUME_ENABLED !== 'false', // Default true
 	sessionResumeGracePeriod: parseIntOrDefault(process.env.SESSION_RESUME_GRACE_PERIOD, 15), // seconds
+
+	// OpenTelemetry configuration (container only)
+	// Telemetry is disabled if OTLP_ENDPOINT is not set
+	otlp: {
+		endpoint: process.env.OTLP_ENDPOINT || '', // OTLP HTTP endpoint
+		env: process.env.OTLP_ENV || '', // Environment label (e.g., dev, staging, prod)
+		exportIntervalMs: parseIntOrDefault(process.env.OTLP_EXPORT_INTERVAL_MS, 60000), // Default 60s
+		// Additional resource attributes as JSON
+		resourceAttributes: parseJsonOrDefault<Record<string, string>>(process.env.OTLP_RESOURCE_ATTRIBUTES, {}),
+	},
 } as const;
 
 /**
