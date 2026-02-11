@@ -6,6 +6,11 @@ import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy'
 import { setMetricDebug, writeMetric } from './metrics';
 import logger from './logger';
 import { sessionManager } from './SessionManager';
+import { initTelemetry, shutdownTelemetry, isTelemetryEnabled } from './telemetry';
+import { getInstruments } from './telemetry/instruments';
+
+// Initialize OpenTelemetry (must be before other initialization)
+initTelemetry();
 
 // Initialize metric debug logging
 setMetricDebug(config.debug);
@@ -71,6 +76,9 @@ function setupWebSocketEventListeners(ws: WebSocket, session: TranscriberProxy, 
 			`[WS-${connectionId}] Client WebSocket closed: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 		);
 		clearInterval(stateCheckInterval);
+
+		// Metrics: track WebSocket close events by code
+		getInstruments().clientWebsocketCloseTotal.add(1, { code: String(event.code) });
 
 		// Detach session instead of closing immediately (if session resumption enabled)
 		if (sessionId && config.sessionResumeEnabled) {
@@ -150,6 +158,11 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 					const message = JSON.stringify(data);
 					logger.debug(`[WS-${connectionId}] Sending interim for ${data.participant?.id}:`, message);
 					currentWs.send(message);
+					// OTel metrics: track transcription delivery
+					getInstruments().transcriptionsDeliveredTotal.add(1, {
+						provider: options.provider || 'unknown',
+						is_interim: 'true',
+					});
 					logger.debug(`[WS-${connectionId}] Sent interim successfully`);
 				} catch (error) {
 					logger.error(`[WS-${connectionId}] Failed to send interim:`, error);
@@ -182,6 +195,11 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 				const message = JSON.stringify(data);
 				logger.debug(`[WS-${connectionId}] Sending final for ${data.participant?.id}:`, message);
 				currentWs.send(message);
+				// OTel metrics: track transcription delivery
+				getInstruments().transcriptionsDeliveredTotal.add(1, {
+					provider: options.provider || 'unknown',
+					is_interim: 'false',
+				});
 				logger.debug(`[WS-${connectionId}] Sent final successfully`);
 			} catch (error) {
 				logger.error(`[WS-${connectionId}] Failed to send final:`, error);
@@ -333,16 +351,29 @@ server.listen(PORT, HOST, () => {
 	if (config.dumpWebSocketMessages || config.dumpTranscripts) {
 		logger.info(`  Dump Base Path: ${config.dumpBasePath}`);
 	}
+	logger.info('');
+
+	// Telemetry settings
+	logger.info('Telemetry:');
+	logger.info(`  Enabled: ${isTelemetryEnabled()}`);
+	if (isTelemetryEnabled()) {
+		logger.info(`  OTLP Endpoint: ${config.otlp.endpoint}`);
+		logger.info(`  Environment: ${config.otlp.env || '(not set)'}`);
+		logger.info(`  Export Interval: ${config.otlp.exportIntervalMs}ms`);
+	}
 
 	logger.info('='.repeat(60));
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
 	logger.info('SIGTERM received, closing server...');
 
 	// Shutdown SessionManager first (cleanup detached sessions)
 	sessionManager.shutdown();
+
+	// Shutdown telemetry (flush pending metrics)
+	await shutdownTelemetry();
 
 	server.close(() => {
 		logger.info('Server closed');

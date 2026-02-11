@@ -6,6 +6,7 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { getInstruments } from './telemetry/instruments';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -35,6 +36,7 @@ export class TranscriberProxy extends EventEmitter {
 	private transcriptDumpStream?: fs.WriteStream;
 	private sessionId?: string;
 	private dispatcherConnection?: DispatcherConnection;
+	private createdAt: number;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -42,6 +44,7 @@ export class TranscriberProxy extends EventEmitter {
 		this.options = options;
 		this.sessionId = options.sessionId;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
+		this.createdAt = Date.now();
 
 		// Initialize dump streams if enabled
 		if (config.dumpWebSocketMessages || config.dumpTranscripts) {
@@ -187,12 +190,18 @@ export class TranscriberProxy extends EventEmitter {
 		};
 		newConnection.onClosed = (tag) => {
 			this.outgoingConnections.delete(tag);
+			// Metrics: decrement participant count
+			getInstruments().participantsActive.add(-1);
 		};
 		newConnection.onError = (tag, error) => {
 			this.emit('error', tag, error);
 		};
 
 		this.outgoingConnections.set(tag, newConnection);
+
+		// Metrics: increment participant count
+		getInstruments().participantsActive.add(1);
+
 		logger.info(`Created outgoing connection for tag: ${tag} (total connections: ${this.outgoingConnections.size})`);
 		return newConnection;
 	}
@@ -246,6 +255,13 @@ export class TranscriberProxy extends EventEmitter {
 	 */
 	getOptions(): TranscriberProxyOptions {
 		return this.options;
+	}
+
+	/**
+	 * Get session duration in seconds
+	 */
+	getSessionDurationSec(): number {
+		return (Date.now() - this.createdAt) / 1000;
 	}
 
 	/**

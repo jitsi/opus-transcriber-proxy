@@ -2,6 +2,7 @@ import { WebSocket } from 'ws';
 import { config } from './config';
 import logger from './logger';
 import type { TranscriberProxy } from './transcriberproxy';
+import { getInstruments } from './telemetry/instruments';
 
 interface DetachedSession {
 	transcriberProxy: TranscriberProxy;
@@ -38,6 +39,12 @@ class SessionManager {
 	registerSession(sessionId: string | undefined, proxy: TranscriberProxy): void {
 		if (!sessionId) return;
 		this.activeSessions.set(sessionId, proxy);
+
+		// Metrics
+		const instruments = getInstruments();
+		instruments.sessionsActive.add(1);
+		instruments.sessionStartsTotal.add(1, { provider: proxy.getOptions().provider || 'unknown' });
+
 		logger.debug(`Session ${sessionId} registered in active sessions (total: ${this.activeSessions.size})`);
 	}
 
@@ -61,7 +68,15 @@ class SessionManager {
 	 */
 	unregisterSession(sessionId: string | undefined): void {
 		if (!sessionId) return;
+		const wasActive = this.activeSessions.has(sessionId);
 		this.activeSessions.delete(sessionId);
+
+		// Metrics: decrement active if it was tracked
+		if (wasActive) {
+			const instruments = getInstruments();
+			instruments.sessionsActive.add(-1);
+		}
+
 		logger.debug(`Session ${sessionId} unregistered from active sessions (total: ${this.activeSessions.size})`);
 	}
 
@@ -86,6 +101,11 @@ class SessionManager {
 
 		// Remove from active sessions (it's now detached)
 		this.activeSessions.delete(sessionId);
+
+		// Metrics: decrement active, increment detached
+		const instruments = getInstruments();
+		instruments.sessionsActive.add(-1);
+		instruments.sessionsDetached.add(1);
 
 		// Create grace period timer
 		const timer = setTimeout(() => {
@@ -131,6 +151,12 @@ class SessionManager {
 		// Add back to active sessions
 		this.activeSessions.set(sessionId, session.transcriberProxy);
 
+		// Metrics: decrement detached, increment active, count reattachment
+		const instruments = getInstruments();
+		instruments.sessionsDetached.add(-1);
+		instruments.sessionsActive.add(1);
+		instruments.sessionReattachmentsTotal.add(1);
+
 		const elapsedMs = Date.now() - session.detachedAt;
 		logger.info(
 			`Session ${sessionId} resumed after ${elapsedMs}ms (detached: ${this.detachedSessions.size}, active: ${this.activeSessions.size})`,
@@ -159,6 +185,14 @@ class SessionManager {
 
 		// Remove from detached sessions
 		this.detachedSessions.delete(sessionId);
+
+		// Metrics: decrement detached, record session duration
+		const instruments = getInstruments();
+		instruments.sessionsDetached.add(-1);
+		const sessionDurationSec = session.transcriberProxy.getSessionDurationSec();
+		if (sessionDurationSec > 0) {
+			instruments.sessionDurationSeconds.record(sessionDurationSec);
+		}
 
 		// Close the session (closes all backend connections, etc.)
 		session.transcriberProxy.close();

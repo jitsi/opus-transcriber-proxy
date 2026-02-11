@@ -9,6 +9,7 @@
 import { WebSocket } from 'ws';
 import logger from './logger';
 import { config } from './config';
+import { getInstruments } from './telemetry/instruments';
 
 export interface DispatcherMessage {
 	sessionId: string;
@@ -94,6 +95,7 @@ export class DispatcherConnection {
 		if (this.ws?.readyState === WebSocket.OPEN) {
 			try {
 				this.ws.send(JSON.stringify(message));
+				getInstruments().dispatcherMessagesSentTotal.add(1);
 				logger.debug(`Sent transcription to dispatcher for session ${this.sessionId}: ${message.text.substring(0, 50)}...`);
 			} catch (error) {
 				logger.error(`Failed to send to dispatcher for session ${this.sessionId}:`, error);

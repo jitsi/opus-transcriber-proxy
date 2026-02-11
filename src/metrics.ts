@@ -22,10 +22,6 @@ export function setMetricDebug(enabled: boolean): void {
 }
 
 export type MetricName =
-	| 'ingester_success'
-	| 'ingester_failure'
-	| 'dispatcher_success'
-	| 'dispatcher_failure'
 	| 'transcription_success'
 	| 'transcription_failure'
 	| 'opus_packet_received'
@@ -34,40 +30,26 @@ export type MetricName =
 	| 'opus_packet_decoded'
 	| 'opus_decode_failure'
 	| 'opus_packet_discarded'
-	| 'backend_audio_queued' // Audio queued for transcription backend
-	| 'backend_audio_sent' // Audio sent to transcription backend (decoded PCM)
-	| 'backend_opus_sent' // Raw Opus frames sent to transcription backend
-	| 'openai_audio_queued' // Deprecated: use backend_audio_queued
-	| 'openai_audio_sent' // Deprecated: use backend_audio_sent
-	| 'openai_api_error' // OpenAI-specific API errors
-	| 'gemini_api_error' // Gemini-specific API errors
-	| 'deepgram_api_error'; // Deepgram-specific API errors
+	| 'backend_audio_queued'
+	| 'backend_audio_sent'
+	| 'backend_opus_sent'
+	| 'openai_api_error'
+	| 'gemini_api_error'
+	| 'deepgram_api_error';
 
 export interface MetricEvent {
 	name: MetricName;
-	worker: 'webhook-ingester' | 'transcription-dispatcher' | 'opus-transcriber-proxy';
+	worker: 'opus-transcriber-proxy';
 	errorType?: string;
 	sessionId?: string;
-	targetName?: string;
 	latencyMs?: number;
 }
 
 /**
- * Writes a metric data point (Node.js version - logs to console instead of Analytics Engine)
- *
- * Schema (for reference, not used in Node.js):
- * - blob1: metric_name (e.g., 'ingester_success', 'transcription_failure')
- * - blob2: worker_name (e.g., 'webhook-ingester')
- * - blob3: error_type (optional, for failures)
- * - blob4: session_id (optional, for correlation)
- * - blob5: target_name (optional, for dispatcher)
- * - double1: count (default 1)
- * - double2: latency_ms (optional)
- * - index1: session_id (for sampling)
+ * Writes a metric data point (legacy - logs to console when debug enabled)
+ * Note: New metrics should use OpenTelemetry via telemetry/instruments.ts
  */
 export function writeMetric(analytics: undefined, event: MetricEvent, count: number = 1): void {
-	// In Node.js, we log metrics when debug is enabled
-	// Cloudflare Analytics Engine is not available
 	if (debugMetrics) {
 		logger.debug(
 			'[METRIC]',
@@ -76,7 +58,6 @@ export function writeMetric(analytics: undefined, event: MetricEvent, count: num
 				worker: event.worker,
 				errorType: event.errorType,
 				sessionId: event.sessionId,
-				targetName: event.targetName,
 				count,
 				latencyMs: event.latencyMs,
 			}),
