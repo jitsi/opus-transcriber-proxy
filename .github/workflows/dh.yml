@@ -5,6 +5,15 @@ on:
             - main
     workflow_dispatch:
         inputs:
+            branch:
+                description: Branch to build from
+                type: string
+                required: false
+                default: "main"
+            custom_tag:
+                description: Custom tag to add (optional)
+                type: string
+                required: false
             emsdk_version:
                 description: Emscripten SDK version, defaults to 4.0.20
                 type: string
@@ -18,6 +27,7 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v6
               with:
+                  ref: ${{ inputs.branch || github.ref }}
                   submodules: 'true'
 
             - name: Install Linux deps
@@ -68,6 +78,20 @@ jobs:
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
 
+            - name: Generate Docker tags
+              id: meta
+              run: |
+                  SHORT_SHA="${{ github.sha }}"
+                  SHORT_SHA="${SHORT_SHA:0:7}"
+                  TAGS="jitsi/opus-transcriber-proxy:${{ github.sha }},jitsi/opus-transcriber-proxy:$SHORT_SHA"
+                  if [ "${{ inputs.branch }}" = "main" ] || [ "${{ inputs.branch }}" = "" ]; then
+                    TAGS="$TAGS,jitsi/opus-transcriber-proxy:latest"
+                  fi
+                  if [ -n "${{ inputs.custom_tag }}" ]; then
+                    TAGS="$TAGS,jitsi/opus-transcriber-proxy:${{ inputs.custom_tag }}"
+                  fi
+                  echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
             - name: Build and push Docker image
               uses: docker/build-push-action@v6
               with:
@@ -75,6 +99,4 @@ jobs:
                   platforms: linux/amd64,linux/arm64
                   pull: true
                   push: true
-                  tags: |
-                      jitsi/opus-transcriber-proxy:latest
-                      jitsi/opus-transcriber-proxy:${{ github.sha }}
+                  tags: ${{ steps.meta.outputs.tags }}
