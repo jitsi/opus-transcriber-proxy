@@ -10,6 +10,7 @@ import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
+import { toLanguageName } from '../languageMap';
 
 // Gemini WebSocket API endpoint (v1beta - more stable than v1alpha)
 const GEMINI_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -163,7 +164,8 @@ export class GeminiBackend implements TranscriptionBackend {
 		let systemInstruction = this.backendConfig.prompt || 'Transcribe the following audio. Output only the transcribed text.';
 
 		if (this.backendConfig.language) {
-			systemInstruction += ` The audio is in ${this.backendConfig.language}.`;
+			const languageName = toLanguageName(this.backendConfig.language);
+			systemInstruction += ` The audio is in ${languageName}.`;
 		}
 
 		const setupMessage = {
