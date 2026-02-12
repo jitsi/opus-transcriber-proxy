@@ -70,15 +70,13 @@ export class DeepgramBackend implements TranscriptionBackend {
 				}
 
 				// Language configuration
-				// Use per-connection language if specified, otherwise use global config
-				const language = backendConfig.language || config.deepgram.language;
-				if (language) {
-					params.set('language', language);
-					// For multilingual streaming, add recommended endpointing
-					// See: https://developers.deepgram.com/docs/multilingual-code-switching
-					if (language === 'multi') {
-						params.set('endpointing', '100');
-					}
+				// Use per-connection language if specified, otherwise auto-detect (multi)
+				const language = backendConfig.language || 'multi';
+				params.set('language', language);
+				// For multilingual streaming, add recommended endpointing
+				// See: https://developers.deepgram.com/docs/multilingual-code-switching
+				if (language === 'multi') {
+					params.set('endpointing', '100');
 				}
 
 				// Note: detect_language is NOT supported for streaming
