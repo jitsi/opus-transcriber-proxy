@@ -1,6 +1,6 @@
 # Observability
 
-Metrics are exported via OpenTelemetry Protocol (OTLP) HTTP to a Prometheus-compatible endpoint (e.g., Grafana Alloy, OpenTelemetry Collector).
+Metrics and logs are exported via OpenTelemetry Protocol (OTLP) HTTP to compatible endpoints (e.g., Grafana Alloy, OpenTelemetry Collector, Loki).
 
 ## Configuration
 
@@ -123,3 +123,72 @@ Suggested panels:
 - **Backend Latency**: `histogram_quantile(0.95, sum(rate(otp_backend_connection_duration_seconds_bucket[5m])) by (le))`
 - **Error Rate**: `sum(rate(otp_backend_errors_total[5m])) by (provider)`
 - **Audio Throughput**: `rate(otp_client_audio_bytes_total[5m])`
+
+---
+
+## Logs
+
+Logs are exported via OTLP HTTP to Loki (or any OTLP-compatible log backend). Winston logs are bridged to OpenTelemetry using `@opentelemetry/winston-transport`.
+
+### Behavior
+
+- **OTLP disabled** (`OTLP_ENDPOINT` not set): Logs go to stdout only (Console transport)
+- **OTLP enabled**: Logs go to both stdout AND the OTLP endpoint
+- **OTLP endpoint unavailable**: Logs are queued in memory (max 2048), retried with backoff. Oldest logs dropped if queue fills. Console output continues working.
+
+### Batching
+
+Logs are batched before sending to reduce network overhead:
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| `scheduledDelayMillis` | 5000 | Flush every 5 seconds |
+| `maxQueueSize` | 2048 | Max buffered logs before dropping |
+| `maxExportBatchSize` | 512 | Logs per HTTP request |
+| `exportTimeoutMillis` | 30000 | Export timeout |
+
+### Log Labels
+
+The following labels are set on all logs (same as metrics):
+
+| Label | Source | Description |
+|-------|--------|-------------|
+| `service_name` | hardcoded | `opus-transcriber-proxy` |
+| `deployment_environment` | `OTLP_ENV` | Environment name |
+| `env` | `OTLP_ENV` | Environment name |
+| `level` | Winston | Log level (info, warn, error, debug) |
+| `severity_number` | OTel | Numeric severity (9=INFO, 13=WARN, 17=ERROR) |
+
+### Example LogQL Queries
+
+```logql
+# All logs from this service
+{service_name="opus-transcriber-proxy"}
+
+# Errors only
+{service_name="opus-transcriber-proxy"} | level="error"
+
+# Filter by environment
+{service_name="opus-transcriber-proxy", deployment_environment="staging"}
+
+# Search for specific text
+{service_name="opus-transcriber-proxy"} |= "WebSocket"
+
+# Rate of errors
+count_over_time({service_name="opus-transcriber-proxy", level="error"}[5m])
+```
+
+### Local Testing with Loki
+
+Run Loki locally with Docker:
+
+```bash
+docker run -d --name loki -p 3100:3100 grafana/loki:3.0.0
+
+# Test with your server
+OTLP_ENDPOINT=http://localhost:3100/otlp OTLP_ENV=local node dist/bundle/server.js
+
+# Query logs
+curl -G 'http://localhost:3100/loki/api/v1/query' \
+  --data-urlencode 'query={service_name="opus-transcriber-proxy"}'
+```
