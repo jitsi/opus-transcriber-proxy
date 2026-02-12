@@ -4,13 +4,15 @@ import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isP
 import { extractSessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { setMetricDebug, writeMetric } from './metrics';
-import logger from './logger';
+import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
-import { initTelemetry, shutdownTelemetry, isTelemetryEnabled } from './telemetry';
+import { initTelemetry, initTelemetryLogs, shutdownTelemetry, shutdownTelemetryLogs, isTelemetryEnabled } from './telemetry';
 import { getInstruments } from './telemetry/instruments';
 
 // Initialize OpenTelemetry (must be before other initialization)
 initTelemetry();
+initTelemetryLogs();
+addOtlpTransport(isTelemetryEnabled());
 
 // Initialize metric debug logging
 setMetricDebug(config.debug);
@@ -372,8 +374,8 @@ process.on('SIGTERM', async () => {
 	// Shutdown SessionManager first (cleanup detached sessions)
 	sessionManager.shutdown();
 
-	// Shutdown telemetry (flush pending metrics)
-	await shutdownTelemetry();
+	// Shutdown telemetry (flush pending metrics and logs)
+	await Promise.all([shutdownTelemetry(), shutdownTelemetryLogs()]);
 
 	server.close(() => {
 		logger.info('Server closed');
