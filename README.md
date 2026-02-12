@@ -82,7 +82,6 @@ Set environment variables or use a `.env` file:
 |----------|---------|-------------|
 | `OPENAI_MODEL` | `gpt-4o-mini-transcribe` | OpenAI model |
 | `DEEPGRAM_MODEL` | `nova-2` | Deepgram model |
-| `DEEPGRAM_LANGUAGE` | `multi` | Language code or `multi` for auto |
 | `DEEPGRAM_ENCODING` | `linear16` | `linear16`, `opus`, or `ogg-opus` |
 | `GEMINI_MODEL` | `gemini-2.0-flash-exp` | Gemini model |
 

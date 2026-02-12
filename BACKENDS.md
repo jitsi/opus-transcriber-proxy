@@ -84,7 +84,6 @@ Uses Deepgram's WebSocket streaming API for real-time transcription.
 DEEPGRAM_API_KEY=your-key-here
 DEEPGRAM_MODEL=nova-2
 DEEPGRAM_ENCODING=linear16        # Audio encoding: linear16 (PCM) or opus (default: linear16)
-DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
 DEEPGRAM_DIARIZE=false
@@ -109,8 +108,8 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
 - Supports KeepAlive, Finalize, and CloseStream control messages
 - Authentication via Sec-WebSocket-Protocol header
 - Multilingual streaming support:
-  - Defaults to `language=multi` for automatic multilingual code-switching (31+ languages with Nova-3)
-  - Can specify single language (e.g., `en`, `es`, `fr`, `de`, `pt`, etc.)
+  - Defaults to `language=multi` (auto-detect) when no `lang` URL parameter is provided
+  - Specify language via URL: `?lang=en`, `?lang=es`, `?lang=fr`, etc. (ISO-639-1 codes)
   - Automatically adds `endpointing=100` for multilingual mode (recommended for code-switching)
   - Optional: Include detected language in transcript (e.g., `"Hello [en]"`) via `DEEPGRAM_INCLUDE_LANGUAGE=true`
   - **Note**: `detect_language` parameter is NOT supported for streaming (only for pre-recorded audio)
