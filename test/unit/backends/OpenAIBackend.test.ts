@@ -171,8 +171,8 @@ describe('OpenAIBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow('Connection failed');
-			// Status becomes 'closed' after error handler calls close()
-			expect(backend.getStatus()).toBe('closed');
+			// Status becomes 'failed' after error handler
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should call onError callback on WebSocket error', async () => {
@@ -680,8 +680,8 @@ describe('OpenAIBackend', () => {
 			mockWsManager.mockWs.simulateError(new Error('Connection failed'));
 
 			await expect(connectPromise).rejects.toThrow();
-			// Status becomes 'closed' after error handler calls close()
-			expect(backend.getStatus()).toBe('closed');
+			// Status becomes 'failed' after error handler
+			expect(backend.getStatus()).toBe('failed');
 		});
 
 		it('should return closed after close', async () => {
