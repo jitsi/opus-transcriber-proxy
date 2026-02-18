@@ -7,7 +7,7 @@
 
 import { config } from '../config';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 
@@ -72,7 +72,7 @@ export class DummyBackend implements TranscriptionBackend {
 			const decoded = this.opusDecoder.decodeFrame(new Uint8Array(opusPacket));
 
 			// Track decoded bytes and samples
-			this.stats.decodedBytes += decoded.pcmData.length * 2; // 2 bytes per sample (Int16)
+			this.stats.decodedBytes += decoded.audioData.length;
 			this.stats.totalSamples += decoded.samplesDecoded;
 
 			// Audio is decoded but we throw it away (dummy backend)
@@ -111,6 +111,10 @@ export class DummyBackend implements TranscriptionBackend {
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	private printStatistics(): void {

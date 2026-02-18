@@ -3,7 +3,7 @@
  * Mocks the TranscriptionBackend interface without external API calls
  */
 
-import type { TranscriptionBackend, BackendConfig } from '../../src/backends/TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from '../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../src/transcriberproxy';
 
 export interface MockTranscriptionBackendOptions {
@@ -94,6 +94,13 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 
 	wantsRawOpus?(): boolean {
 		return this._wantsRawOpus;
+	}
+
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		if (this._wantsRawOpus && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
+			return inputFormat;
+		}
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	// Test helper methods

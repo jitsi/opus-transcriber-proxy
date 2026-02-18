@@ -9,7 +9,7 @@ import { config } from '../config';
 import { getTurnDetectionConfig } from '../utils';
 import { writeMetric } from '../metrics';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 
 const OPENAI_WS_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -148,6 +148,10 @@ export class OpenAIBackend implements TranscriptionBackend {
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	private sendSessionUpdate(): void {

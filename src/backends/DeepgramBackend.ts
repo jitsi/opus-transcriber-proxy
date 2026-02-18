@@ -8,7 +8,7 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 
@@ -228,6 +228,13 @@ export class DeepgramBackend implements TranscriptionBackend {
 		// Use provided encoding or fall back to global config
 		const effectiveEncoding = encoding || config.deepgram.encoding;
 		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
+	}
+
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
+			return inputFormat;
+		}
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	private startKeepAlive(): void {

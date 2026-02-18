@@ -3,6 +3,7 @@
  * Mocks the WASM-based OpusDecoder without loading the actual WASM module
  */
 
+import type { AudioDecoder } from '../../src/AudioDecoder';
 import type {
 	OpusDecoderSampleRate,
 	OpusDecodedAudio,
@@ -20,7 +21,7 @@ export interface MockOpusDecoderOptions<SampleRate extends OpusDecoderSampleRate
 	concealError?: DecodeError;
 }
 
-export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
+export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> implements AudioDecoder {
 	private _ready: Promise<void>;
 	private _sampleRate: SampleRate;
 	private _channels: number;
@@ -73,7 +74,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 			};
 			return {
 				errors: [error],
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -86,7 +87,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 		if (this._decodeError) {
 			return {
 				errors: [this._decodeError],
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -99,11 +100,11 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 
 		// Default: return valid decoded audio (480 samples = 20ms at 24kHz)
 		const samplesDecoded = 480;
-		const pcmData = TEST_PCM_DATA.silence_1sec.slice(0, samplesDecoded);
+		const audioData = new Uint8Array(TEST_PCM_DATA.silence_1sec.slice(0, samplesDecoded).buffer);
 
 		return {
 			errors: [],
-			pcmData,
+			audioData,
 			channels: this._channels,
 			samplesDecoded,
 			sampleRate: this._sampleRate,
@@ -124,7 +125,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 			};
 			return {
 				errors: [error],
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -137,7 +138,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 		if (this._concealError) {
 			return {
 				errors: [this._concealError],
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -150,11 +151,11 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 
 		// Default: return concealed audio
 		const samplesDecoded = Math.min(samplesToConceal, 5760); // Max 120ms at 48kHz
-		const pcmData = TEST_PCM_DATA.silence_1sec.slice(0, samplesDecoded);
+		const audioData = new Uint8Array(TEST_PCM_DATA.silence_1sec.slice(0, samplesDecoded).buffer);
 
 		return {
 			errors: [],
-			pcmData,
+			audioData,
 			channels: this._channels,
 			samplesDecoded,
 			sampleRate: this._sampleRate,

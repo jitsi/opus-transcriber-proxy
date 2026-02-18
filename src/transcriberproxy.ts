@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { getInstruments } from './telemetry/instruments';
+import { parse } from 'node:path';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -108,6 +109,8 @@ export class TranscriberProxy extends EventEmitter {
 					pongMessage.id = parsedMessage.id;
 				}
 				this.ws.send(JSON.stringify(pongMessage));
+			} else if (parsedMessage && parsedMessage.event === 'start') {
+				this.handleStartEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
 			}
@@ -143,15 +146,19 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
-	private getConnection(tag: string): OutgoingConnection {
+	private getConnection(tag: string): OutgoingConnection | null {
 		// Check if connection already exists for this tag
 		const connection = this.outgoingConnections.get(tag);
 		if (connection !== undefined) {
 			return connection;
 		}
+		logger.error(`No existing connection found for tag: ${tag}`);
+		return null;
+	}
 
+	private createConnection(tag: string, mediaFormat?: any): OutgoingConnection {
 		// Create a new connection for this tag (no limit, no reuse)
-		const newConnection = new OutgoingConnection(tag, this.options);
+		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 
 		newConnection.onInterimTranscription = (message) => {
 			this.emit('interim_transcription', message);
@@ -212,11 +219,27 @@ export class TranscriberProxy extends EventEmitter {
 		return newConnection;
 	}
 
+	handleStartEvent(parsedMessage: any): void {
+		const tag = parsedMessage.start?.tag;
+		logger.info(`Received start event: ${JSON.stringify(parsedMessage)}`);
+		if (tag) {
+			const mediaFormat = parsedMessage.start.mediaFormat;
+			const connection = this.getConnection(tag);
+			if (connection) {
+				connection.updateInputFormat(mediaFormat);
+			} else {
+				this.createConnection(tag, mediaFormat);
+			}
+		}
+	}
+
 	handleMediaEvent(parsedMessage: any): void {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
 			const connection = this.getConnection(tag);
-			connection.handleMediaEvent(parsedMessage);
+			if (connection) {
+				connection.handleMediaEvent(parsedMessage);
+			}
 		}
 	}
 

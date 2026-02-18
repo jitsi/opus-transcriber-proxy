@@ -1,21 +1,15 @@
-import { OpusDecoder } from './OpusDecoder/OpusDecoder';
+import { createAudioDecoder } from './AudioDecoderFactory';
+import type { AudioDecoder } from './AudioDecoder';
+import { NO_CHUNK_INFO } from './AudioDecoder';
 import type { TranscriptionMessage, TranscriberProxyOptions } from './transcriberproxy';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig } from './backends/BackendFactory';
-import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import type { TranscriptionBackend, AudioFormat } from './backends/TranscriptionBackend';
 import { getInstruments } from './telemetry/instruments';
 
-// The maximum number of bytes of audio to buffer before sending.
-// 15 MiB of base64-encoded audio = ~4 minutes of audio at 24000 Hz
-const MAX_AUDIO_BLOCK_BYTES = (15 * 1024 * 1024 * 3) / 4;
-
-// Convert Uint8Array to base64 string using Node.js Buffer
-function safeToBase64(array: Uint8Array): string {
-	return Buffer.from(array.buffer, array.byteOffset, array.byteLength).toString('base64');
-}
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
@@ -39,16 +33,10 @@ export class OutgoingConnection {
 		return this.participant?.id || this.localTag;
 	}
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
-	private opusDecoder?: OpusDecoder<24000>;
+	private decoder?: AudioDecoder;
 	private backend?: TranscriptionBackend;
-	private pendingOpusFrames: Uint8Array[] = [];
-	private pendingAudioDataBuffer = new ArrayBuffer(0, { maxByteLength: MAX_AUDIO_BLOCK_BYTES });
-	private pendingAudioData: Uint8Array = new Uint8Array(this.pendingAudioDataBuffer);
+	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
 	private pendingAudioFrames: string[] = [];
-
-	private lastChunkNo: number = -1;
-	private lastTimestamp: number = -1;
-	private lastOpusFrameSize: number = -1;
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -64,35 +52,39 @@ export class OutgoingConnection {
 
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
+	private inputAudioFormat!: AudioFormat;
 
-	constructor(tag: string, options: TranscriberProxyOptions) {
+	constructor(tag: string, inputFormat: any, options: TranscriberProxyOptions) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.options = options;
 		this.metricCache = new MetricCache(undefined, NaN);
 
-		this.initializeBackend();
-		// Note: Opus decoder initialization is now done in initializeBackend
-		// after we know if the backend wants raw Opus or not
+		// Validate input format before initializing backend
+		this.updateInputFormat(inputFormat);
+
+		// Only initialize backend if input format is valid (not failed or closed)
+		if (this.decoderStatus !== 'failed' && this.decoderStatus !== 'closed') {
+			this.initializeBackend();
+		}
+		// Note: decoder initialization is done in initializeBackend
+		// after we know the desired output format from the backend
 	}
 
-	private async initializeOpusDecoder(): Promise<void> {
-		try {
-			logger.debug(`Creating Opus decoder for tag: ${this.localTag}`);
-			this.opusDecoder = new OpusDecoder({
-				sampleRate: 24000,
-				channels: 1,
-			});
+	updateInputFormat(inputFormat: any): void {
+		const encoding = inputFormat?.encoding;
+		if (encoding === 'ogg-opus') {
+			this.inputAudioFormat = { encoding: 'ogg' };
+		} else {
+			this.inputAudioFormat = { encoding: encoding ?? '' };
+		}
 
-			await this.opusDecoder.ready;
-			this.decoderStatus = 'ready';
-			logger.debug(`Opus decoder ready for tag: ${this.localTag}`);
-			this.processPendingOpusFrames();
-		} catch (error) {
-			logger.error(`Failed to create Opus decoder for tag ${this.localTag}:`, error);
-			this.decoderStatus = 'failed';
-			this.doClose(true);
-			this.onError?.(this.localTag, `Error initializing Opus decoder: ${error instanceof Error ? error.message : String(error)}`);
+		if (this.backend) {
+			this.reinitializeDecoder().catch((error) => {
+				logger.error(`Failed to reinitialize decoder for tag ${this.localTag}:`, error);
+				this.onError?.(this.localTag, error instanceof Error ? error.message : String(error));
+				this.doClose(true);
+			});
 		}
 	}
 
@@ -102,17 +94,7 @@ export class OutgoingConnection {
 			// Use provider from options (URL param), or fall back to config default
 			this.backend = createBackend(this.localTag, this.participant, this.options.provider);
 
-			// Check if backend wants raw Opus frames or decoded PCM
-			const wantsRawOpus = this.backend.wantsRawOpus?.(this.options.encoding) ?? false;
-
-			if (wantsRawOpus) {
-				logger.info(`Backend wants raw Opus frames for tag: ${this.localTag}, skipping Opus decoder initialization`);
-				// Set decoder status to skip - we won't decode
-				this.decoderStatus = 'ready'; // Mark as ready so we can process frames
-			} else {
-				// Initialize Opus decoder for PCM output
-				this.initializeOpusDecoder();
-			}
+			await this.reinitializeDecoder();
 
 			// Set up event handlers
 			this.backend.onInterimTranscription = (message) => {
@@ -163,13 +145,10 @@ export class OutgoingConnection {
 			logger.info(`Transcription backend connected for tag: ${this.localTag}`);
 
 			// Process any pending audio data that was queued while waiting for connection
-			if (wantsRawOpus) {
-				// For raw Opus mode, process pending Opus frames directly
-				this.processPendingOpusFrames();
-			} else {
-				// For PCM mode, process pending decoded audio
-				this.processPendingAudioData();
-			}
+			// First process any raw frames through the decoder
+			this.processPendingInputFrames();
+			// Then flush any already-decoded audio that was queued
+			this.processPendingAudioData();
 		} catch (error) {
 			logger.error(`Failed to initialize transcription backend for tag ${this.localTag}:`, error);
 			this.backend = undefined;
@@ -179,9 +158,27 @@ export class OutgoingConnection {
 		}
 	}
 
-	handleMediaEvent(mediaEvent: any): void {
-		// logger.debug(`Handling media event for tag: ${this.tag}`);
+	private async reinitializeDecoder(): Promise<void> {
+		if (!this.backend) {
+			throw new Error('Cannot initialize decoder without a backend');
+		}
 
+		this.decoder?.free();
+		this.decoder = undefined;
+		this.decoderStatus = 'pending';
+
+		const desiredFormat = this.backend.getDesiredAudioFormat(this.inputAudioFormat);
+		this.decoder = createAudioDecoder(this.inputAudioFormat, desiredFormat);
+		await this.decoder.ready;
+		this.decoderStatus = 'ready';
+		logger.info(`Audio decoder ready for tag: ${this.localTag} (output: ${desiredFormat.encoding})`);
+
+		if (this.backend.getStatus() === 'connected') {
+			this.processPendingInputFrames();
+		}
+	}
+
+	handleMediaEvent(mediaEvent: any): void {
 		if (mediaEvent.media?.payload === undefined) {
 			logger.warn(`No media payload in event for tag: ${this.localTag}`);
 			return;
@@ -192,174 +189,101 @@ export class OutgoingConnection {
 			return;
 		}
 
-		let opusFrame: Uint8Array;
+		let audioFrame: Uint8Array;
 
 		try {
 			// Base64 decode the media payload to binary using Node.js Buffer
-			opusFrame = new Uint8Array(Buffer.from(mediaEvent.media.payload, 'base64'));
+			audioFrame = new Uint8Array(Buffer.from(mediaEvent.media.payload, 'base64'));
 		} catch (error) {
 			logger.error(`Failed to decode base64 media payload for tag ${this.localTag}:`, error);
 			return;
 		}
 
 		this.metricCache.increment({
-			name: 'opus_packet_received',
+			name: 'audio_packet_received',
 			worker: 'opus-transcriber-proxy',
 		});
 
 		// OTel metrics: track audio received from client
 		const instruments = getInstruments();
 		instruments.clientAudioChunksTotal.add(1);
-		instruments.clientAudioBytesTotal.add(opusFrame.length);
+		instruments.clientAudioBytesTotal.add(audioFrame.length);
 
-		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
-			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
-				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
-				if (chunkDelta <= 0) {
-					// Packets reordered or replayed, drop this packet
-					writeMetric(undefined, {
-						name: 'opus_packet_discarded',
-						worker: 'opus-transcriber-proxy',
-					});
+		const chunkNo = Number.isInteger(mediaEvent.media?.chunk) ? (mediaEvent.media.chunk as number) : NO_CHUNK_INFO;
+		const timestamp = Number.isInteger(mediaEvent.media?.timestamp) ? (mediaEvent.media.timestamp as number) : NO_CHUNK_INFO;
 
-					return;
-				}
-
-				// Packets lost, do concealment
-				if (this.decoderStatus == 'ready') {
-					const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
-					// TODO: enqueue concealment actions?  Not sure this is needed in practice.
-					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
-				}
-			}
-			this.lastChunkNo = mediaEvent.media.chunk;
-			this.lastTimestamp = mediaEvent.media.timestamp;
-		}
-
-		// Check if backend wants raw Opus or decoded PCM
-		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
 		const backendStatus = this.backend?.getStatus();
 
-		if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'connected') {
-			// Send raw Opus frame directly (no decoding, backend is ready)
-			this.sendRawOpusToBackend(opusFrame);
-		} else if (wantsRawOpus && this.decoderStatus === 'ready' && backendStatus === 'pending') {
-			// Queue raw Opus frames until backend is ready
-			this.pendingOpusFrames.push(opusFrame);
-			this.metricCache.increment({
-				name: 'opus_packet_queued',
-				worker: 'opus-transcriber-proxy',
-			});
-		} else if (this.decoderStatus === 'ready' && this.opusDecoder) {
-			// Decode Opus to PCM and send
-			this.processOpusFrame(opusFrame);
+		if (this.decoderStatus === 'ready' && this.decoder) {
+			this.decodeAndSend(audioFrame, chunkNo, timestamp);
 		} else if (this.decoderStatus === 'pending') {
-			// Queue the binary data until decoder/backend is ready
-			this.pendingOpusFrames.push(opusFrame);
+			// Queue with chunk info so the decoder can perform gap detection when flushed
+			this.pendingInputFrames.push({ frame: audioFrame, chunkNo, timestamp });
 			this.metricCache.increment({
-				name: 'opus_packet_queued',
+				name: 'audio_packet_queued',
 				worker: 'opus-transcriber-proxy',
 			});
-			// logger.debug(`Queued opus frame for tag: ${this.tag} (queue size: ${this.pendingOpusFrames.length})`);
 		} else {
-			logger.debug(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}, backend ${backendStatus}`);
+			logger.debug(`Not queueing audio frame for tag: ${this.localTag}: decoder ${this.decoderStatus}, backend ${backendStatus}`);
 		}
 	}
 
-	private doConcealment(opusFrame: Uint8Array, chunkDelta: number, timestampDelta: number) {
-		if (!this.opusDecoder) {
-			logger.error(`No opus decoder available for tag: ${this.localTag}`);
-			return;
-		}
-
-		const lostFrames = chunkDelta - 1;
-		if (lostFrames <= 0) {
-			return;
-		}
-		if (this.lastOpusFrameSize <= 0) {
-			// Not sure how we could have gotten here if we've never decoded anything
-			return;
-		}
-
-		/* Make sure numbers make sense */
-		const lostFramesInSamples = lostFrames * this.lastOpusFrameSize;
-		const timestampDeltaInSamples = timestampDelta > 0 ? (timestampDelta / 48000) * 24000 : Infinity;
-		const maxConcealment = 120 * 24; /* 120 ms at 24 kHz */
-
-		const samplesToConceal = Math.min(lostFramesInSamples, timestampDeltaInSamples, maxConcealment);
-
-		try {
-			const concealedAudio = this.opusDecoder.conceal(opusFrame, samplesToConceal);
-			if (concealedAudio.errors.length > 0) {
-				writeMetric(undefined, {
-					name: 'opus_decode_failure',
-					worker: 'opus-transcriber-proxy',
-				});
-			} else {
-				this.sendOrEnqueueDecodedAudio(concealedAudio.pcmData);
-				writeMetric(undefined, {
-					name: 'opus_loss_concealment',
-					worker: 'opus-transcriber-proxy',
-				});
-			}
-		} catch (error) {
-			logger.error(`Error concealing ${samplesToConceal} samples for tag ${this.localTag}:`, error);
-			// Don't call onError for concealment errors, as they may be transient
-		}
-	}
-
-	private processOpusFrame(opusFrame: Uint8Array): void {
-		if (!this.opusDecoder) {
-			logger.error(`No opus decoder available for tag: ${this.localTag}`);
+	private decodeAndSend(frame: Uint8Array, chunkNo: number, timestamp: number): void {
+		if (!this.decoder) {
+			logger.error(`No decoder available for tag: ${this.localTag}`);
 			return;
 		}
 
 		try {
-			// Decode the Opus audio data
-			const decodedAudio = this.opusDecoder.decodeFrame(opusFrame);
-			if (decodedAudio.errors.length > 0) {
-				logger.error(`Opus decoding errors for tag ${this.localTag}:`, decodedAudio.errors);
+			const results = this.decoder.decodeChunk(frame, chunkNo, timestamp);
+
+			if (results === null) {
+				// Out-of-order packet — discard
 				writeMetric(undefined, {
-					name: 'opus_decode_failure',
+					name: 'audio_packet_discarded',
 					worker: 'opus-transcriber-proxy',
 				});
-
-				// Don't call onError for decoding errors, as they may be transient
 				return;
 			}
-			this.metricCache.increment({
-				name: 'opus_packet_decoded',
-				worker: 'opus-transcriber-proxy',
-			});
-			this.lastOpusFrameSize = decodedAudio.samplesDecoded;
-			this.sendOrEnqueueDecodedAudio(decodedAudio.pcmData);
+
+			for (const decoded of results) {
+				if (decoded.errors.length > 0) {
+					logger.error(`Audio decoding errors for tag ${this.localTag}:`, decoded.errors);
+					writeMetric(undefined, {
+						name: 'audio_decode_failure',
+						worker: 'opus-transcriber-proxy',
+					});
+					continue;
+				}
+
+				if (decoded.kind === 'concealment') {
+					writeMetric(undefined, {
+						name: 'audio_loss_concealment',
+						worker: 'opus-transcriber-proxy',
+					});
+				} else {
+					this.metricCache.increment({
+						name: 'audio_packet_decoded',
+						worker: 'opus-transcriber-proxy',
+					});
+				}
+
+				this.sendOrEnqueueDecodedAudio(decoded.audioData);
+			}
 		} catch (error) {
 			logger.error(`Error processing audio data for tag ${this.localTag}:`, error);
 		}
 	}
 
-	private sendOrEnqueueDecodedAudio(pcmData: Int16Array) {
-		const uint8Data = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
-
+	private sendOrEnqueueDecodedAudio(audioData: Uint8Array) {
 		const backendStatus = this.backend?.getStatus();
 
 		if (backendStatus === 'connected' && this.backend) {
-			const encodedAudio = Buffer.from(uint8Data.buffer, uint8Data.byteOffset, uint8Data.byteLength).toString('base64');
+			const encodedAudio = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength).toString('base64');
 			this.sendAudioToBackend(encodedAudio);
 		} else if (backendStatus === 'pending') {
-			// Add the pending audio data for later sending
-			// Keep it as a Uint8Array because you can't concatenate base64 (because of the padding)
-			if (this.pendingAudioData.length + uint8Data.length <= MAX_AUDIO_BLOCK_BYTES) {
-				const oldLength = this.pendingAudioData.length;
-				this.pendingAudioDataBuffer.resize(this.pendingAudioData.byteLength + uint8Data.byteLength);
-				this.pendingAudioData.set(uint8Data, oldLength);
-			} else {
-				// Would exceed MAX_AUDIO_BLOCK_BYTES, break off a frame and base64-encode it.
-				const encodedAudio = safeToBase64(this.pendingAudioData);
-				this.pendingAudioFrames.push(encodedAudio);
-				this.pendingAudioDataBuffer.resize(uint8Data.byteLength);
-				this.pendingAudioData.set(uint8Data);
-			}
+			const encodedAudio = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength).toString('base64');
+			this.pendingAudioFrames.push(encodedAudio);
 			this.metricCache.increment({
 				name: 'backend_audio_queued',
 				worker: 'opus-transcriber-proxy',
@@ -369,28 +293,18 @@ export class OutgoingConnection {
 		}
 	}
 
-	private processPendingOpusFrames(): void {
-		if (this.pendingOpusFrames.length === 0) {
+	private processPendingInputFrames(): void {
+		if (this.pendingInputFrames.length === 0) {
 			return;
 		}
 
-		logger.debug(`Processing ${this.pendingOpusFrames.length} queued media payloads for tag: ${this.localTag}`);
+		logger.debug(`Processing ${this.pendingInputFrames.length} queued media payloads for tag: ${this.localTag}`);
 
-		// Process all queued media payloads
-		const queuedPayloads = [...this.pendingOpusFrames];
-		this.pendingOpusFrames = []; // Clear the queue
+		const queuedPayloads = [...this.pendingInputFrames];
+		this.pendingInputFrames = [];
 
-		// Check if backend wants raw Opus or decoded PCM
-		const wantsRawOpus = this.backend?.wantsRawOpus?.(this.options.encoding) ?? false;
-
-		for (const binaryData of queuedPayloads) {
-			if (wantsRawOpus) {
-				// Send raw Opus frame directly
-				this.sendRawOpusToBackend(binaryData);
-			} else {
-				// Decode and send PCM
-				this.processOpusFrame(binaryData);
-			}
+		for (const { frame, chunkNo, timestamp } of queuedPayloads) {
+			this.decodeAndSend(frame, chunkNo, timestamp);
 		}
 	}
 
@@ -418,46 +332,15 @@ export class OutgoingConnection {
 		}
 	}
 
-	private sendRawOpusToBackend(opusFrame: Uint8Array): void {
-		if (!this.backend) {
-			logger.error(`No backend available for tag: ${this.localTag}`);
-			return;
-		}
-
-		try {
-			// Convert raw Opus frame to base64 and send to backend
-			const base64Opus = Buffer.from(opusFrame).toString('base64');
-			this.backend.sendAudio(base64Opus);
-			this.resetIdleCommitTimeout();
-			this.metricCache.increment({
-				name: 'backend_opus_sent',
-				worker: 'opus-transcriber-proxy',
-			});
-
-			// OTel metrics: track raw Opus bytes sent
-			getInstruments().backendAudioSentBytesTotal.add(opusFrame.length, { provider: this.options.provider || 'unknown' });
-		} catch (error) {
-			logger.error(`Failed to send raw Opus to backend for tag ${this.localTag}`, error);
-		}
-	}
-
 	private processPendingAudioData(): void {
-		if (this.pendingAudioFrames.length === 0 && this.pendingAudioData.length === 0) {
+		if (this.pendingAudioFrames.length === 0) {
 			return;
 		}
 
-		logger.debug(
-			`Processing ${this.pendingAudioData.length} bytes plus ${this.pendingAudioFrames.length} frames of queued audio data for tag: ${this.localTag}`,
-		);
+		logger.debug(`Processing ${this.pendingAudioFrames.length} frames of queued audio data for tag: ${this.localTag}`);
 
-		// Process all queued audio data
 		const queuedAudio = [...this.pendingAudioFrames];
-		this.pendingAudioFrames = []; // Clear the queue
-
-		if (this.pendingAudioData.length !== 0) {
-			queuedAudio.push(safeToBase64(this.pendingAudioData));
-		}
-		this.pendingAudioDataBuffer.resize(0);
+		this.pendingAudioFrames = [];
 
 		for (const encodedAudio of queuedAudio) {
 			this.sendAudioToBackend(encodedAudio);
@@ -576,9 +459,8 @@ export class OutgoingConnection {
 	 * to prevent frames from being discarded as "reordered" when chunk numbers restart from 0.
 	 */
 	resetChunkTracking(): void {
-		logger.info(`Resetting chunk tracking for tag ${this.localTag} (was lastChunkNo=${this.lastChunkNo})`);
-		this.lastChunkNo = -1;
-		this.lastTimestamp = -1;
+		logger.info(`Resetting chunk tracking for tag ${this.localTag}`);
+		this.decoder?.reset();
 	}
 
 	close(): void {
@@ -589,8 +471,8 @@ export class OutgoingConnection {
 		logger.debug(`Closing OutgoingConnection for tag: ${this.localTag}`);
 		this.clearIdleCommitTimeout();
 		this.metricCache.flush();
-		this.opusDecoder?.free();
-		this.opusDecoder = undefined;
+		this.decoder?.free();
+		this.decoder = undefined;
 		this.decoderStatus = 'closed';
 
 		this.backend?.close();

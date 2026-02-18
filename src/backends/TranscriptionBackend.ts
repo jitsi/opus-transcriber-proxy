@@ -12,6 +12,11 @@
 import type { TranscriptionMessage } from '../transcriberproxy';
 import type { AudioEncoding } from '../utils';
 
+export interface AudioFormat {
+	encoding: string;
+	sampleRate?: number;
+}
+
 export interface BackendConfig {
 	/** Language hint for transcription (null = auto-detect) */
 	language: string | null;
@@ -50,6 +55,15 @@ export interface TranscriptionBackend {
 	 * @returns true if backend prefers raw audio in this encoding
 	 */
 	wantsRawOpus?(encoding?: AudioEncoding): boolean;
+
+	/**
+	 * Returns the audio format this backend wants to receive for a given input format.
+	 * Backends that support raw Opus will mirror the input encoding ('opus' or 'ogg').
+	 * All other backends request decoded PCM: encoding 'L16' at 24000 Hz.
+	 * @param inputFormat - The audio format being provided by the client
+	 * @returns The audio format this backend wants to receive
+	 */
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat;
 
 	/**
 	 * Force the backend to commit/finalize pending audio and generate transcription
