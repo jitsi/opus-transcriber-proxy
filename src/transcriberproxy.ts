@@ -26,6 +26,7 @@ export interface TranscriberProxyOptions {
 	encoding?: AudioEncoding;
 	sendBack?: boolean;
 	sendBackInterim?: boolean;
+	tags?: string[];
 }
 
 export class TranscriberProxy extends EventEmitter {
@@ -45,6 +46,11 @@ export class TranscriberProxy extends EventEmitter {
 		this.sessionId = options.sessionId;
 		this.outgoingConnections = new Map<string, OutgoingConnection>();
 		this.createdAt = Date.now();
+
+		// Log session tags if provided
+		if (options.tags && options.tags.length > 0) {
+			logger.info(`Session ${this.sessionId} started with tags: ${options.tags.join(', ')}`);
+		}
 
 		// Initialize dump streams if enabled
 		if (config.dumpWebSocketMessages || config.dumpTranscripts) {

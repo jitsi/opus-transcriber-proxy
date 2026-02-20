@@ -148,6 +148,7 @@ export class OutgoingConnection {
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
 			backendConfig.encoding = this.options.encoding;
+			backendConfig.tags = this.options.tags;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
