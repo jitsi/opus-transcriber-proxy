@@ -10,6 +10,7 @@ export interface ISessionParameters {
 	language: string | null;
 	provider: string | null;
 	encoding: AudioEncoding;
+	tags: string[];
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -24,6 +25,8 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const encodingParam = parsedUrl.searchParams.get('encoding');
 	// Default to 'opus' (raw opus frames) for backwards compatibility
 	const encoding: AudioEncoding = encodingParam === 'ogg-opus' ? 'ogg-opus' : 'opus';
+	// Parse tags as multiple tag= parameters (like Deepgram API)
+	const tags = parsedUrl.searchParams.getAll('tag');
 
 	return {
 		url: parsedUrl,
@@ -35,6 +38,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		language: lang,
 		provider,
 		encoding,
+		tags,
 	};
 }
 

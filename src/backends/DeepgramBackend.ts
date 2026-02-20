@@ -92,14 +92,20 @@ export class DeepgramBackend implements TranscriptionBackend {
 					params.set('diarize', config.deepgram.diarize.toString());
 				}
 
-				// Add tags if configured
-				if (config.deepgram.tags && config.deepgram.tags.length > 0) {
-					config.deepgram.tags.forEach((tag) => {
+				// Add tags from config and URL parameter
+				const allTags = [...(config.deepgram.tags || []), ...(backendConfig.tags || [])];
+				if (allTags.length > 0) {
+					allTags.forEach((tag) => {
 						params.append('tag', tag);
 					});
 				}
 
 				const deepgramUrl = `${DEEPGRAM_WS_BASE}?${params.toString()}`;
+
+				// Log tags if any are set
+				if (allTags.length > 0) {
+					logger.info(`Deepgram tags for ${this.tag}: ${allTags.join(', ')}`);
+				}
 
 				// Create WebSocket with Sec-WebSocket-Protocol for authentication
 				// See: https://developers.deepgram.com/docs/using-the-sec-websocket-protocol

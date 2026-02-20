@@ -216,7 +216,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 }
 
 function handleWebSocketConnection(ws: WebSocket, parameters: any) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -277,7 +277,7 @@ function handleWebSocketConnection(ws: WebSocket, parameters: any) {
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);
