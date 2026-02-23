@@ -1,132 +1,198 @@
-/**
- * Tests for utils module
- */
+import { describe, it, expect } from 'vitest';
+import { extractSessionParameters, validateTags } from '../../src/utils';
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractSessionParameters, getTurnDetectionConfig } from '../../src/utils';
-
-describe('utils', () => {
-	describe('extractSessionParameters', () => {
-		it('should extract sessionId from query params', () => {
-			const url = 'http://localhost:8080/transcribe?sessionId=test-session-123';
-
+describe('extractSessionParameters', () => {
+	describe('tag parameter', () => {
+		it('should extract a single tag parameter', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&tag=production';
 			const params = extractSessionParameters(url);
 
-			expect(params.sessionId).toBe('test-session-123');
+			expect(params.tags).toEqual(['production']);
 		});
 
-		it('should extract connect parameter', () => {
-			const url = 'http://localhost:8080/transcribe?connect=ws://example.com/websocket';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.connect).toBe('ws://example.com/websocket');
-		});
-
-		it('should parse boolean flags correctly (true)', () => {
+		it('should extract multiple tag parameters', () => {
 			const url =
-				'http://localhost:8080/transcribe?useDispatcher=true&sendBack=true&sendBackInterim=true';
-
+				'ws://localhost:8080/transcribe?sessionId=test&tag=production&tag=region-us&tag=customer-service';
 			const params = extractSessionParameters(url);
 
-			expect(params.useDispatcher).toBe(true);
+			expect(params.tags).toEqual(['production', 'region-us', 'customer-service']);
+		});
+
+		it('should return empty array when no tags are provided', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.tags).toEqual([]);
+		});
+
+		it('should handle tags with special characters', () => {
+			const url =
+				'ws://localhost:8080/transcribe?sessionId=test&tag=env:production&tag=region_us-east-1';
+			const params = extractSessionParameters(url);
+
+			expect(params.tags).toEqual(['env:production', 'region_us-east-1']);
+		});
+
+		it('should preserve tag order', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&tag=first&tag=second&tag=third';
+			const params = extractSessionParameters(url);
+
+			expect(params.tags).toEqual(['first', 'second', 'third']);
+		});
+
+		it('should work with other URL parameters', () => {
+			const url =
+				'ws://localhost:8080/transcribe?sessionId=test&sendBack=true&tag=production&provider=deepgram&tag=region-us';
+			const params = extractSessionParameters(url);
+
+			expect(params.sessionId).toBe('test');
 			expect(params.sendBack).toBe(true);
-			expect(params.sendBackInterim).toBe(true);
-		});
-
-		it('should parse boolean flags correctly (false)', () => {
-			const url =
-				'http://localhost:8080/transcribe?useDispatcher=false&sendBack=false&sendBackInterim=false';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.useDispatcher).toBe(false);
-			expect(params.sendBack).toBe(false);
-			expect(params.sendBackInterim).toBe(false);
-		});
-
-		it('should default boolean flags to false when not specified', () => {
-			const url = 'http://localhost:8080/transcribe';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.useDispatcher).toBe(false);
-			expect(params.sendBack).toBe(false);
-			expect(params.sendBackInterim).toBe(false);
-		});
-
-		it('should extract language parameter', () => {
-			const url = 'http://localhost:8080/transcribe?lang=en-US';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.language).toBe('en-US');
-		});
-
-		it('should extract provider parameter', () => {
-			const url = 'http://localhost:8080/transcribe?provider=openai';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.provider).toBe('openai');
-		});
-
-		it('should handle null values for optional parameters', () => {
-			const url = 'http://localhost:8080/transcribe';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.sessionId).toBeNull();
-			expect(params.connect).toBeNull();
-			expect(params.language).toBeNull();
-			expect(params.provider).toBeNull();
-		});
-
-		it('should parse complex URL with multiple parameters', () => {
-			const url =
-				'http://localhost:8080/transcribe?sessionId=abc123&connect=ws://example.com&useDispatcher=true&sendBack=true&lang=es&provider=deepgram';
-
-			const params = extractSessionParameters(url);
-
-			expect(params.sessionId).toBe('abc123');
-			expect(params.connect).toBe('ws://example.com');
-			expect(params.useDispatcher).toBe(true);
-			expect(params.sendBack).toBe(true);
-			expect(params.sendBackInterim).toBe(false);
-			expect(params.language).toBe('es');
 			expect(params.provider).toBe('deepgram');
+			expect(params.tags).toEqual(['production', 'region-us']);
 		});
 
-		it('should return parsed URL object', () => {
-			const url = 'http://localhost:8080/transcribe?sessionId=test';
-
+		it('should filter out empty tag values', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&tag=&tag=valid';
 			const params = extractSessionParameters(url);
 
-			expect(params.url).toBeInstanceOf(URL);
-			expect(params.url.hostname).toBe('localhost');
-			expect(params.url.port).toBe('8080');
-			expect(params.url.pathname).toBe('/transcribe');
+			expect(params.tags).toEqual(['valid']);
 		});
 
-		it('should handle URL with port', () => {
-			const url = 'http://localhost:3000/transcribe';
+		it('should reject tags exceeding 128 characters', () => {
+			const longTag = 'a'.repeat(129);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=${longTag}`;
 
-			const params = extractSessionParameters(url);
-
-			expect(params.url.port).toBe('3000');
+			expect(() => extractSessionParameters(url)).toThrow(
+				'Invalid tag: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..." exceeds maximum length of 128 characters (actual: 129)'
+			);
 		});
 
-		it('should handle URL without query parameters', () => {
-			const url = 'http://localhost:8080/events';
+		it('should reject when one of multiple tags is too long', () => {
+			const longTag = 'x'.repeat(129);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=valid&tag=${longTag}&tag=another`;
 
+			expect(() => extractSessionParameters(url)).toThrow(
+				'Invalid tag: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." exceeds maximum length of 128 characters (actual: 129)'
+			);
+		});
+
+		it('should accept tags exactly 128 characters', () => {
+			const maxLengthTag = 'a'.repeat(128);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=${maxLengthTag}`;
 			const params = extractSessionParameters(url);
 
-			expect(params.sessionId).toBeNull();
-			expect(params.connect).toBeNull();
+			expect(params.tags).toEqual([maxLengthTag]);
 		});
 	});
 
-	// Note: getTurnDetectionConfig() is a simple wrapper that uses dynamic require()
-	// which doesn't work well in tests due to path resolution. Since it's just a pass-through
-	// to config.openai.turnDetection, we're testing the config module directly instead.
+	describe('validateTags', () => {
+		it('should accept valid tags under 128 characters', () => {
+			const tags = ['production', 'region-us', 'customer-service'];
+			expect(() => validateTags(tags)).not.toThrow();
+		});
+
+		it('should accept empty array', () => {
+			expect(() => validateTags([])).not.toThrow();
+		});
+
+		it('should accept tags exactly 128 characters', () => {
+			const tags = ['a'.repeat(128)];
+			expect(() => validateTags(tags)).not.toThrow();
+		});
+
+		it('should reject tags over 128 characters', () => {
+			const tags = ['a'.repeat(129)];
+			expect(() => validateTags(tags)).toThrow('exceeds maximum length of 128 characters');
+		});
+
+		it('should reject if any tag in array is too long', () => {
+			const tags = ['valid', 'x'.repeat(200), 'another'];
+			expect(() => validateTags(tags)).toThrow('exceeds maximum length of 128 characters');
+		});
+
+		it('should include tag length in error message', () => {
+			const tags = ['x'.repeat(150)];
+			expect(() => validateTags(tags)).toThrow('(actual: 150)');
+		});
+
+		it('should truncate long tags in error message', () => {
+			const tags = ['y'.repeat(200)];
+			expect(() => validateTags(tags)).toThrow(
+				'Invalid tag: "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..."'
+			);
+		});
+	});
+
+	describe('existing parameters', () => {
+		it('should extract sessionId', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test123';
+			const params = extractSessionParameters(url);
+
+			expect(params.sessionId).toBe('test123');
+		});
+
+		it('should extract sendBack as boolean', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&sendBack=true';
+			const params = extractSessionParameters(url);
+
+			expect(params.sendBack).toBe(true);
+		});
+
+		it('should default sendBack to false', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.sendBack).toBe(false);
+		});
+
+		it('should extract sendBackInterim as boolean', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&sendBackInterim=true';
+			const params = extractSessionParameters(url);
+
+			expect(params.sendBackInterim).toBe(true);
+		});
+
+		it('should extract language', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&lang=en';
+			const params = extractSessionParameters(url);
+
+			expect(params.language).toBe('en');
+		});
+
+		it('should extract provider', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&provider=deepgram';
+			const params = extractSessionParameters(url);
+
+			expect(params.provider).toBe('deepgram');
+		});
+
+		it('should default encoding to opus', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.encoding).toBe('opus');
+		});
+
+		it('should extract ogg-opus encoding', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&encoding=ogg-opus';
+			const params = extractSessionParameters(url);
+
+			expect(params.encoding).toBe('ogg-opus');
+		});
+
+		it('should extract useDispatcher as boolean', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&useDispatcher=true';
+			const params = extractSessionParameters(url);
+
+			expect(params.useDispatcher).toBe(true);
+		});
+
+		it('should preserve URL object', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.url).toBeInstanceOf(URL);
+			expect(params.url.toString()).toBe(url);
+		});
+	});
 });

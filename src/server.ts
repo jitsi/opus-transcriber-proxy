@@ -1,7 +1,7 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
-import { extractSessionParameters } from './utils';
+import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
@@ -42,7 +42,15 @@ server.on('upgrade', (request, socket, head) => {
 	logger.debug('Upgrade Headers:', JSON.stringify(request.headers, null, 2));
 
 	const url = `http://${request.headers.host}${request.url}`;
-	const parameters = extractSessionParameters(url);
+	let parameters: ISessionParameters;
+	try {
+		parameters = extractSessionParameters(url);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		socket.write(`HTTP/1.1 400 Bad Request\r\n\r\n${msg}`);
+		socket.destroy();
+		return;
+	}
 
 	logger.debug('Session parameters:', JSON.stringify(parameters));
 

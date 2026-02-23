@@ -102,11 +102,6 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 				const deepgramUrl = `${DEEPGRAM_WS_BASE}?${params.toString()}`;
 
-				// Log tags if any are set
-				if (allTags.length > 0) {
-					logger.info(`Deepgram tags for ${this.tag}: ${allTags.join(', ')}`);
-				}
-
 				// Create WebSocket with Sec-WebSocket-Protocol for authentication
 				// See: https://developers.deepgram.com/docs/using-the-sec-websocket-protocol
 				const ws = new WebSocket(deepgramUrl, ['token', config.deepgram.apiKey]);
