@@ -13,10 +13,29 @@ This is a real-time WebSocket transcription proxy that routes Opus-encoded audio
 
 ## Build System
 
+### Prerequisites
+
+**Emscripten** must be installed before building. Install it using the official emsdk:
+
+```bash
+# Clone the Emscripten SDK
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+
+# Install and activate the latest SDK
+./emsdk install latest
+./emsdk activate latest
+
+# Activate environment variables (needs to be done in each new terminal)
+source ./emsdk_env.sh  # On Windows use: emsdk_env.bat
+```
+
+For more details, see the [official Emscripten installation guide](https://emscripten.org/docs/getting_started/downloads.html).
+
 ### Initial Setup (First Time Only)
 ```bash
 npm install
-npm run configure  # Installs Emscripten toolchain
+npm run configure  # Configures libopus with emconfigure (requires Emscripten)
 npm run build:wasm # Compiles Opus decoder to WebAssembly
 ```
 
@@ -319,7 +338,7 @@ See README.md for complete list. Key ones:
 
 ## Notes for Claude
 
-- The WASM build requires Emscripten. If build fails, check that `npm run configure` was run.
+- The WASM build requires Emscripten to be installed and activated (see Prerequisites section). If build fails, check that Emscripten is installed and that `npm run configure` was run.
 - When modifying backends, ensure they handle connection lifecycle correctly (pending → connected → failed/closed).
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
