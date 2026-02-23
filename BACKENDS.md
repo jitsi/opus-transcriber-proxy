@@ -88,7 +88,7 @@ DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
 DEEPGRAM_DIARIZE=false
-DEEPGRAM_TAGS=production,region-us  # Comma-separated tags for all sessions (optional)
+DEEPGRAM_TAGS=production,region-us  # Comma-separated tags for all sessions (max 128 chars each)
 
 # Make Deepgram the default provider
 PROVIDERS_PRIORITY=deepgram,openai,gemini
@@ -121,6 +121,8 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
   - Tags can be added per-session via URL parameters: `tag=value` (multiple parameters supported)
   - URL tags are combined with environment tags and sent to Deepgram's API
   - Useful for organizing and filtering transcription requests in Deepgram's dashboard
+  - **Validation**: Each tag must be ≤ 128 characters (enforced at connection time)
+  - Invalid tags will cause the WebSocket connection to be rejected with a descriptive error
   - Example: `ws://host/transcribe?sessionId=test&tag=production&tag=region-us&tag=customer-service`
 
 ## Architecture

@@ -139,7 +139,7 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
 | `provider` | (auto) | Override provider selection |
 | `encoding` | `opus` | Audio encoding: `opus` or `ogg-opus` |
 | `lang` | (auto) | Language hint |
-| `tag` | (none) | Session tags (multiple values supported, e.g., `tag=prod&tag=us-east`) |
+| `tag` | (none) | Session tags (multiple values supported, max 128 chars each) |
 
 ### Client Messages
 

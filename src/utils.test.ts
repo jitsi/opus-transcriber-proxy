@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractSessionParameters } from './utils';
+import { extractSessionParameters, validateTags } from './utils';
 
 describe('extractSessionParameters', () => {
 	describe('tag parameter', () => {
@@ -56,6 +56,70 @@ describe('extractSessionParameters', () => {
 			const params = extractSessionParameters(url);
 
 			expect(params.tags).toEqual(['', 'valid']);
+		});
+
+		it('should reject tags exceeding 128 characters', () => {
+			const longTag = 'a'.repeat(129);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=${longTag}`;
+
+			expect(() => extractSessionParameters(url)).toThrow(
+				'Invalid tag: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..." exceeds maximum length of 128 characters (actual: 129)'
+			);
+		});
+
+		it('should reject when one of multiple tags is too long', () => {
+			const longTag = 'x'.repeat(129);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=valid&tag=${longTag}&tag=another`;
+
+			expect(() => extractSessionParameters(url)).toThrow(
+				'Invalid tag: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." exceeds maximum length of 128 characters (actual: 129)'
+			);
+		});
+
+		it('should accept tags exactly 128 characters', () => {
+			const maxLengthTag = 'a'.repeat(128);
+			const url = `ws://localhost:8080/transcribe?sessionId=test&tag=${maxLengthTag}`;
+			const params = extractSessionParameters(url);
+
+			expect(params.tags).toEqual([maxLengthTag]);
+		});
+	});
+
+	describe('validateTags', () => {
+		it('should accept valid tags under 128 characters', () => {
+			const tags = ['production', 'region-us', 'customer-service'];
+			expect(() => validateTags(tags)).not.toThrow();
+		});
+
+		it('should accept empty array', () => {
+			expect(() => validateTags([])).not.toThrow();
+		});
+
+		it('should accept tags exactly 128 characters', () => {
+			const tags = ['a'.repeat(128)];
+			expect(() => validateTags(tags)).not.toThrow();
+		});
+
+		it('should reject tags over 128 characters', () => {
+			const tags = ['a'.repeat(129)];
+			expect(() => validateTags(tags)).toThrow('exceeds maximum length of 128 characters');
+		});
+
+		it('should reject if any tag in array is too long', () => {
+			const tags = ['valid', 'x'.repeat(200), 'another'];
+			expect(() => validateTags(tags)).toThrow('exceeds maximum length of 128 characters');
+		});
+
+		it('should include tag length in error message', () => {
+			const tags = ['x'.repeat(150)];
+			expect(() => validateTags(tags)).toThrow('(actual: 150)');
+		});
+
+		it('should truncate long tags in error message', () => {
+			const tags = ['y'.repeat(200)];
+			expect(() => validateTags(tags)).toThrow(
+				'Invalid tag: "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..."'
+			);
 		});
 	});
 

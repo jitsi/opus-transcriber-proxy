@@ -13,6 +13,24 @@ export interface ISessionParameters {
 	tags: string[];
 }
 
+/**
+ * Validates tags according to Deepgram requirements.
+ * Tags must be ≤ 128 characters per tag.
+ * @see https://developers.deepgram.com/docs/stt-tagging
+ * @throws Error if any tag is invalid
+ */
+export function validateTags(tags: string[]): void {
+	const maxTagLength = 128;
+
+	for (const tag of tags) {
+		if (tag.length > maxTagLength) {
+			throw new Error(
+				`Invalid tag: "${tag.substring(0, 50)}..." exceeds maximum length of ${maxTagLength} characters (actual: ${tag.length})`
+			);
+		}
+	}
+}
+
 export function extractSessionParameters(url: string): ISessionParameters {
 	const parsedUrl = new URL(url);
 	const sessionId = parsedUrl.searchParams.get('sessionId');
@@ -27,6 +45,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const encoding: AudioEncoding = encodingParam === 'ogg-opus' ? 'ogg-opus' : 'opus';
 	// Parse tags as multiple tag= parameters (like Deepgram API)
 	const tags = parsedUrl.searchParams.getAll('tag');
+
+	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
+	validateTags(tags);
 
 	return {
 		url: parsedUrl,

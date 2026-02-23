@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { validateTags } from './utils';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -16,6 +17,13 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	} catch {
 		return defaultValue;
 	}
+}
+
+function parseAndValidateTags(value: string | undefined): string[] {
+	if (!value) return [];
+	const tags = value.split(',').map((t) => t.trim()).filter((t) => t);
+	validateTags(tags);
+	return tags;
 }
 
 export type Provider = 'openai' | 'gemini' | 'deepgram' | 'dummy';
@@ -57,7 +65,7 @@ export const config = {
 		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
 		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
 		includeLanguage: process.env.DEEPGRAM_INCLUDE_LANGUAGE === 'true', // Default false
-		tags: process.env.DEEPGRAM_TAGS ? process.env.DEEPGRAM_TAGS.split(',').map((t) => t.trim()).filter((t) => t) : [],
+		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 
 	server: {
