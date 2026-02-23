@@ -21,6 +21,8 @@ export interface BackendConfig {
 	model?: string;
 	/** Audio encoding format ('opus' for raw frames, 'ogg-opus' for containerized) */
 	encoding?: AudioEncoding;
+	/** Tags to be sent to the backend (e.g., for Deepgram) */
+	tags?: string[];
 }
 
 export interface TranscriptionBackend {

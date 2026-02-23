@@ -92,9 +92,10 @@ export class DeepgramBackend implements TranscriptionBackend {
 					params.set('diarize', config.deepgram.diarize.toString());
 				}
 
-				// Add tags if configured
-				if (config.deepgram.tags && config.deepgram.tags.length > 0) {
-					config.deepgram.tags.forEach((tag) => {
+				// Add tags from config and URL parameter
+				const allTags = [...(config.deepgram.tags || []), ...(backendConfig.tags || [])];
+				if (allTags.length > 0) {
+					allTags.forEach((tag) => {
 						params.append('tag', tag);
 					});
 				}

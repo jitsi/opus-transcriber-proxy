@@ -10,6 +10,30 @@ export interface ISessionParameters {
 	language: string | null;
 	provider: string | null;
 	encoding: AudioEncoding;
+	tags: string[];
+}
+
+/**
+ * Validates tags according to Deepgram requirements.
+ * Tags must be ≤ 128 characters per tag.
+ *
+ * Note: This validation is applied universally to all connections regardless of provider.
+ * Non-Deepgram backends currently ignore tags, so this is harmless. If a future backend
+ * has different tag constraints, it should either override this validation or bypass it.
+ *
+ * @see https://developers.deepgram.com/docs/stt-tagging
+ * @throws Error if any tag is invalid
+ */
+export function validateTags(tags: string[]): void {
+	const maxTagLength = 128;
+
+	for (const tag of tags) {
+		if (tag.length > maxTagLength) {
+			throw new Error(
+				`Invalid tag: "${tag.substring(0, 50)}..." exceeds maximum length of ${maxTagLength} characters (actual: ${tag.length})`
+			);
+		}
+	}
 }
 
 export function extractSessionParameters(url: string): ISessionParameters {
@@ -24,6 +48,11 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const encodingParam = parsedUrl.searchParams.get('encoding');
 	// Default to 'opus' (raw opus frames) for backwards compatibility
 	const encoding: AudioEncoding = encodingParam === 'ogg-opus' ? 'ogg-opus' : 'opus';
+	// Parse tags as multiple tag= parameters (like Deepgram API), filter empty strings
+	const tags = parsedUrl.searchParams.getAll('tag').filter((t) => t);
+
+	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
+	validateTags(tags);
 
 	return {
 		url: parsedUrl,
@@ -35,6 +64,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		language: lang,
 		provider,
 		encoding,
+		tags,
 	};
 }
 
