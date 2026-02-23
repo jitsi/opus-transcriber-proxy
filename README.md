@@ -36,6 +36,11 @@ Connect via WebSocket:
 ws://localhost:8080/transcribe?sessionId=test&sendBack=true
 ```
 
+With tags (for provider-specific features like Deepgram tagging):
+```
+ws://localhost:8080/transcribe?sessionId=test&sendBack=true&tag=production&tag=region-us
+```
+
 ## Installation
 
 ### Prerequisites
@@ -134,6 +139,7 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
 | `provider` | (auto) | Override provider selection |
 | `encoding` | `opus` | Audio encoding: `opus` or `ogg-opus` |
 | `lang` | (auto) | Language hint |
+| `tag` | (none) | Session tags (multiple values supported, e.g., `tag=prod&tag=us-east`) |
 
 ### Client Messages
 

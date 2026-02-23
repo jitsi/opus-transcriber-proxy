@@ -88,6 +88,7 @@ DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
 DEEPGRAM_DIARIZE=false
+DEEPGRAM_TAGS=production,region-us  # Comma-separated tags for all sessions (optional)
 
 # Make Deepgram the default provider
 PROVIDERS_PRIORITY=deepgram,openai,gemini
@@ -115,6 +116,12 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
   - Optional: Include detected language in transcript (e.g., `"Hello [en]"`) via `DEEPGRAM_INCLUDE_LANGUAGE=true`
   - **Note**: `detect_language` parameter is NOT supported for streaming (only for pre-recorded audio)
 - Generates unique UUID for each transcription message
+- **Tagging support**:
+  - Tags can be set via `DEEPGRAM_TAGS` environment variable (comma-separated, applies to all sessions)
+  - Tags can be added per-session via URL parameters: `tag=value` (multiple parameters supported)
+  - URL tags are combined with environment tags and sent to Deepgram's API
+  - Useful for organizing and filtering transcription requests in Deepgram's dashboard
+  - Example: `ws://host/transcribe?sessionId=test&tag=production&tag=region-us&tag=customer-service`
 
 ## Architecture
 
