@@ -223,13 +223,6 @@ export class DeepgramBackend implements TranscriptionBackend {
 		return this.status;
 	}
 
-	wantsRawOpus(encoding?: 'opus' | 'ogg-opus'): boolean {
-		// Return true for raw opus or containerized ogg-opus (both skip decoding)
-		// Use provided encoding or fall back to global config
-		const effectiveEncoding = encoding || config.deepgram.encoding;
-		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
-	}
-
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
 		if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
 			return inputFormat;

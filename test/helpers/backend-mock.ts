@@ -8,14 +8,14 @@ import type { TranscriptionMessage } from '../../src/transcriberproxy';
 
 export interface MockTranscriptionBackendOptions {
 	status?: 'pending' | 'connected' | 'failed' | 'closed';
-	wantsRawOpus?: boolean;
+	wantsRawAudio?: boolean;
 	connectDelay?: number;
 	autoConnect?: boolean;
 }
 
 export class MockTranscriptionBackend implements TranscriptionBackend {
 	private _status: 'pending' | 'connected' | 'failed' | 'closed';
-	private _wantsRawOpus: boolean;
+	private _wantsRawAudio: boolean;
 	private _connectDelay: number;
 	private _sentAudio: string[] = [];
 	private _promptHistory: string[] = [];
@@ -31,7 +31,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 
 	constructor(options: MockTranscriptionBackendOptions = {}) {
 		this._status = options.status || 'pending';
-		this._wantsRawOpus = options.wantsRawOpus || false;
+		this._wantsRawAudio = options.wantsRawAudio || false;
 		this._connectDelay = options.connectDelay || 0;
 
 		// Auto-connect if requested
@@ -92,12 +92,8 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 		return this._status;
 	}
 
-	wantsRawOpus?(): boolean {
-		return this._wantsRawOpus;
-	}
-
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
-		if (this._wantsRawOpus && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
+		if (this._wantsRawAudio && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
 			return inputFormat;
 		}
 		return { encoding: 'L16', sampleRate: 24000 };

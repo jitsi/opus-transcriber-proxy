@@ -14,6 +14,7 @@ import type { AudioEncoding } from '../utils';
 
 export interface AudioFormat {
 	encoding: string;
+	channels?: number;
 	sampleRate?: number;
 }
 
@@ -40,21 +41,10 @@ export interface TranscriptionBackend {
 
 	/**
 	 * Send base64-encoded audio data to the backend
-	 * Audio format depends on wantsRawOpus():
-	 * - If false (default): 24kHz, 16-bit, mono PCM
-	 * - If true: Raw Opus frames at 48kHz
-	 * @param audioBase64 - Base64-encoded audio (PCM or Opus)
+	 * Audio format is determined by getDesiredAudioFormat(): PCM (L16) or raw Opus/Ogg
+	 * @param audioBase64 - Base64-encoded audio
 	 */
 	sendAudio(audioBase64: string): Promise<void>;
-
-	/**
-	 * Optional: Indicates if this backend wants raw audio instead of decoded PCM
-	 * If true, sendAudio will receive base64-encoded raw audio (Opus frames or Ogg-Opus container)
-	 * If false/undefined (default), sendAudio receives base64-encoded PCM
-	 * @param encoding - The audio encoding format being used (opus or ogg-opus)
-	 * @returns true if backend prefers raw audio in this encoding
-	 */
-	wantsRawOpus?(encoding?: AudioEncoding): boolean;
 
 	/**
 	 * Returns the audio format this backend wants to receive for a given input format.

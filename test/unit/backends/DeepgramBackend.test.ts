@@ -655,10 +655,10 @@ describe('DeepgramBackend', () => {
 		});
 	});
 
-	describe('wantsRawOpus', () => {
-		it('should return false for linear16 encoding', () => {
+	describe('getDesiredAudioFormat', () => {
+		it('should return L16 for linear16 encoding', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
-			expect(backend.wantsRawOpus()).toBe(false);
+			expect(backend.getDesiredAudioFormat({ encoding: 'L16' })).toEqual({ encoding: 'L16', sampleRate: 24000 });
 		});
 	});
 });

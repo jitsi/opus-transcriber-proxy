@@ -163,7 +163,7 @@ describe('OutgoingConnection', () => {
 
 		it('should skip OpusDecoder when backend wants raw Opus', async () => {
 			// Create backend that wants raw Opus
-			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawOpus: true });
+			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
 
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 
