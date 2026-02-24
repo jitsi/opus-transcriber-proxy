@@ -2,8 +2,8 @@ import type { AudioDecoder, DecodedAudio } from '../AudioDecoder';
 import { NO_CHUNK_INFO } from '../AudioDecoder';
 import { OpusDecoder, type OpusDecoderSampleRate } from './OpusDecoder';
 
-/** Maximum loss concealment: 120 ms at 24 kHz */
-const MAX_CONCEALMENT_SAMPLES = 120 * 24;
+/** Opus always uses a 48 kHz clock for RTP timestamps, regardless of output sample rate */
+const OPUS_CLOCK_RATE = 48000;
 
 /**
  * Higher-level Opus decoder that owns chunk-sequence tracking and packet-loss
@@ -14,8 +14,13 @@ export class OpusAudioDecoder implements AudioDecoder {
 	private _lastChunkNo = NO_CHUNK_INFO;
 	private _lastTimestamp = NO_CHUNK_INFO;
 	private _lastFrameSamples = -1;
+	private _sampleRate: OpusDecoderSampleRate;
+	/** Maximum loss concealment: 120 ms at the configured output sample rate */
+	private _maxConcealmentSamples: number;
 
 	constructor(sampleRate: OpusDecoderSampleRate = 24000) {
+		this._sampleRate = sampleRate;
+		this._maxConcealmentSamples = Math.round(0.120 * sampleRate);
 		this._decoder = new OpusDecoder({ sampleRate, channels: 1 });
 	}
 
@@ -37,8 +42,8 @@ export class OpusAudioDecoder implements AudioDecoder {
 			if (lostFrames > 0 && this._lastFrameSamples > 0) {
 				const lostFramesInSamples = lostFrames * this._lastFrameSamples;
 				const timestampDelta = timestamp !== NO_CHUNK_INFO ? timestamp - this._lastTimestamp : 0;
-				const timestampDeltaInSamples = timestampDelta > 0 ? (timestampDelta / 48000) * 24000 : Infinity;
-				const samplesToConceal = Math.min(lostFramesInSamples, timestampDeltaInSamples, MAX_CONCEALMENT_SAMPLES);
+				const timestampDeltaInSamples = timestampDelta > 0 ? (timestampDelta / OPUS_CLOCK_RATE) * this._sampleRate : Infinity;
+				const samplesToConceal = Math.min(lostFramesInSamples, timestampDeltaInSamples, this._maxConcealmentSamples);
 
 				const concealed = this._decoder.conceal(frame, samplesToConceal);
 				results.push({ ...concealed, kind: 'concealment' });
