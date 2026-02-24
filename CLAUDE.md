@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a real-time WebSocket transcription proxy that routes Opus-encoded audio to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
+This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
 - Multi-participant sessions (one WebSocket handles multiple audio streams)
 - Provider fallback with configurable priority
 - Two deployment modes: Node.js standalone or Cloudflare Workers with Containers
@@ -97,7 +97,9 @@ TranscriberProxy (transcriberproxy.ts)
     └─ Routes to multiple OutgoingConnections
         ↓
 OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
-    ├─ OpusDecoder (WASM) - Decodes Opus frames to PCM
+    ├─ AudioDecoder (via AudioDecoderFactory)
+    │   ├─ OpusAudioDecoder - Decodes Opus frames to PCM (WASM-backed)
+    │   └─ PassThroughDecoder - Forwards raw frames unchanged
     └─ TranscriptionBackend - Sends audio to provider
         ↓
     Backend (OpenAIBackend, DeepgramBackend, GeminiBackend)
@@ -116,17 +118,41 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 
 **OutgoingConnection** (`src/OutgoingConnection.ts`)
 - Manages one participant's audio stream
-- Buffers Opus frames until decoder is ready
-- Decodes Opus to PCM (unless backend wants raw Opus)
-- Sends audio to transcription backend
+- Buffers audio frames until decoder is ready
+- Creates an `AudioDecoder` via `AudioDecoderFactory` based on input/output format negotiation
+- Sends decoded (or raw) audio to transcription backend
 - Implements idle commit timeout (forces transcription when audio stops)
 - Maintains transcript history for context injection
+
+**AudioDecoder** (`src/AudioDecoder.ts`)
+- Interface for format-agnostic audio decoding with chunk-sequence tracking
+- `decodeChunk()` returns `DecodedAudio[]` (with `audioData: Uint8Array`) or `null` for out-of-order packets
+- `DecodedAudio.kind` distinguishes `'normal'` from `'concealment'` frames (for metrics)
+- Implementations: `OpusAudioDecoder`, `PassThroughDecoder`
+
+**AudioDecoderFactory** (`src/AudioDecoderFactory.ts`)
+- `createAudioDecoder(inputFormat, outputFormat)` selects the right decoder
+- Returns `PassThroughDecoder` when output is raw Opus or Ogg (no decoding needed)
+- Returns `OpusAudioDecoder` when PCM output is required
+
+**OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
+- Implements `AudioDecoder` with packet-loss concealment logic
+- Wraps the low-level WASM `OpusDecoder`; handles gap detection and concealment frames
+- Decodes Opus frames at 48kHz to PCM at 24kHz mono
+
+**PassThroughDecoder** (`src/PassThroughDecoder.ts`)
+- Implements `AudioDecoder` without actual decoding
+- Forwards raw Opus or Ogg frames unchanged; still performs out-of-order packet detection
+
+**OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
+- Low-level TypeScript wrapper around the WASM Opus decoder
+- Used by `OpusAudioDecoder`; not used directly by `OutgoingConnection`
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers
 - Implementations: `OpenAIBackend`, `DeepgramBackend`, `GeminiBackend`, `DummyBackend`
 - Each backend handles provider-specific WebSocket protocol
-- `wantsRawOpus()` determines if backend wants Opus frames or decoded PCM
+- `getDesiredAudioFormat(inputFormat)` returns the `AudioFormat` the backend wants to receive (replaces the old `wantsRawOpus()`)
 
 **BackendFactory** (`src/backends/BackendFactory.ts`)
 - Creates backend instances based on provider name
@@ -137,11 +163,6 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Enables session resumption: client can disconnect/reconnect within grace period
 - Detached sessions maintain their `OutgoingConnection` instances
 - Metrics tracking for active sessions
-
-**OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
-- TypeScript wrapper around WASM Opus decoder
-- Decodes Opus frames at 48kHz to PCM at 24kHz mono
-- Each `OutgoingConnection` creates its own decoder instance
 
 ### Backend-Specific Behavior
 
@@ -208,9 +229,13 @@ See `src/backends/DummyBackend.ts` for a minimal example.
 ### Audio Encoding Notes
 
 - Client sends Opus frames (raw or Ogg-Opus container)
-- `OutgoingConnection` decodes to PCM unless `backend.wantsRawOpus()` returns true
-- PCM format: 24kHz, 16-bit, mono
+- `OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` to determine what the backend wants
+- `AudioDecoderFactory.createAudioDecoder(inputFormat, outputFormat)` then creates the right decoder:
+  - `PassThroughDecoder` when output encoding is `'opus'` or `'ogg'` (no decode/re-encode)
+  - `OpusAudioDecoder` when output encoding is `'L16'` (PCM)
+- PCM format: 24kHz, 16-bit, mono (`audioData` is a `Uint8Array` of raw PCM bytes)
 - Deepgram can accept raw Opus to avoid decode/re-encode
+- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` to swap the decoder live if the format changes mid-session
 
 ### Session Resumption
 
@@ -231,6 +256,9 @@ src/
 ├── server.ts                  # HTTP/WS server entry (Node.js)
 ├── transcriberproxy.ts        # Main proxy orchestration
 ├── OutgoingConnection.ts      # Per-participant handler
+├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types
+├── AudioDecoderFactory.ts     # Selects decoder based on format negotiation
+├── PassThroughDecoder.ts      # Raw-audio pass-through (no decode)
 ├── SessionManager.ts          # Session lifecycle management
 ├── config.ts                  # Configuration
 ├── dispatcher.ts              # Dispatcher WebSocket forwarding
@@ -241,14 +269,15 @@ src/
 ├── utils.ts                   # Shared utilities
 ├── MetricCache.ts             # Metric aggregation
 ├── backends/
-│   ├── TranscriptionBackend.ts   # Abstract interface
+│   ├── TranscriptionBackend.ts   # Abstract interface (incl. getDesiredAudioFormat)
 │   ├── BackendFactory.ts         # Provider factory
 │   ├── OpenAIBackend.ts          # OpenAI implementation
 │   ├── DeepgramBackend.ts        # Deepgram implementation
 │   ├── GeminiBackend.ts          # Gemini implementation
 │   └── DummyBackend.ts           # Test/stats backend
 └── OpusDecoder/
-    ├── OpusDecoder.ts            # TypeScript wrapper
+    ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
+    ├── OpusDecoder.ts            # Low-level WASM wrapper
     ├── opus_frame_decoder.c/h    # C code for WASM
     └── opus/                     # libopus source (submodule)
 
@@ -343,4 +372,6 @@ See README.md for complete list. Key ones:
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant within a session. Format can be `{id}-{ssrc}` or just `{id}`.
-- Deepgram is the only backend that supports raw Opus (via `wantsRawOpus()`).
+- Deepgram is the only backend that supports raw Opus; it returns `encoding: 'opus'` from `getDesiredAudioFormat()`. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
+- `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
+- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'L16', sampleRate: 24000 }` for PCM or mirror the input encoding for raw pass-through.
