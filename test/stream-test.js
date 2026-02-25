@@ -258,6 +258,14 @@ ws.on('open', () => {
     metrics.connectTime = Date.now();
     log('Connected, streaming audio...');
 
+    ws.send(JSON.stringify({
+        event: 'start',
+        start: {
+            tag: options.tag,
+            mediaFormat: { encoding: 'ogg-opus' },
+        },
+    }));
+
     streamInterval = setInterval(() => {
         if (offset >= audioData.length) {
             if (options.loop) {
