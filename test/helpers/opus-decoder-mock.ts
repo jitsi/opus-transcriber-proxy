@@ -3,7 +3,6 @@
  * Mocks the WASM-based OpusDecoder without loading the actual WASM module
  */
 
-import type { AudioDecoder } from '../../src/AudioDecoder';
 import type {
 	OpusDecoderSampleRate,
 	OpusDecodedAudio,

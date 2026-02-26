@@ -7,7 +7,6 @@ import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { getInstruments } from './telemetry/instruments';
-import { parse } from 'node:path';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
