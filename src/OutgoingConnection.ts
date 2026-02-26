@@ -76,7 +76,11 @@ export class OutgoingConnection {
 		if (encoding === 'ogg-opus') {
 			this.inputAudioFormat = { encoding: 'ogg' };
 		} else {
-			this.inputAudioFormat = { encoding: encoding ?? '' };
+			this.inputAudioFormat = {
+				encoding: encoding ?? '',
+				...(inputFormat?.sampleRate !== undefined && { sampleRate: inputFormat.sampleRate }),
+				...(inputFormat?.channels !== undefined && { channels: inputFormat.channels }),
+			};
 		}
 
 		if (this.backend) {

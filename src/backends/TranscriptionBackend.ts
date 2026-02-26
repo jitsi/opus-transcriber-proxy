@@ -18,7 +18,7 @@ export interface AudioFormat {
 	sampleRate?: number;
 }
 
-const VALID_INPUT_ENCODINGS = ['opus', 'ogg-opus'] as const;
+const VALID_INPUT_ENCODINGS = ['opus', 'ogg-opus', 'L16'] as const;
 
 /**
  * Validates that an unknown value is a well-formed AudioFormat suitable for use
