@@ -6,6 +6,8 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { validateAudioFormat } from './backends/TranscriptionBackend';
+import type { AudioFormat } from './backends/TranscriptionBackend';
 import { getInstruments } from './telemetry/instruments';
 
 export interface TranscriptionMessage {
@@ -216,7 +218,14 @@ export class TranscriberProxy extends EventEmitter {
 		const tag = parsedMessage.start?.tag;
 		logger.info(`Received start event: ${JSON.stringify(parsedMessage)}`);
 		if (tag) {
-			const mediaFormat = parsedMessage.start.mediaFormat;
+			let mediaFormat: AudioFormat;
+			try {
+				mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
+			} catch (error) {
+				logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+
 			const connection = this.getConnection(tag);
 			if (connection) {
 				connection.updateInputFormat(mediaFormat);
