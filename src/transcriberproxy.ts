@@ -146,14 +146,8 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
-	private getConnection(tag: string): OutgoingConnection | null {
-		// Check if connection already exists for this tag
-		const connection = this.outgoingConnections.get(tag);
-		if (connection !== undefined) {
-			return connection;
-		}
-		logger.error(`No existing connection found for tag: ${tag}`);
-		return null;
+	private getConnection(tag: string): OutgoingConnection | undefined {
+		return this.outgoingConnections.get(tag);
 	}
 
 	private createConnection(tag: string, mediaFormat?: any): OutgoingConnection {
@@ -237,9 +231,11 @@ export class TranscriberProxy extends EventEmitter {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
 			const connection = this.getConnection(tag);
-			if (connection) {
-				connection.handleMediaEvent(parsedMessage);
+			if (!connection) {
+				logger.error(`Received media event for tag "${tag}" with no prior start event`);
+				return;
 			}
+			connection.handleMediaEvent(parsedMessage);
 		}
 	}
 
