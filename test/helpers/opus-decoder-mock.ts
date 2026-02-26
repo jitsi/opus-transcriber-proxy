@@ -21,7 +21,7 @@ export interface MockOpusDecoderOptions<SampleRate extends OpusDecoderSampleRate
 	concealError?: DecodeError;
 }
 
-export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> implements AudioDecoder {
+export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	private _ready: Promise<void>;
 	private _sampleRate: SampleRate;
 	private _channels: number;
