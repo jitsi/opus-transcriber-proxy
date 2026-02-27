@@ -69,16 +69,12 @@ export class OutgoingConnection {
 	updateInputFormat(inputFormat: AudioFormat): void {
 		// Validate synchronously so callers get an immediate error rather than
 		// an async failure deep in reinitializeDecoder -> createAudioDecoder.
-		validateAudioFormat(inputFormat);
+		const validatedFormat = validateAudioFormat(inputFormat);
 
-		if (inputFormat.encoding === 'ogg-opus') {
+		if (validatedFormat.encoding === 'ogg-opus') {
 			this.inputAudioFormat = { encoding: 'ogg' };
 		} else {
-			this.inputAudioFormat = {
-				encoding: inputFormat.encoding,
-				...(inputFormat.sampleRate !== undefined && { sampleRate: inputFormat.sampleRate }),
-				...(inputFormat.channels !== undefined && { channels: inputFormat.channels }),
-			};
+			this.inputAudioFormat = validatedFormat;
 		}
 
 		if (this.backend) {
