@@ -1,4 +1,11 @@
 /**
+ * Sample rates supported by the resampler.
+ * These are the standard rates used by the Opus codec and cover the cases
+ * the original audio-utils.ts resampler (8→24 kHz, 16→24 kHz) was built for.
+ */
+export const RESAMPLER_SUPPORTED_SAMPLE_RATES: ReadonlySet<number> = new Set([8000, 12000, 16000, 24000, 48000]);
+
+/**
  * PCM16 resampler using linear interpolation.
  * Based on the resampler in cf-transcriber-worker/src/audio-utils.ts.
  *
@@ -6,8 +13,8 @@
  * the base64 encoding/decoding overhead of the original implementation.
  *
  * @param frame - Raw PCM16 bytes (little-endian, mono)
- * @param inputRate - Input sample rate in Hz
- * @param outputRate - Output sample rate in Hz
+ * @param inputRate - Input sample rate in Hz; must be in RESAMPLER_SUPPORTED_SAMPLE_RATES
+ * @param outputRate - Output sample rate in Hz; must be in RESAMPLER_SUPPORTED_SAMPLE_RATES
  * @returns Resampled PCM16 bytes (little-endian), or the original frame if rates match
  */
 export function resamplePCM16(frame: Uint8Array, inputRate: number, outputRate: number): Uint8Array {

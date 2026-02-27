@@ -1,6 +1,6 @@
 import type { AudioDecoder, DecodedAudio } from './AudioDecoder';
 import { NO_CHUNK_INFO } from './AudioDecoder';
-import { resamplePCM16 } from './Resampler';
+import { resamplePCM16, RESAMPLER_SUPPORTED_SAMPLE_RATES } from './Resampler';
 
 /**
  * AudioDecoder for L16 (raw PCM16) input.
@@ -19,6 +19,16 @@ export class L16Decoder implements AudioDecoder {
 	private _outputSampleRate: number;
 
 	constructor(inputSampleRate: number, outputSampleRate: number) {
+		if (!RESAMPLER_SUPPORTED_SAMPLE_RATES.has(inputSampleRate)) {
+			throw new Error(
+				`Unsupported L16 input sample rate: ${inputSampleRate}. Supported rates: ${[...RESAMPLER_SUPPORTED_SAMPLE_RATES].join(', ')}`
+			);
+		}
+		if (!RESAMPLER_SUPPORTED_SAMPLE_RATES.has(outputSampleRate)) {
+			throw new Error(
+				`Unsupported L16 output sample rate: ${outputSampleRate}. Supported rates: ${[...RESAMPLER_SUPPORTED_SAMPLE_RATES].join(', ')}`
+			);
+		}
 		this._inputSampleRate = inputSampleRate;
 		this._outputSampleRate = outputSampleRate;
 	}
