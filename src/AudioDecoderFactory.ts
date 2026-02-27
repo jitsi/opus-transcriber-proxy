@@ -1,4 +1,4 @@
-import type { AudioFormat } from './backends/TranscriptionBackend';
+import type { AudioFormat } from './AudioFormat';
 import type { AudioDecoder } from './AudioDecoder';
 import { OpusAudioDecoder } from './OpusDecoder/OpusAudioDecoder';
 import { type OpusDecoderSampleRate } from './OpusDecoder/OpusDecoder';

@@ -7,8 +7,8 @@ import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig } from './backends/BackendFactory';
-import type { TranscriptionBackend, AudioFormat } from './backends/TranscriptionBackend';
-import { validateAudioFormat } from './backends/TranscriptionBackend';
+import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
 

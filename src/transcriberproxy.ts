@@ -6,8 +6,7 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
-import { validateAudioFormat } from './backends/TranscriptionBackend';
-import type { AudioFormat } from './backends/TranscriptionBackend';
+import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
 export interface TranscriptionMessage {
