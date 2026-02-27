@@ -34,6 +34,7 @@ export class OutgoingConnection {
 	}
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private decoder?: AudioDecoder;
+	private reinitGeneration = 0;
 	private backend?: TranscriptionBackend;
 	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
 	private pendingAudioFrames: string[] = [];
@@ -167,13 +168,26 @@ export class OutgoingConnection {
 			throw new Error('Cannot initialize decoder without a backend');
 		}
 
+		// Capture a generation token before the await. If another reinitializeDecoder
+		// call starts while we're awaiting, it will increment reinitGeneration, and we
+		// will discard our result rather than overwriting the newer decoder.
+		const generation = ++this.reinitGeneration;
+
 		this.decoder?.free();
 		this.decoder = undefined;
 		this.decoderStatus = 'pending';
 
 		const desiredFormat = this.backend.getDesiredAudioFormat(this.inputAudioFormat);
-		this.decoder = createAudioDecoder(this.inputAudioFormat, desiredFormat);
-		await this.decoder.ready;
+		const newDecoder = createAudioDecoder(this.inputAudioFormat, desiredFormat);
+		await newDecoder.ready;
+
+		if (generation !== this.reinitGeneration) {
+			// A newer reinitializeDecoder call has taken over; discard this result.
+			newDecoder.free();
+			return;
+		}
+
+		this.decoder = newDecoder;
 		this.decoderStatus = 'ready';
 		logger.info(`Audio decoder ready for tag: ${this.localTag} (output: ${desiredFormat.encoding})`);
 
