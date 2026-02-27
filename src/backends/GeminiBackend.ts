@@ -7,7 +7,7 @@
 
 import { config } from '../config';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 
@@ -150,6 +150,10 @@ export class GeminiBackend implements TranscriptionBackend {
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
 		return this.status;
+	}
+
+	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	private sendSetupMessage(): void {

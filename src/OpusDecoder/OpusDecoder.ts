@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from '../logger';
+import type { DecodeError, DecodedAudio } from '../AudioDecoder';
 
 // Load WASM module from file system for Node.js
 const __filename = fileURLToPath(import.meta.url);
@@ -29,19 +30,11 @@ const wasm = new WebAssembly.Module(wasmBuffer);
 export type OpusDecoderDefaultSampleRate = 48000;
 export type OpusDecoderSampleRate = 8000 | 12000 | 16000 | 24000 | OpusDecoderDefaultSampleRate;
 
-export interface DecodeError {
-	message: string;
-	frameLength: number;
-	frameNumber: number;
-	inputBytes: number;
-	outputSamples: number;
-}
+// Re-export DecodeError from AudioDecoder for backwards compatibility
+export type { DecodeError } from '../AudioDecoder';
 
-export interface OpusDecodedAudio<SampleRate extends OpusDecoderSampleRate = OpusDecoderDefaultSampleRate> {
-	pcmData: Int16Array;
-	samplesDecoded: number;
+export interface OpusDecodedAudio<SampleRate extends OpusDecoderSampleRate = OpusDecoderDefaultSampleRate> extends DecodedAudio {
 	sampleRate: SampleRate;
-	errors: DecodeError[];
 	channels: number;
 }
 
@@ -236,7 +229,7 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 			logger.error('Decoder freed or not initialized');
 			return {
 				errors,
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -268,11 +261,12 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 		this._inputBytes += opusFrame.length;
 		this._outputSamples += samplesDecoded;
 
-		const outputBuf = new Int16Array(this._output.buf.subarray(0, samplesDecoded * this._channels));
+		const int16Buf = new Int16Array(this._output.buf.subarray(0, samplesDecoded * this._channels));
+		const outputBuf = new Uint8Array(int16Buf.buffer);
 
 		return {
 			errors,
-			pcmData: outputBuf,
+			audioData: outputBuf,
 			channels: this._channels,
 			samplesDecoded,
 			sampleRate: this._sampleRate,
@@ -290,7 +284,7 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 			logger.error('Decoder freed or not initialized');
 			return {
 				errors,
-				pcmData: new Int16Array(0),
+				audioData: new Uint8Array(0),
 				channels: this._channels,
 				samplesDecoded: 0,
 				sampleRate: this._sampleRate,
@@ -327,11 +321,12 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 		this._inputBytes += inLength;
 		this._outputSamples += samplesDecoded;
 
-		const outputBuf = new Int16Array(this._output.buf.subarray(0, samplesDecoded * this._channels));
+		const int16Buf = new Int16Array(this._output.buf.subarray(0, samplesDecoded * this._channels));
+		const outputBuf = new Uint8Array(int16Buf.buffer);
 
 		return {
 			errors,
-			pcmData: outputBuf,
+			audioData: outputBuf,
 			channels: this._channels,
 			samplesDecoded,
 			sampleRate: this._sampleRate,

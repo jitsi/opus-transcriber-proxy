@@ -69,14 +69,14 @@ vi.mock('../../src/OpusDecoder/OpusDecoder', () => {
 		constructor() {
 			this.ready = Promise.resolve();
 			this.decodeFrame = vi.fn((frame: Uint8Array) => ({
-				pcmData: new Int16Array(960), // 20ms at 48kHz
+				audioData: new Uint8Array(960 * 2), // 20ms at 48kHz (2 bytes per Int16 sample)
 				samplesDecoded: 960,
 				sampleRate: 24000,
 				channels: 1,
 				errors: [],
 			}));
 			this.conceal = vi.fn((frame: Uint8Array | undefined, samples: number) => ({
-				pcmData: new Int16Array(samples),
+				audioData: new Uint8Array(samples * 2),
 				samplesDecoded: samples,
 				sampleRate: 24000,
 				channels: 1,
@@ -117,21 +117,21 @@ describe('OutgoingConnection', () => {
 
 	describe('Constructor and initialization', () => {
 		it('should initialize with tag and options', () => {
-			const conn = new OutgoingConnection('test-tag-123', options);
+			const conn = new OutgoingConnection('test-tag-123', { encoding: 'opus' }, options);
 
 			expect(conn.tag).toBe('test-tag-123');
 			expect(conn.participantId).toBe('test-tag-123');
 		});
 
 		it('should parse tag with ssrc format', () => {
-			const conn = new OutgoingConnection('abc123-456789', options);
+			const conn = new OutgoingConnection('abc123-456789', { encoding: 'opus' }, options);
 
 			expect(conn.tag).toBe('abc123-456789');
 			expect(conn.participantId).toBe('abc123');
 		});
 
 		it('should initialize backend on construction', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 
 			// Wait for async initialization
 			await vi.runAllTimersAsync();
@@ -141,7 +141,7 @@ describe('OutgoingConnection', () => {
 
 		it('should initialize OpusDecoder when backend does not want raw Opus', async () => {
 			// Default mock backend doesn't want raw Opus
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 
 			await vi.runAllTimersAsync();
 
@@ -163,20 +163,30 @@ describe('OutgoingConnection', () => {
 
 		it('should skip OpusDecoder when backend wants raw Opus', async () => {
 			// Create backend that wants raw Opus
-			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawOpus: true });
+			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
 
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 
 			await vi.runAllTimersAsync();
 
 			// OpusDecoder constructor should not have been called for raw Opus mode
 			// (We can't easily test this with the current mock setup, but we verify the flow works)
 		});
+
+		it('should fail synchronously when input format encoding is unsupported', () => {
+			expect(() => new OutgoingConnection('test-tag', { encoding: 'pcm' } as any, options))
+				.toThrow('mediaFormat.encoding must be one of');
+		});
+
+		it('should fail synchronously when input format encoding is missing', () => {
+			expect(() => new OutgoingConnection('test-tag', {} as any, options))
+				.toThrow('mediaFormat.encoding must be a non-empty string');
+		});
 	});
 
 	describe('handleMediaEvent', () => {
 		it('should process valid media event', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const mediaEvent = {
@@ -196,7 +206,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should ignore media with no payload', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const mediaEvent = {
@@ -211,7 +221,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should ignore media for wrong tag', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const mediaEvent = {
@@ -230,7 +240,7 @@ describe('OutgoingConnection', () => {
 			// Create backend that starts in pending state
 			mockBackend = new MockTranscriptionBackend({ autoConnect: false });
 
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 
 			// Don't wait for initialization - keep backend pending
 
@@ -256,7 +266,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should detect and handle packet loss', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			// Send first packet
@@ -286,7 +296,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should discard out-of-order packets', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			// Send packet 1
@@ -317,7 +327,7 @@ describe('OutgoingConnection', () => {
 
 	describe('Idle commit timeout', () => {
 		it('should trigger force commit after idle timeout', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			// Wait for backend initialization only (not all timers)
 			await vi.advanceTimersByTimeAsync(100);
 
@@ -343,7 +353,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should reset idle timeout on new audio', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			// Wait for backend initialization only (not all timers)
 			await vi.advanceTimersByTimeAsync(100);
 
@@ -383,7 +393,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should clear idle timeout on completion', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			// Send audio
@@ -419,7 +429,7 @@ describe('OutgoingConnection', () => {
 
 	describe('Transcript context management', () => {
 		it('should add transcript context', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			conn.addTranscriptContext('participant1: hello world');
@@ -430,7 +440,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should clip transcript history to max size', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			// Add more text than max size (1000 bytes in config)
@@ -450,7 +460,7 @@ describe('OutgoingConnection', () => {
 			// Keep backend in pending status by setting it explicitly
 			mockBackend.setStatus('pending');
 
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.advanceTimersByTimeAsync(100);
 
 			// Get initial prompt count (from connect() call)
@@ -468,7 +478,7 @@ describe('OutgoingConnection', () => {
 
 	describe('close', () => {
 		it('should clean up resources on close', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			conn.close();
@@ -478,7 +488,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should clear idle timeout on close', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			// Send audio to start idle timeout
@@ -505,7 +515,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should call onClosed callback when doClose with notify=true', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const onClosedSpy = vi.fn();
@@ -518,7 +528,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should not call onClosed when close() is called directly', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const onClosedSpy = vi.fn();
@@ -533,7 +543,7 @@ describe('OutgoingConnection', () => {
 
 	describe('Backend event handlers', () => {
 		it('should forward interim transcriptions', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const onInterimSpy = vi.fn();
@@ -554,7 +564,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should forward complete transcriptions', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const onCompleteSpy = vi.fn();
@@ -575,7 +585,7 @@ describe('OutgoingConnection', () => {
 		});
 
 		it('should handle backend errors', async () => {
-			const conn = new OutgoingConnection('test-tag', options);
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();
 
 			const onBackendErrorSpy = vi.fn();

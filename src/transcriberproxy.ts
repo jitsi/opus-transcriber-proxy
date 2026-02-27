@@ -6,6 +6,7 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
 export interface TranscriptionMessage {
@@ -108,6 +109,8 @@ export class TranscriberProxy extends EventEmitter {
 					pongMessage.id = parsedMessage.id;
 				}
 				this.ws.send(JSON.stringify(pongMessage));
+			} else if (parsedMessage && parsedMessage.event === 'start') {
+				this.handleStartEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
 			}
@@ -143,15 +146,13 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
-	private getConnection(tag: string): OutgoingConnection {
-		// Check if connection already exists for this tag
-		const connection = this.outgoingConnections.get(tag);
-		if (connection !== undefined) {
-			return connection;
-		}
+	private getConnection(tag: string): OutgoingConnection | undefined {
+		return this.outgoingConnections.get(tag);
+	}
 
+	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
 		// Create a new connection for this tag (no limit, no reuse)
-		const newConnection = new OutgoingConnection(tag, this.options);
+		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 
 		newConnection.onInterimTranscription = (message) => {
 			this.emit('interim_transcription', message);
@@ -212,10 +213,35 @@ export class TranscriberProxy extends EventEmitter {
 		return newConnection;
 	}
 
+	handleStartEvent(parsedMessage: any): void {
+		const tag = parsedMessage.start?.tag;
+		logger.info(`Received start event: ${JSON.stringify(parsedMessage)}`);
+		if (tag) {
+			let mediaFormat: AudioFormat;
+			try {
+				mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
+			} catch (error) {
+				logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+
+			const connection = this.getConnection(tag);
+			if (connection) {
+				connection.updateInputFormat(mediaFormat);
+			} else {
+				this.createConnection(tag, mediaFormat);
+			}
+		}
+	}
+
 	handleMediaEvent(parsedMessage: any): void {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
 			const connection = this.getConnection(tag);
+			if (!connection) {
+				logger.error(`Received media event for tag "${tag}" with no prior start event`);
+				return;
+			}
 			connection.handleMediaEvent(parsedMessage);
 		}
 	}

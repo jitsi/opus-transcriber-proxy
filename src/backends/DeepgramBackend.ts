@@ -8,7 +8,7 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 
@@ -223,11 +223,15 @@ export class DeepgramBackend implements TranscriptionBackend {
 		return this.status;
 	}
 
-	wantsRawOpus(encoding?: 'opus' | 'ogg-opus'): boolean {
-		// Return true for raw opus or containerized ogg-opus (both skip decoding)
-		// Use provided encoding or fall back to global config
-		const effectiveEncoding = encoding || config.deepgram.encoding;
-		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus is configured.
+		// Without this check, Deepgram would receive Opus bytes but be told the
+		// encoding is linear16 (the default), causing a protocol mismatch.
+		if (config.deepgram.encoding === 'opus' &&
+			(inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
+			return inputFormat;
+		}
+		return { encoding: 'L16', sampleRate: 24000 };
 	}
 
 	private startKeepAlive(): void {
