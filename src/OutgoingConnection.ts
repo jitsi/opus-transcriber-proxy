@@ -8,6 +8,7 @@ import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig } from './backends/BackendFactory';
 import type { TranscriptionBackend, AudioFormat } from './backends/TranscriptionBackend';
+import { validateAudioFormat } from './backends/TranscriptionBackend';
 import { getInstruments } from './telemetry/instruments';
 
 
@@ -55,32 +56,28 @@ export class OutgoingConnection {
 	private metricCache: MetricCache;
 	private inputAudioFormat!: AudioFormat;
 
-	constructor(tag: string, inputFormat: any, options: TranscriberProxyOptions) {
+	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.options = options;
 		this.metricCache = new MetricCache(undefined, NaN);
 
-		// Validate input format before initializing backend
 		this.updateInputFormat(inputFormat);
-
-		// Only initialize backend if input format is valid (not failed or closed)
-		if (this.decoderStatus !== 'failed' && this.decoderStatus !== 'closed') {
-			this.initializeBackend();
-		}
-		// Note: decoder initialization is done in initializeBackend
-		// after we know the desired output format from the backend
+		this.initializeBackend();
 	}
 
-	updateInputFormat(inputFormat: any): void {
-		const encoding = inputFormat?.encoding;
-		if (encoding === 'ogg-opus') {
+	updateInputFormat(inputFormat: AudioFormat): void {
+		// Validate synchronously so callers get an immediate error rather than
+		// an async failure deep in reinitializeDecoder -> createAudioDecoder.
+		validateAudioFormat(inputFormat);
+
+		if (inputFormat.encoding === 'ogg-opus') {
 			this.inputAudioFormat = { encoding: 'ogg' };
 		} else {
 			this.inputAudioFormat = {
-				encoding: encoding ?? '',
-				...(inputFormat?.sampleRate !== undefined && { sampleRate: inputFormat.sampleRate }),
-				...(inputFormat?.channels !== undefined && { channels: inputFormat.channels }),
+				encoding: inputFormat.encoding,
+				...(inputFormat.sampleRate !== undefined && { sampleRate: inputFormat.sampleRate }),
+				...(inputFormat.channels !== undefined && { channels: inputFormat.channels }),
 			};
 		}
 

@@ -151,7 +151,7 @@ export class TranscriberProxy extends EventEmitter {
 		return this.outgoingConnections.get(tag);
 	}
 
-	private createConnection(tag: string, mediaFormat?: any): OutgoingConnection {
+	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
 		// Create a new connection for this tag (no limit, no reuse)
 		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 

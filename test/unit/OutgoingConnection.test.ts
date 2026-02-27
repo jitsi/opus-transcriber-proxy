@@ -173,34 +173,14 @@ describe('OutgoingConnection', () => {
 			// (We can't easily test this with the current mock setup, but we verify the flow works)
 		});
 
-		it('should fail when input format is not opus', async () => {
-			const onErrorSpy = vi.fn();
-			const onClosedSpy = vi.fn();
-
-			const testOptions = { ...options };
-			const conn = new OutgoingConnection('test-tag', { encoding: 'pcm' }, testOptions);
-			conn.onError = onErrorSpy;
-			conn.onClosed = onClosedSpy;
-
-			await vi.runAllTimersAsync();
-
-			// createAudioDecoder rejects the unsupported encoding; connect is never reached
-			expect(mockBackend.getConnectCallCount()).toBe(0);
+		it('should fail synchronously when input format encoding is unsupported', () => {
+			expect(() => new OutgoingConnection('test-tag', { encoding: 'pcm' } as any, options))
+				.toThrow('mediaFormat.encoding must be one of');
 		});
 
-		it('should fail when input format encoding is missing', async () => {
-			const onErrorSpy = vi.fn();
-			const onClosedSpy = vi.fn();
-
-			const testOptions = { ...options };
-			const conn = new OutgoingConnection('test-tag', {}, testOptions);
-			conn.onError = onErrorSpy;
-			conn.onClosed = onClosedSpy;
-
-			await vi.runAllTimersAsync();
-
-			// createAudioDecoder rejects the missing encoding; connect is never reached
-			expect(mockBackend.getConnectCallCount()).toBe(0);
+		it('should fail synchronously when input format encoding is missing', () => {
+			expect(() => new OutgoingConnection('test-tag', {} as any, options))
+				.toThrow('mediaFormat.encoding must be a non-empty string');
 		});
 	});
 
