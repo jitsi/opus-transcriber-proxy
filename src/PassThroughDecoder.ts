@@ -33,7 +33,7 @@ export class PassThroughDecoder implements AudioDecoder {
 			this._lastChunkNo = chunkNo;
 		}
 
-		return [{ audioData: frame, samplesDecoded: frame.length, errors: [], kind: 'normal' }];
+		return [{ audioData: frame, samplesDecoded: 0, errors: [], kind: 'normal' }];
 	}
 
 	reset(): void {

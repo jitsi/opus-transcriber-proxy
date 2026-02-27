@@ -27,7 +27,7 @@ describe('PassThroughDecoder', () => {
 
 			const frame = result![0];
 			expect(frame.errors).toHaveLength(0);
-			expect(frame.samplesDecoded).toBe(8);
+			expect(frame.samplesDecoded).toBe(0);
 
 			expect(frame.audioData).toEqual(inputData);
 		});
@@ -88,7 +88,7 @@ describe('PassThroughDecoder', () => {
 			expect(result).not.toBeNull();
 			const frame = result![0];
 			expect(frame.errors).toHaveLength(0);
-			expect(frame.samplesDecoded).toBe(1024);
+			expect(frame.samplesDecoded).toBe(0);
 
 			expect(frame.audioData).toEqual(inputData);
 		});
@@ -131,7 +131,7 @@ describe('PassThroughDecoder', () => {
 			const result = decoder.decodeChunk(new Uint8Array([1, 2, 3, 4]), NO_CHUNK_INFO, NO_CHUNK_INFO);
 			expect(result).not.toBeNull();
 			expect(result![0].errors).toHaveLength(0);
-			expect(result![0].samplesDecoded).toBe(4);
+			expect(result![0].samplesDecoded).toBe(0);
 		});
 	});
 });
