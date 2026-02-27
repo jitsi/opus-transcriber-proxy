@@ -14,9 +14,9 @@ export interface MockOpusDecoderOptions<SampleRate extends OpusDecoderSampleRate
 	sampleRate?: SampleRate;
 	channels?: number;
 	autoResolveReady?: boolean;
-	decodeResult?: OpusDecodedAudio;
+	decodeResult?: OpusDecodedAudio<SampleRate>;
 	decodeError?: DecodeError;
-	concealResult?: OpusDecodedAudio;
+	concealResult?: OpusDecodedAudio<SampleRate>;
 	concealError?: DecodeError;
 }
 
@@ -28,9 +28,9 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	private _decodeCallCount: number = 0;
 	private _concealCallCount: number = 0;
 	private _resetCallCount: number = 0;
-	private _decodeResult?: OpusDecodedAudio;
+	private _decodeResult?: OpusDecodedAudio<SampleRate>;
 	private _decodeError?: DecodeError;
-	private _concealResult?: OpusDecodedAudio;
+	private _concealResult?: OpusDecodedAudio<SampleRate>;
 	private _concealError?: DecodeError;
 	private _resolveReady?: () => void;
 	private _rejectReady?: (error: Error) => void;
@@ -62,7 +62,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	/**
 	 * Mock decodeFrame
 	 */
-	decodeFrame(opusFrame: Uint8Array): OpusDecodedAudio {
+	decodeFrame(opusFrame: Uint8Array): OpusDecodedAudio<SampleRate> {
 		if (this._isFreed) {
 			const error: DecodeError = {
 				message: 'Decoder freed or not initialized',
@@ -113,7 +113,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	/**
 	 * Mock conceal (loss concealment)
 	 */
-	conceal(opusFrame: Uint8Array | undefined, samplesToConceal: number): OpusDecodedAudio {
+	conceal(opusFrame: Uint8Array | undefined, samplesToConceal: number): OpusDecodedAudio<SampleRate> {
 		if (this._isFreed) {
 			const error: DecodeError = {
 				message: 'Decoder freed or not initialized',
@@ -204,7 +204,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	/**
 	 * Set decode result for subsequent calls
 	 */
-	setDecodeResult(result: OpusDecodedAudio): void {
+	setDecodeResult(result: OpusDecodedAudio<SampleRate>): void {
 		this._decodeResult = result;
 		this._decodeError = undefined;
 	}
@@ -220,7 +220,7 @@ export class MockOpusDecoder<SampleRate extends OpusDecoderSampleRate = 24000> {
 	/**
 	 * Set conceal result for subsequent calls
 	 */
-	setConcealResult(result: OpusDecodedAudio): void {
+	setConcealResult(result: OpusDecodedAudio<SampleRate>): void {
 		this._concealResult = result;
 		this._concealError = undefined;
 	}
