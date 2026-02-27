@@ -5,6 +5,8 @@ import { OpusDecoder, type OpusDecoderSampleRate } from './OpusDecoder';
 /** Opus always uses a 48 kHz clock for RTP timestamps, regardless of output sample rate */
 const OPUS_CLOCK_RATE = 48000;
 
+const SUPPORTED_SAMPLE_RATES: ReadonlySet<number> = new Set([8000, 12000, 16000, 24000, 48000]);
+
 /**
  * Higher-level Opus decoder that owns chunk-sequence tracking and packet-loss
  * concealment logic.  Wraps the low-level WASM OpusDecoder.
@@ -19,6 +21,11 @@ export class OpusAudioDecoder implements AudioDecoder {
 	private _maxConcealmentSamples: number;
 
 	constructor(sampleRate: OpusDecoderSampleRate = 24000) {
+		if (!SUPPORTED_SAMPLE_RATES.has(sampleRate)) {
+			throw new Error(
+				`Unsupported Opus sample rate: ${sampleRate}. Supported rates: ${[...SUPPORTED_SAMPLE_RATES].join(', ')}`
+			);
+		}
 		this._sampleRate = sampleRate;
 		this._maxConcealmentSamples = Math.round(0.120 * sampleRate);
 		this._decoder = new OpusDecoder({ sampleRate, channels: 1 });
