@@ -33,25 +33,27 @@ vi.mock('../../src/OpusDecoder/OpusDecoder', () => {
 });
 
 describe('createAudioDecoder', () => {
-	describe('PassThroughDecoder (output is compressed)', () => {
-		it('should return a PassThroughDecoder when output encoding is "opus"', () => {
+	describe('PassThroughDecoder (matching input and output encoding)', () => {
+		it('should return a PassThroughDecoder for opus input and opus output', () => {
 			const decoder = createAudioDecoder({ encoding: 'opus' }, { encoding: 'opus' });
 			expect(decoder).toBeInstanceOf(PassThroughDecoder);
 		});
 
-		it('should return a PassThroughDecoder when output encoding is "ogg"', () => {
-			const decoder = createAudioDecoder({ encoding: 'opus' }, { encoding: 'ogg' });
-			expect(decoder).toBeInstanceOf(PassThroughDecoder);
-		});
-
-		it('should return a PassThroughDecoder for L16 input when output is "opus"', () => {
-			const decoder = createAudioDecoder({ encoding: 'L16' }, { encoding: 'opus' });
-			expect(decoder).toBeInstanceOf(PassThroughDecoder);
-		});
-
-		it('should return a PassThroughDecoder for ogg input when output is "ogg"', () => {
+		it('should return a PassThroughDecoder for ogg input and ogg output', () => {
 			const decoder = createAudioDecoder({ encoding: 'ogg' }, { encoding: 'ogg' });
 			expect(decoder).toBeInstanceOf(PassThroughDecoder);
+		});
+
+		it('should throw when input is L16 and output is opus', () => {
+			expect(() => createAudioDecoder({ encoding: 'L16' }, { encoding: 'opus' })).toThrow(
+				"Cannot pass through 'L16' input as 'opus' output",
+			);
+		});
+
+		it('should throw when input is opus and output is ogg', () => {
+			expect(() => createAudioDecoder({ encoding: 'opus' }, { encoding: 'ogg' })).toThrow(
+				"Cannot pass through 'opus' input as 'ogg' output",
+			);
 		});
 	});
 

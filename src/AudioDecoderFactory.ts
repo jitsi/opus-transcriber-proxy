@@ -13,6 +13,11 @@ import { L16Decoder } from './L16Decoder';
  */
 export function createAudioDecoder(inputFormat: AudioFormat, outputFormat: AudioFormat): AudioDecoder {
 	if (outputFormat.encoding === 'opus' || outputFormat.encoding === 'ogg') {
+		if (inputFormat.encoding !== outputFormat.encoding) {
+			throw new Error(
+				`Cannot pass through '${inputFormat.encoding}' input as '${outputFormat.encoding}' output: encodings must match for pass-through`,
+			);
+		}
 		return new PassThroughDecoder();
 	}
 	if (inputFormat.encoding === 'L16') {
