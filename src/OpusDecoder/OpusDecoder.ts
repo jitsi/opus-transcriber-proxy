@@ -262,7 +262,7 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 		this._outputSamples += samplesDecoded;
 
 		const int16Buf = new Int16Array(this._output.buf.subarray(0, samplesDecoded * this._channels));
-		const outputBuf = new Uint8Array(int16Buf.buffer);
+		const outputBuf = new Uint8Array(int16Buf.buffer, int16Buf.byteOffset, int16Buf.byteLength);
 
 		return {
 			errors,
