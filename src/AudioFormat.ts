@@ -30,7 +30,7 @@ export function validateAudioFormat(format: unknown): AudioFormat {
 		throw new Error(`mediaFormat.channels must be a positive integer, got: ${JSON.stringify(channels)}`);
 	}
 
-	if (sampleRate !== undefined && (typeof sampleRate !== 'number' || !Number.isFinite(sampleRate) || !Number.isInteger(sampleRate) || sampleRate <= 0)) {
+	if (sampleRate !== undefined && (!Number.isInteger(sampleRate) || (sampleRate as number) <= 0)) {
 		throw new Error(`mediaFormat.sampleRate must be a positive integer, got: ${JSON.stringify(sampleRate)}`);
 	}
 
