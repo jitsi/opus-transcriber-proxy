@@ -216,21 +216,24 @@ export class TranscriberProxy extends EventEmitter {
 	handleStartEvent(parsedMessage: any): void {
 		const tag = parsedMessage.start?.tag;
 		logger.info(`Received start event: ${JSON.stringify(parsedMessage)}`);
-		if (tag) {
-			let mediaFormat: AudioFormat;
-			try {
-				mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
-			} catch (error) {
-				logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
-				return;
-			}
+		if (!tag) {
+			logger.error(`Received start event with no tag: ${JSON.stringify(parsedMessage)}`);
+			return;
+		}
 
-			const connection = this.getConnection(tag);
-			if (connection) {
-				connection.updateInputFormat(mediaFormat);
-			} else {
-				this.createConnection(tag, mediaFormat);
-			}
+		let mediaFormat: AudioFormat;
+		try {
+			mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
+		} catch (error) {
+			logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+
+		const connection = this.getConnection(tag);
+		if (connection) {
+			connection.updateInputFormat(mediaFormat);
+		} else {
+			this.createConnection(tag, mediaFormat);
 		}
 	}
 
