@@ -215,7 +215,7 @@ export class TranscriberProxy extends EventEmitter {
 
 	handleStartEvent(parsedMessage: any): void {
 		const tag = parsedMessage.start?.tag;
-		logger.info(`Received start event: ${JSON.stringify(parsedMessage)}`);
+		logger.debug(`Received start event: ${JSON.stringify(parsedMessage)}`);
 		if (!tag) {
 			logger.error(`Received start event with no tag: ${JSON.stringify(parsedMessage)}`);
 			return;
