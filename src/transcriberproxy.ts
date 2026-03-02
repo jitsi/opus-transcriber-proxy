@@ -240,10 +240,14 @@ export class TranscriberProxy extends EventEmitter {
 	handleMediaEvent(parsedMessage: any): void {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
-			const connection = this.getConnection(tag);
+			let connection = this.getConnection(tag);
 			if (!connection) {
-				logger.error(`Received media event for tag "${tag}" with no prior start event`);
-				return;
+				const encoding = this.options.encoding ?? 'opus';
+				const mediaFormat: AudioFormat = encoding === 'opus'
+					? { encoding, sampleRate: 48000, channels: 2 }
+					: { encoding };
+				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
+				connection = this.createConnection(tag, mediaFormat);
 			}
 			connection.handleMediaEvent(parsedMessage);
 		}

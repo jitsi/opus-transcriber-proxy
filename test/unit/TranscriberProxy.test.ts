@@ -121,6 +121,7 @@ describe('TranscriberProxy', () => {
 			sessionId: null,
 			language: 'en',
 			provider: 'openai' as any,
+			encoding: 'opus' as any,
 		};
 	});
 
@@ -476,13 +477,42 @@ describe('TranscriberProxy', () => {
 			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
 		});
 
-		it('should log an error when a media event arrives for an unknown tag', () => {
+		it('should create a connection and warn when a media event arrives for an unknown tag', () => {
 			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
 
-			proxy.handleMediaEvent({ event: 'media', media: { tag: 'unknown-tag', payload: 'abc=', chunk: 0, timestamp: 0 } });
+			const mediaEvent = { event: 'media', media: { tag: 'unknown-tag', payload: 'abc=', chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(mediaEvent);
 
-			expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+			// Should warn, not error
+			expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
 				expect.stringMatching(/unknown-tag.*no prior start event/),
+			);
+			expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
+
+			// Should create a connection with default opus format
+			expect(OutgoingConnection).toHaveBeenCalledWith(
+				'unknown-tag',
+				{ encoding: 'opus', sampleRate: 48000, channels: 2 },
+				options,
+			);
+
+			// Should still route the event to the new connection
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
+		});
+
+		it('should create a connection with ogg-opus format when that is the session encoding', () => {
+			const oggOptions = { ...options, encoding: 'ogg-opus' as any };
+			const proxy = new TranscriberProxy(mockWebSocket, oggOptions);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } });
+
+			expect(OutgoingConnection).toHaveBeenCalledWith(
+				'tag1',
+				{ encoding: 'ogg-opus' },
+				oggOptions,
 			);
 		});
 
