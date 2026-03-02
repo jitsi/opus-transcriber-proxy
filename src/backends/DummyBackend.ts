@@ -10,6 +10,8 @@ import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 
+const DUMMY_BACKEND_SAMPLE_RATE = 24000;
+
 export class DummyBackend implements TranscriptionBackend {
 	private status: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private backendConfig?: BackendConfig;
@@ -74,13 +76,13 @@ export class DummyBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
-		return { encoding: 'L16', sampleRate: 24000 };
+		return { encoding: 'L16', sampleRate: DUMMY_BACKEND_SAMPLE_RATE };
 	}
 
 	private printStatistics(): void {
 		const durationMs = this.stats.endTime - this.stats.startTime;
 		const durationSec = durationMs / 1000;
-		const audioDurationSec = this.stats.totalSamples / 24000;
+		const audioDurationSec = this.stats.totalSamples / DUMMY_BACKEND_SAMPLE_RATE;
 
 		logger.info('='.repeat(60));
 		logger.info(`Dummy Backend Statistics for tag: ${this.tag}`);
