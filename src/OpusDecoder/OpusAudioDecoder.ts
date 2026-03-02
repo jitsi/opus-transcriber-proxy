@@ -59,7 +59,9 @@ export class OpusAudioDecoder implements AudioDecoder {
 
 		if (chunkNo !== NO_CHUNK_INFO) {
 			this._lastChunkNo = chunkNo;
-			this._lastTimestamp = timestamp;
+			if (timestamp !== NO_CHUNK_INFO) {
+				this._lastTimestamp = timestamp;
+			}
 		}
 
 		const decoded = this._decoder.decodeFrame(frame);
