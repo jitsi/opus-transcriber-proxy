@@ -27,6 +27,7 @@ function parseArgs() {
         timeout: 10,
         verbose: false,
         interims: false,
+        encoding: 'opus',
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -62,6 +63,9 @@ function parseArgs() {
             case '--interims':
                 options.interims = true;
                 break;
+            case '--encoding':
+                options.encoding = args[++i];
+                break;
             case '--help':
             case '-h':
                 printUsage();
@@ -89,6 +93,7 @@ Options:
   --timeout <sec>  Seconds to wait for transcriptions after streaming (default: 10)
   --verbose, -v    Enable progress logging to stderr (default: quiet)
   --interims       Include interim transcriptions in output (default: finals only)
+  --encoding       Audio encoding: opus or ogg-opus (default: opus)
   --help, -h       Show this help
 
 Environment:
@@ -133,7 +138,7 @@ function buildWebSocketUrl(baseUrl) {
     const sessionId = `health-${crypto.randomUUID()}`;
 
     url.searchParams.set('sessionId', sessionId);
-    url.searchParams.set('encoding', 'ogg-opus');
+    url.searchParams.set('encoding', options.encoding);
     url.searchParams.set('sendBack', 'true');
 
     log(`Session ID: ${sessionId}`);
@@ -262,7 +267,7 @@ ws.on('open', () => {
         event: 'start',
         start: {
             tag: options.tag,
-            mediaFormat: { encoding: 'ogg-opus' },
+            mediaFormat: { encoding: options.encoding },
         },
     }));
 
