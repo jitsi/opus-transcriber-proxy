@@ -10,16 +10,8 @@ import { NO_CHUNK_INFO } from './AudioDecoder';
  * performed because the raw frames are forwarded as-is.
  */
 export class PassThroughDecoder implements AudioDecoder {
-	private _ready: Promise<void>;
+	readonly ready: Promise<void> = Promise.resolve();
 	private _lastChunkNo = NO_CHUNK_INFO;
-
-	constructor() {
-		this._ready = Promise.resolve();
-	}
-
-	get ready(): Promise<void> {
-		return this._ready;
-	}
 
 	decodeChunk(frame: Uint8Array, chunkNo: number, _timestamp: number): DecodedAudio[] | null {
 		if (chunkNo !== NO_CHUNK_INFO && this._lastChunkNo !== NO_CHUNK_INFO) {
