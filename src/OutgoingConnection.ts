@@ -137,11 +137,14 @@ export class OutgoingConnection {
 
 			logger.info(`Transcription backend connected for tag: ${this.localTag}`);
 
-			// Process any pending audio data that was queued while waiting for connection
-			// First process any raw frames through the decoder
-			this.processPendingInputFrames();
-			// Then flush any already-decoded audio that was queued
-			this.processPendingAudioData();
+			// Only flush if the decoder is ready.  If a newer reinitializeDecoder()
+			// call is still in flight (e.g. a start event arrived while we were
+			// awaiting connect), the decoder is still undefined; leave the queued
+			// frames for the winning reinit to flush once it settles.
+			if (this.decoderStatus === 'ready') {
+				this.processPendingInputFrames();
+				this.processPendingAudioData();
+			}
 		} catch (error) {
 			logger.error(`Failed to initialize transcription backend for tag ${this.localTag}:`, error);
 			this.backend = undefined;
@@ -161,6 +164,12 @@ export class OutgoingConnection {
 		// will discard our result rather than overwriting the newer decoder.
 		const generation = ++this.reinitGeneration;
 
+		// Discard frames that were queued for the old decoder — they are in the old
+		// audio format.  Frames arriving after this point will use the new format.
+		// Any already-decoded audio (pendingAudioFrames) was produced by the old
+		// decoder and must be discarded too.
+		this.pendingInputFrames = [];
+		this.pendingAudioFrames = [];
 		this.decoder?.free();
 		this.decoder = undefined;
 		this.decoderStatus = 'pending';
@@ -171,6 +180,7 @@ export class OutgoingConnection {
 
 		if (generation !== this.reinitGeneration) {
 			// A newer reinitializeDecoder call has taken over; discard this result.
+			logger.debug(`Discarding stale decoder for tag: ${this.localTag} (superseded by generation ${this.reinitGeneration})`);
 			newDecoder.free();
 			return;
 		}
@@ -181,6 +191,7 @@ export class OutgoingConnection {
 
 		if (this.backend.getStatus() === 'connected') {
 			this.processPendingInputFrames();
+			this.processPendingAudioData();
 		}
 	}
 
