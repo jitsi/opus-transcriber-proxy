@@ -148,7 +148,7 @@ describe('validateAudioFormat', () => {
 	});
 
 	describe('return value', () => {
-		it('should return the same object reference on success', () => {
+		it('should return the same object reference for non-ogg-opus input', () => {
 			const input = { encoding: 'opus', sampleRate: 24000, channels: 1 };
 			const result = validateAudioFormat(input);
 			expect(result).toBe(input);
@@ -167,6 +167,18 @@ describe('validateAudioFormat', () => {
 			expect(result.encoding).toBe('opus');
 			expect(result.sampleRate).toBeUndefined();
 			expect(result.channels).toBeUndefined();
+		});
+
+		it('should normalise ogg-opus encoding to ogg', () => {
+			const result = validateAudioFormat({ encoding: 'ogg-opus' });
+			expect(result.encoding).toBe('ogg');
+		});
+
+		it('should preserve channels and sampleRate when normalising ogg-opus', () => {
+			const result = validateAudioFormat({ encoding: 'ogg-opus', channels: 2, sampleRate: 48000 });
+			expect(result.encoding).toBe('ogg');
+			expect(result.channels).toBe(2);
+			expect(result.sampleRate).toBe(48000);
 		});
 	});
 });

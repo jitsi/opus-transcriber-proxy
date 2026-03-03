@@ -211,8 +211,8 @@ getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
 }
 ```
 
-**Encoding values** used internally (note: the client-facing `ogg-opus` value is mapped to `ogg`
-by `OutgoingConnection.updateInputFormat()` before it reaches `getDesiredAudioFormat`):
+**Encoding values** used internally (note: the client-facing `ogg-opus` value is normalised to
+`ogg` by `validateAudioFormat()` before it ever reaches `getDesiredAudioFormat`):
 
 | Value  | Description |
 |--------|-------------|

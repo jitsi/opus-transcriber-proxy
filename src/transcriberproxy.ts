@@ -244,8 +244,8 @@ export class TranscriberProxy extends EventEmitter {
 			if (!connection) {
 				const encoding = this.options.encoding ?? 'opus';
 				const mediaFormat: AudioFormat = encoding === 'opus'
-					? { encoding, sampleRate: 48000, channels: 2 }
-					: { encoding };
+					? { encoding: 'opus', sampleRate: 48000, channels: 2 }
+					: { encoding: 'ogg' };
 				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
 				connection = this.createConnection(tag, mediaFormat);
 			}

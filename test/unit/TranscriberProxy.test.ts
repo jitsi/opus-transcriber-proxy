@@ -511,7 +511,7 @@ describe('TranscriberProxy', () => {
 
 			expect(OutgoingConnection).toHaveBeenCalledWith(
 				'tag1',
-				{ encoding: 'ogg-opus' },
+				{ encoding: 'ogg' },
 				oggOptions,
 			);
 		});

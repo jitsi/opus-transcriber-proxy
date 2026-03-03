@@ -1,15 +1,18 @@
 export interface AudioFormat {
-	encoding: string;
+	encoding: 'opus' | 'ogg' | 'L16';
 	channels?: number;
 	sampleRate?: number;
 }
 
-const VALID_INPUT_ENCODINGS = ['opus', 'ogg-opus', 'L16'] as const;
+const VALID_INPUT_ENCODINGS = ['opus', 'ogg', 'ogg-opus', 'L16'] as const;
 
 /**
  * Validates that an unknown value is a well-formed AudioFormat suitable for use
  * as a client-supplied input format (i.e. the mediaFormat field of a start event).
  * Throws a descriptive Error if validation fails.
+ *
+ * The external client-facing encoding 'ogg-opus' is normalised to the internal
+ * value 'ogg' in the returned AudioFormat.
  */
 export function validateAudioFormat(format: unknown): AudioFormat {
 	if (format === null || typeof format !== 'object') {
@@ -32,6 +35,15 @@ export function validateAudioFormat(format: unknown): AudioFormat {
 
 	if (sampleRate !== undefined && (!Number.isInteger(sampleRate) || (sampleRate as number) <= 0)) {
 		throw new Error(`mediaFormat.sampleRate must be a positive integer, got: ${JSON.stringify(sampleRate)}`);
+	}
+
+	// Normalise the external 'ogg-opus' encoding name to the internal 'ogg' value
+	if (encoding === 'ogg-opus') {
+		return {
+			encoding: 'ogg',
+			...(channels !== undefined && { channels: channels as number }),
+			...(sampleRate !== undefined && { sampleRate: sampleRate as number }),
+		};
 	}
 
 	return format as AudioFormat;
