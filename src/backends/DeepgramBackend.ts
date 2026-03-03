@@ -25,6 +25,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 	private participantInfo: any;
 	private tag: string;
 	private keepAliveTimer?: NodeJS.Timeout;
+	/** Format negotiated by getDesiredAudioFormat(); used by connect() to set Deepgram params */
+	private negotiatedFormat?: AudioFormat;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
@@ -45,23 +47,24 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 		return new Promise((resolve, reject) => {
 			try {
-				// Build query parameters based on encoding type
-				// Use per-connection encoding if specified, otherwise use global config
-				const encoding = backendConfig.encoding || config.deepgram.encoding;
-				const isContainerized = encoding === 'ogg-opus';
+				// Build query parameters to match the format negotiated by
+				// getDesiredAudioFormat(), which determines what the decoder produces.
+				const fmt = this.negotiatedFormat ?? { encoding: 'L16', sampleRate: 24000 } as AudioFormat;
+				// 'ogg' = containerised Ogg-Opus; Deepgram auto-detects from the header
+				// so we omit encoding and sample_rate in that case.
+				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
+				const isContainerized = fmt.encoding === 'ogg';
 
 				const params = new URLSearchParams({
 					channels: '1',
 					interim_results: 'true',
 				});
 
-				// For containerized audio (ogg-opus), omit encoding and sample_rate
-				// Deepgram will auto-detect from the container header
-				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
 				if (!isContainerized) {
-					params.set('encoding', encoding);
-					const sampleRate = encoding === 'opus' ? '48000' : '24000';
-					params.set('sample_rate', sampleRate);
+					// Map internal encoding names to Deepgram's API names
+					const deepgramEncoding = fmt.encoding === 'opus' ? 'opus' : 'linear16';
+					params.set('encoding', deepgramEncoding);
+					params.set('sample_rate', (fmt.sampleRate ?? (fmt.encoding === 'opus' ? 48000 : 24000)).toString());
 				}
 
 				// Add model if specified
@@ -224,14 +227,18 @@ export class DeepgramBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
-		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus is configured.
-		// Without this check, Deepgram would receive Opus bytes but be told the
-		// encoding is linear16 (the default), causing a protocol mismatch.
-		if (config.deepgram.encoding === 'opus' &&
+		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus|ogg-opus is
+		// configured globally.  The client-side ?encoding= URL parameter describes
+		// what the client is sending; it does not independently override the Deepgram
+		// output format.  Without this guard, Deepgram would receive Opus bytes but
+		// be told the encoding is linear16 (the default), causing a protocol mismatch.
+		if ((config.deepgram.encoding === 'opus' || config.deepgram.encoding === 'ogg-opus') &&
 			(inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
-			return inputFormat;
+			this.negotiatedFormat = inputFormat;
+		} else {
+			this.negotiatedFormat = { encoding: 'L16', sampleRate: 24000 };
 		}
-		return { encoding: 'L16', sampleRate: 24000 };
+		return this.negotiatedFormat;
 	}
 
 	private startKeepAlive(): void {
