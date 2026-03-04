@@ -21,6 +21,7 @@ node test/stream-test.js --url <base-url> --file <ogg-file> [options]
 | `--timeout <sec>` | Wait time after streaming (default: 10) |
 | `--verbose, -v` | Enable progress logging |
 | `--interims` | Include interim transcriptions |
+| `--encoding` | Audio encoding: `opus` or `ogg-opus` (default: `opus`) |
 
 ## Environment Variables
 

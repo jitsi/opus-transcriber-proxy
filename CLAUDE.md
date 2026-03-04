@@ -173,7 +173,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Real-time streaming transcription
 
 **Deepgram**
-- Can accept raw Opus (set `DEEPGRAM_ENCODING=opus`)
+- Passes raw Opus/Ogg through by default (`DEEPGRAM_ENCODING=opus`); set `DEEPGRAM_ENCODING=linear16` to decode to PCM first
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
 
@@ -232,7 +232,7 @@ See `src/backends/DummyBackend.ts` for a minimal example.
 - `OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` to determine what the backend wants
 - `AudioDecoderFactory.createAudioDecoder(inputFormat, outputFormat)` then creates the right decoder:
   - `PassThroughDecoder` when output encoding is `'opus'` or `'ogg'` (no decode/re-encode)
-  - `OpusAudioDecoder` when output encoding is `'L16'` (PCM)
+  - `OpusAudioDecoder` when output encoding is `'l16'` (PCM)
 - PCM format: 24kHz, 16-bit, mono (`audioData` is a `Uint8Array` of raw PCM bytes)
 - Deepgram can accept raw Opus to avoid decode/re-encode
 - `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` to swap the decoder live if the format changes mid-session
@@ -372,6 +372,7 @@ See README.md for complete list. Key ones:
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant within a session. Format can be `{id}-{ssrc}` or just `{id}`.
-- Deepgram is the only backend that supports raw Opus; it returns `encoding: 'opus'` from `getDesiredAudioFormat()`. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
+- Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
-- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'L16', sampleRate: 24000 }` for PCM or mirror the input encoding for raw pass-through.
+- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or mirror the input encoding for raw pass-through.
+- `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
