@@ -140,7 +140,6 @@ interface BackendConfig {
   language?: string;
   prompt?: string;
   model?: string;
-  encoding?: string;  // Audio encoding hint from client connection
   tags?: string[];
 }
 
@@ -204,7 +203,7 @@ getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
 // Pass through raw audio when possible (Deepgram)
 getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
   if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
-    return inputFormat;  // skip decoding
+    return { ...inputFormat };  // shallow copy — do not return the input reference directly
   }
   return { encoding: 'l16', sampleRate: 24000 };
 }

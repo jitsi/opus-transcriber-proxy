@@ -99,7 +99,8 @@ TranscriberProxy (transcriberproxy.ts)
 OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
     ├─ AudioDecoder (via AudioDecoderFactory)
     │   ├─ OpusAudioDecoder - Decodes Opus frames to PCM (WASM-backed)
-    │   └─ PassThroughDecoder - Forwards raw frames unchanged
+    │   ├─ L16Decoder - Resamples or passes through raw PCM l16
+    │   └─ PassThroughDecoder - Forwards raw Opus/Ogg frames unchanged
     └─ TranscriptionBackend - Sends audio to provider
         ↓
     Backend (OpenAIBackend, DeepgramBackend, GeminiBackend)
@@ -128,21 +129,29 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Interface for format-agnostic audio decoding with chunk-sequence tracking
 - `decodeChunk()` returns `DecodedAudio[]` (with `audioData: Uint8Array`) or `null` for out-of-order packets
 - `DecodedAudio.kind` distinguishes `'normal'` from `'concealment'` frames (for metrics)
-- Implementations: `OpusAudioDecoder`, `PassThroughDecoder`
+- `DecodedAudio.samplesDecoded` is 0 for non-PCM pass-through (`PassThroughDecoder`)
+- Implementations: `OpusAudioDecoder`, `L16Decoder`, `PassThroughDecoder`
 
 **AudioDecoderFactory** (`src/AudioDecoderFactory.ts`)
 - `createAudioDecoder(inputFormat, outputFormat)` selects the right decoder
 - Returns `PassThroughDecoder` when output is raw Opus or Ogg (no decoding needed)
-- Returns `OpusAudioDecoder` when PCM output is required
+- Returns `L16Decoder` when input is already l16 and output is l16 (resample or pass-through)
+- Returns `OpusAudioDecoder` when input is Opus and PCM output is required
 
 **OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
 - Implements `AudioDecoder` with packet-loss concealment logic
 - Wraps the low-level WASM `OpusDecoder`; handles gap detection and concealment frames
 - Decodes Opus frames at 48kHz to PCM at 24kHz mono
 
+**L16Decoder** (`src/L16Decoder.ts`)
+- Implements `AudioDecoder` for raw PCM l16 input
+- If input and output sample rates match, frames are forwarded unchanged; otherwise resampled via linear interpolation
+- Still performs out-of-order packet detection; validates even byte length before resampling
+
 **PassThroughDecoder** (`src/PassThroughDecoder.ts`)
 - Implements `AudioDecoder` without actual decoding
 - Forwards raw Opus or Ogg frames unchanged; still performs out-of-order packet detection
+- `samplesDecoded` is always 0 (no PCM to count)
 
 **OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
 - Low-level TypeScript wrapper around the WASM Opus decoder
@@ -232,10 +241,11 @@ See `src/backends/DummyBackend.ts` for a minimal example.
 - `OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` to determine what the backend wants
 - `AudioDecoderFactory.createAudioDecoder(inputFormat, outputFormat)` then creates the right decoder:
   - `PassThroughDecoder` when output encoding is `'opus'` or `'ogg'` (no decode/re-encode)
-  - `OpusAudioDecoder` when output encoding is `'l16'` (PCM)
+  - `L16Decoder` when input encoding is `'l16'` and output encoding is `'l16'` (resample or identity)
+  - `OpusAudioDecoder` when input is Opus and output encoding is `'l16'` (decode to PCM)
 - PCM format: 24kHz, 16-bit, mono (`audioData` is a `Uint8Array` of raw PCM bytes)
 - Deepgram can accept raw Opus to avoid decode/re-encode
-- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` to swap the decoder live if the format changes mid-session
+- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` to swap the decoder if the format changes mid-session; **only the decoder is swapped** — the backend connection is not re-established (a PCM↔raw-Opus boundary crossing would cause a protocol mismatch, but this does not arise in practice)
 
 ### Session Resumption
 
@@ -258,6 +268,7 @@ src/
 ├── OutgoingConnection.ts      # Per-participant handler
 ├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types
 ├── AudioDecoderFactory.ts     # Selects decoder based on format negotiation
+├── L16Decoder.ts              # PCM l16 decoder (resample or identity)
 ├── PassThroughDecoder.ts      # Raw-audio pass-through (no decode)
 ├── SessionManager.ts          # Session lifecycle management
 ├── config.ts                  # Configuration
@@ -374,5 +385,5 @@ See README.md for complete list. Key ones:
 - The `tag` field identifies a participant within a session. Format can be `{id}-{ssrc}` or just `{id}`.
 - Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
-- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or mirror the input encoding for raw pass-through.
+- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly.
 - `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
