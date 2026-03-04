@@ -38,7 +38,7 @@ export interface TranscriptionBackend {
 
 	/**
 	 * Send base64-encoded audio data to the backend
-	 * Audio format is determined by getDesiredAudioFormat(): PCM (L16) or raw Opus/Ogg
+	 * Audio format is determined by getDesiredAudioFormat(): PCM (l16) or raw Opus/Ogg
 	 * @param audioBase64 - Base64-encoded audio
 	 */
 	sendAudio(audioBase64: string): Promise<void>;

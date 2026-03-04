@@ -14,7 +14,7 @@ export interface DecodeError {
  * kind distinguishes normal decoded frames from loss-concealment frames (for metrics).
  */
 export interface DecodedAudio {
-	/** The decoded PCM audio data */
+	/** The decoded or forwarded audio bytes (PCM for decoded audio, raw frames for pass-through) */
 	audioData: Uint8Array;
 	/** Number of samples decoded */
 	samplesDecoded: number;

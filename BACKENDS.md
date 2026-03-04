@@ -297,7 +297,7 @@ export class YourBackend implements TranscriptionBackend {
 
     // Send audio to your transcription service.
     // Format matches what getDesiredAudioFormat() returned:
-    //   L16  → 24kHz, 16-bit, mono PCM (base64-encoded)
+    //   l16  → 24kHz, 16-bit, mono PCM (base64-encoded)
     //   opus → raw Opus frames (base64-encoded)
     //   ogg  → Ogg-Opus container (base64-encoded)
   }
