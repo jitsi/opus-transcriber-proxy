@@ -10,7 +10,6 @@
  */
 
 import type { TranscriptionMessage } from '../transcriberproxy';
-import type { AudioEncoding } from '../utils';
 
 import type { AudioFormat } from '../AudioFormat';
 export type { AudioFormat };
@@ -22,8 +21,6 @@ export interface BackendConfig {
 	prompt?: string;
 	/** Model to use for transcription */
 	model?: string;
-	/** Audio encoding format ('opus' for raw frames, 'ogg-opus' for containerized) */
-	encoding?: AudioEncoding;
 	/** Tags to be sent to the backend (e.g., for Deepgram) */
 	tags?: string[];
 }

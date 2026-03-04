@@ -72,6 +72,13 @@ export class OutgoingConnection {
 		// validateAudioFormat also normalises 'ogg-opus' → 'ogg'.
 		this.inputAudioFormat = validateAudioFormat(inputFormat);
 
+		// NOTE: only the audio decoder is swapped here.  If the backend is already
+		// connected (e.g. a Deepgram WebSocket opened with specific encoding/sample_rate
+		// query parameters), that connection is NOT re-established.  A mid-session
+		// format change that crosses the PCM/raw-Opus boundary will therefore cause
+		// a protocol mismatch at the backend.  This scenario does not arise in
+		// practice because the client sends a single start event before any media.
+
 		if (this.backend) {
 			const promise = this.reinitializeDecoder();
 			// reinitGeneration is incremented synchronously inside reinitializeDecoder
@@ -133,7 +140,6 @@ export class OutgoingConnection {
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
-			backendConfig.encoding = this.options.encoding;
 			backendConfig.tags = this.options.tags;
 
 			// Connect the backend
