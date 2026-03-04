@@ -61,8 +61,20 @@ describe('validateAudioFormat', () => {
 			expect(() => validateAudioFormat({ encoding: 'ogg-opus' })).not.toThrow();
 		});
 
-		it('should accept encoding "L16"', () => {
-			expect(() => validateAudioFormat({ encoding: 'L16' })).not.toThrow();
+		it('should accept encoding "l16"', () => {
+			expect(() => validateAudioFormat({ encoding: 'l16' })).not.toThrow();
+		});
+
+		it('should accept encoding "OPUS" (case-insensitive)', () => {
+			expect(validateAudioFormat({ encoding: 'OPUS' }).encoding).toBe('opus');
+		});
+
+		it('should accept encoding "OGG-OPUS" (case-insensitive)', () => {
+			expect(validateAudioFormat({ encoding: 'OGG-OPUS' }).encoding).toBe('ogg');
+		});
+
+		it('should accept encoding "L16" (case-insensitive)', () => {
+			expect(validateAudioFormat({ encoding: 'L16' }).encoding).toBe('l16');
 		});
 	});
 
@@ -148,16 +160,16 @@ describe('validateAudioFormat', () => {
 	});
 
 	describe('return value', () => {
-		it('should return the same object reference for non-ogg-opus input', () => {
+		it('should return an equivalent object for non-normalising input', () => {
 			const input = { encoding: 'opus', sampleRate: 24000, channels: 1 };
 			const result = validateAudioFormat(input);
-			expect(result).toBe(input);
+			expect(result).toStrictEqual(input);
 		});
 
 		it('should preserve all fields in the returned object', () => {
-			const input = { encoding: 'L16', sampleRate: 16000, channels: 1 };
+			const input = { encoding: 'l16', sampleRate: 16000, channels: 1 };
 			const result = validateAudioFormat(input);
-			expect(result.encoding).toBe('L16');
+			expect(result.encoding).toBe('l16');
 			expect(result.sampleRate).toBe(16000);
 			expect(result.channels).toBe(1);
 		});

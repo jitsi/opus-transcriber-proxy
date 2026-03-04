@@ -1,10 +1,10 @@
 export interface AudioFormat {
-	encoding: 'opus' | 'ogg' | 'L16';
+	encoding: 'opus' | 'ogg' | 'l16';
 	channels?: number;
 	sampleRate?: number;
 }
 
-const VALID_INPUT_ENCODINGS = ['opus', 'ogg', 'ogg-opus', 'L16'] as const;
+const VALID_INPUT_ENCODINGS = ['opus', 'ogg', 'ogg-opus', 'l16'] as const;
 
 /**
  * Validates that an unknown value is a well-formed AudioFormat suitable for use
@@ -25,7 +25,9 @@ export function validateAudioFormat(format: unknown): AudioFormat {
 		throw new Error(`mediaFormat.encoding must be a non-empty string, got: ${JSON.stringify(encoding)}`);
 	}
 
-	if (!(VALID_INPUT_ENCODINGS as readonly string[]).includes(encoding)) {
+	const normalizedEncoding = encoding.toLowerCase();
+
+	if (!(VALID_INPUT_ENCODINGS as readonly string[]).includes(normalizedEncoding)) {
 		throw new Error(`mediaFormat.encoding must be one of [${VALID_INPUT_ENCODINGS.join(', ')}], got: ${JSON.stringify(encoding)}`);
 	}
 
@@ -38,7 +40,7 @@ export function validateAudioFormat(format: unknown): AudioFormat {
 	}
 
 	// Normalise the external 'ogg-opus' encoding name to the internal 'ogg' value
-	if (encoding === 'ogg-opus') {
+	if (normalizedEncoding === 'ogg-opus') {
 		return {
 			encoding: 'ogg',
 			...(channels !== undefined && { channels: channels as number }),
@@ -46,5 +48,9 @@ export function validateAudioFormat(format: unknown): AudioFormat {
 		};
 	}
 
-	return format as AudioFormat;
+	return {
+		encoding: normalizedEncoding as AudioFormat['encoding'],
+		...(channels !== undefined && { channels: channels as number }),
+		...(sampleRate !== undefined && { sampleRate: sampleRate as number }),
+	};
 }

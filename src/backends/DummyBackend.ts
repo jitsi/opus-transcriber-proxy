@@ -76,7 +76,7 @@ export class DummyBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
-		return { encoding: 'L16', sampleRate: DUMMY_BACKEND_SAMPLE_RATE };
+		return { encoding: 'l16', sampleRate: DUMMY_BACKEND_SAMPLE_RATE };
 	}
 
 	private printStatistics(): void {

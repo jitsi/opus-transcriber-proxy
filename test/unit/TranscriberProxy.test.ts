@@ -431,7 +431,7 @@ describe('TranscriberProxy', () => {
 			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
 
 			// Second start event with the same tag — should update, not recreate
-			proxy.handleStartEvent(validStart('tag1', { encoding: 'L16', sampleRate: 16000 }));
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'l16', sampleRate: 16000 }));
 
 			// Constructor called exactly once (for the first event only)
 			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
@@ -439,7 +439,7 @@ describe('TranscriberProxy', () => {
 			// updateInputFormat called on the connection instance
 			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
 			expect(conn.updateInputFormat).toHaveBeenCalledWith({
-				encoding: 'L16',
+				encoding: 'l16',
 				sampleRate: 16000,
 			});
 		});
@@ -458,11 +458,12 @@ describe('TranscriberProxy', () => {
 			const proxy = new TranscriberProxy(mockWebSocket, options);
 			vi.mocked(OutgoingConnection).mockClear();
 
-			proxy.handleStartEvent(validStart('tag1', { encoding: 'L16', sampleRate: 16000 }));
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'l16', sampleRate: 16000 }));
 
 			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
 			expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
 		});
+
 	});
 
 	describe('handleMediaEvent', () => {

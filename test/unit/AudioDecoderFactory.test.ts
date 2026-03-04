@@ -45,8 +45,8 @@ describe('createAudioDecoder', () => {
 		});
 
 		it('should throw when input is L16 and output is opus', () => {
-			expect(() => createAudioDecoder({ encoding: 'L16' }, { encoding: 'opus' })).toThrow(
-				"Cannot pass through 'L16' input as 'opus' output",
+			expect(() => createAudioDecoder({ encoding: 'l16' }, { encoding: 'opus' })).toThrow(
+				"Cannot pass through 'l16' input as 'opus' output",
 			);
 		});
 
@@ -59,20 +59,20 @@ describe('createAudioDecoder', () => {
 
 	describe('L16Decoder (PCM input → PCM output)', () => {
 		it('should return an L16Decoder for L16 input and L16 output', () => {
-			const decoder = createAudioDecoder({ encoding: 'L16' }, { encoding: 'L16' });
+			const decoder = createAudioDecoder({ encoding: 'l16' }, { encoding: 'l16' });
 			expect(decoder).toBeInstanceOf(L16Decoder);
 		});
 
 		it('should default to 24000 Hz when sampleRate is absent', () => {
 			// Both rates default to 24000; L16Decoder supports that
-			expect(() => createAudioDecoder({ encoding: 'L16' }, { encoding: 'L16' })).not.toThrow();
+			expect(() => createAudioDecoder({ encoding: 'l16' }, { encoding: 'l16' })).not.toThrow();
 		});
 
 		it('should respect explicit sampleRate in input and output formats', () => {
 			expect(() =>
 				createAudioDecoder(
-					{ encoding: 'L16', sampleRate: 16000 },
-					{ encoding: 'L16', sampleRate: 24000 },
+					{ encoding: 'l16', sampleRate: 16000 },
+					{ encoding: 'l16', sampleRate: 24000 },
 				),
 			).not.toThrow();
 		});
@@ -80,13 +80,13 @@ describe('createAudioDecoder', () => {
 
 	describe('ogg input → PCM output (unsupported)', () => {
 		it('should throw with a descriptive error', () => {
-			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'L16' })).toThrow(
+			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' })).toThrow(
 				'ogg-opus input cannot be decoded to PCM',
 			);
 		});
 
 		it('should mention Deepgram with DEEPGRAM_ENCODING=opus as a workaround', () => {
-			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'L16' })).toThrow(
+			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' })).toThrow(
 				'DEEPGRAM_ENCODING=opus',
 			);
 		});
@@ -94,31 +94,31 @@ describe('createAudioDecoder', () => {
 
 	describe('Opus input → PCM output', () => {
 		it('should return an OpusAudioDecoder for opus input and L16 output', () => {
-			const decoder = createAudioDecoder({ encoding: 'opus' }, { encoding: 'L16' });
+			const decoder = createAudioDecoder({ encoding: 'opus' }, { encoding: 'l16' });
 			expect(decoder).toBeInstanceOf(OpusAudioDecoder);
 		});
 
 		it('should default the output sample rate to 24000 Hz when absent', () => {
-			expect(() => createAudioDecoder({ encoding: 'opus' }, { encoding: 'L16' })).not.toThrow();
+			expect(() => createAudioDecoder({ encoding: 'opus' }, { encoding: 'l16' })).not.toThrow();
 		});
 
 		it('should use the output format sampleRate for the decoder', () => {
 			// 16000 is a valid Opus sample rate — should not throw
 			expect(() =>
-				createAudioDecoder({ encoding: 'opus' }, { encoding: 'L16', sampleRate: 16000 }),
+				createAudioDecoder({ encoding: 'opus' }, { encoding: 'l16', sampleRate: 16000 }),
 			).not.toThrow();
 		});
 	});
 
 	describe('unsupported input encoding', () => {
 		it('should throw for an unknown input encoding', () => {
-			expect(() => createAudioDecoder({ encoding: 'mp3' as any }, { encoding: 'L16' })).toThrow(
+			expect(() => createAudioDecoder({ encoding: 'mp3' as any }, { encoding: 'l16' })).toThrow(
 				"Unsupported input encoding 'mp3'",
 			);
 		});
 
 		it('should throw for an empty string encoding', () => {
-			expect(() => createAudioDecoder({ encoding: '' as any }, { encoding: 'L16' })).toThrow(
+			expect(() => createAudioDecoder({ encoding: '' as any }, { encoding: 'l16' })).toThrow(
 				"Unsupported input encoding ''",
 			);
 		});

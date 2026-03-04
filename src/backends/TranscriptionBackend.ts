@@ -46,7 +46,7 @@ export interface TranscriptionBackend {
 	/**
 	 * Returns the audio format this backend wants to receive for a given input format.
 	 * Backends that support raw Opus will mirror the input encoding ('opus' or 'ogg').
-	 * All other backends request decoded PCM: encoding 'L16' at 24000 Hz.
+	 * All other backends request decoded PCM: encoding 'l16' at 24000 Hz.
 	 * @param inputFormat - The audio format being provided by the client
 	 * @returns The audio format this backend wants to receive
 	 */

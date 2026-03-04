@@ -96,7 +96,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 		if (this._wantsRawAudio && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
 			return inputFormat;
 		}
-		return { encoding: 'L16', sampleRate: 24000 };
+		return { encoding: 'l16', sampleRate: 24000 };
 	}
 
 	// Test helper methods

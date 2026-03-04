@@ -658,7 +658,7 @@ describe('DeepgramBackend', () => {
 	describe('getDesiredAudioFormat', () => {
 		it('should return L16 for linear16 encoding', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
-			expect(backend.getDesiredAudioFormat({ encoding: 'L16' })).toEqual({ encoding: 'L16', sampleRate: 24000 });
+			expect(backend.getDesiredAudioFormat({ encoding: 'l16' })).toEqual({ encoding: 'l16', sampleRate: 24000 });
 		});
 	});
 });
