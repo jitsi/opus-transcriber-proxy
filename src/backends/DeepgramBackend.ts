@@ -227,12 +227,12 @@ export class DeepgramBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
-		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus|ogg-opus is
+		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus is
 		// configured globally.  The client-side ?encoding= URL parameter describes
 		// what the client is sending; it does not independently override the Deepgram
 		// output format.  Without this guard, Deepgram would receive Opus bytes but
 		// be told the encoding is linear16 (the default), causing a protocol mismatch.
-		if ((config.deepgram.encoding === 'opus' || config.deepgram.encoding === 'ogg-opus') &&
+		if ((config.deepgram.encoding === 'opus') &&
 			(inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
 			this.negotiatedFormat = inputFormat;
 		} else {

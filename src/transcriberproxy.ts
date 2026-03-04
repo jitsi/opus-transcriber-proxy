@@ -21,7 +21,7 @@ export interface TranscriptionMessage {
 }
 
 export interface TranscriberProxyOptions {
-	language: string | null;
+	language?: string;
 	sessionId?: string;
 	provider?: Provider;
 	encoding?: AudioEncoding;

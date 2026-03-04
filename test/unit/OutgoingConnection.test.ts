@@ -52,7 +52,7 @@ vi.mock('../../src/backends/BackendFactory', () => ({
 	createBackend: vi.fn(() => mockBackend),
 	getBackendConfig: vi.fn(() => ({
 		model: 'test-model',
-		language: null,
+		language: undefined,
 		prompt: undefined,
 	})),
 }));
@@ -106,7 +106,7 @@ describe('OutgoingConnection', () => {
 			useDispatcher: false,
 			sendBack: false,
 			sendBackInterim: false,
-			language: null,
+			language: undefined,
 			provider: 'openai',
 		};
 	});

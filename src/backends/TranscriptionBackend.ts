@@ -16,8 +16,8 @@ export { type AudioFormat } from '../AudioFormat';
 import type { AudioFormat } from '../AudioFormat';
 
 export interface BackendConfig {
-	/** Language hint for transcription (null = auto-detect) */
-	language: string | null;
+	/** Language hint for transcription (undefined = auto-detect) */
+	language?: string;
 	/** Custom prompt/instructions for the transcription model */
 	prompt?: string;
 	/** Model to use for transcription */

@@ -163,7 +163,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 			model: this.backendConfig.model || config.openai.model,
 		};
 
-		if (this.backendConfig.language !== null) {
+		if (this.backendConfig.language) {
 			transcriptionConfig.language = this.backendConfig.language;
 		}
 

@@ -87,7 +87,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2-general',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -133,7 +133,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -149,7 +149,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -165,7 +165,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -190,7 +190,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -207,7 +207,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -225,7 +225,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -243,7 +243,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -263,7 +263,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -298,7 +298,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -331,7 +331,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -356,7 +356,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -394,7 +394,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -431,7 +431,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -463,7 +463,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -483,7 +483,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -503,7 +503,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -527,7 +527,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -551,7 +551,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -585,7 +585,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -611,7 +611,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -626,7 +626,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -641,7 +641,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
