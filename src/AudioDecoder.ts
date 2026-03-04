@@ -21,7 +21,7 @@ export interface DecodedAudio {
 	/** Any errors that occurred during decoding */
 	errors: DecodeError[];
 	/** Whether this frame is a concealment frame generated to fill a packet-loss gap */
-	kind?: 'normal' | 'concealment';
+	kind: 'normal' | 'concealment';
 }
 
 /**

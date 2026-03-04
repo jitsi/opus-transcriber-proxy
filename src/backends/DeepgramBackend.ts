@@ -234,7 +234,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 		// be told the encoding is linear16 (the default), causing a protocol mismatch.
 		if ((config.deepgram.encoding === 'opus') &&
 			(inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
-			this.negotiatedFormat = inputFormat;
+			this.negotiatedFormat = { ...inputFormat };
 		} else {
 			this.negotiatedFormat = { encoding: 'l16', sampleRate: 24000 };
 		}
