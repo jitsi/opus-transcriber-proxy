@@ -12,8 +12,8 @@
 import type { TranscriptionMessage } from '../transcriberproxy';
 import type { AudioEncoding } from '../utils';
 
-export { type AudioFormat } from '../AudioFormat';
 import type { AudioFormat } from '../AudioFormat';
+export type { AudioFormat };
 
 export interface BackendConfig {
 	/** Language hint for transcription (undefined = auto-detect) */
