@@ -464,6 +464,27 @@ describe('TranscriberProxy', () => {
 			expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
 		});
 
+		it('should promote opus to ogg when URL encoding is ogg-opus', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, { ...options, encoding: 'ogg-opus' });
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			const [, format] = vi.mocked(OutgoingConnection).mock.calls[0];
+			expect(format).toMatchObject({ encoding: 'ogg' });
+		});
+
+		it('should not promote opus when URL encoding is opus', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, { ...options, encoding: 'opus' });
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			const [, format] = vi.mocked(OutgoingConnection).mock.calls[0];
+			expect(format).toMatchObject({ encoding: 'opus' });
+		});
 	});
 
 	describe('handleMediaEvent', () => {

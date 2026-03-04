@@ -229,6 +229,14 @@ export class TranscriberProxy extends EventEmitter {
 			return;
 		}
 
+		// If the start event says 'opus' but the URL parameter says 'ogg-opus', the
+		// stream is containerised Ogg-Opus.  Some clients send a generic 'opus'
+		// encoding in the start event without specifying the framing; the URL parameter
+		// is the authoritative source for the container format.
+		if (mediaFormat.encoding === 'opus' && this.options.encoding === 'ogg-opus') {
+			mediaFormat = { ...mediaFormat, encoding: 'ogg' };
+		}
+
 		const connection = this.getConnection(tag);
 		if (connection) {
 			connection.updateInputFormat(mediaFormat);
