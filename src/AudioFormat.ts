@@ -15,7 +15,7 @@ const VALID_INPUT_ENCODINGS = ['opus', 'ogg', 'ogg-opus', 'l16'] as const;
  * value 'ogg' in the returned AudioFormat.
  */
 export function validateAudioFormat(format: unknown): AudioFormat {
-	if (format === null || typeof format !== 'object') {
+	if (format === null || typeof format !== 'object' || Array.isArray(format)) {
 		throw new Error(`mediaFormat must be an object, got: ${JSON.stringify(format)}`);
 	}
 

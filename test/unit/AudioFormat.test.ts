@@ -24,7 +24,7 @@ describe('validateAudioFormat', () => {
 		});
 
 		it('should throw for an array', () => {
-			expect(() => validateAudioFormat([])).toThrow('mediaFormat.encoding must be a non-empty string');
+			expect(() => validateAudioFormat([])).toThrow('mediaFormat must be an object');
 		});
 	});
 
