@@ -49,10 +49,11 @@ export class DummyBackend implements TranscriptionBackend {
 			throw new Error(`Cannot send audio: connection not ready (status: ${this.status})`);
 		}
 
-		// Incoming audio is PCM L16 (2 bytes per sample at 24kHz)
+		// Incoming audio is PCM l16 (2 bytes per sample). This is correct because
+		// getDesiredAudioFormat() always returns { encoding: 'l16' }.
 		const audioBytes = Buffer.byteLength(audioBase64, 'base64');
 		this.stats.audioBytes += audioBytes;
-		this.stats.totalSamples += audioBytes / 2;
+		this.stats.totalSamples += audioBytes / 2; // 2 bytes per l16 sample
 		this.stats.packetCount++;
 	}
 

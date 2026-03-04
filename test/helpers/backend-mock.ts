@@ -93,6 +93,9 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		// Pass-through only activates for opus/ogg input. If wantsRawAudio is true
+		// but the input is already l16, we fall back to l16 output — meaning a test
+		// that sets wantsRawAudio: true with l16 input will NOT exercise pass-through.
 		if (this._wantsRawAudio && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
 			return inputFormat;
 		}

@@ -29,7 +29,9 @@ export function createAudioDecoder(inputFormat: AudioFormat, outputFormat: Audio
 		throw new Error(`ogg-opus input cannot be decoded to PCM: no Ogg container demuxer is available. Use a backend that accepts raw Ogg (e.g. Deepgram with DEEPGRAM_ENCODING=opus), or send raw opus frames instead.`);
 	}
 	if (inputFormat.encoding !== 'opus') {
-		throw new Error(`Unsupported input encoding '${inputFormat.encoding}': only 'opus' or 'l16' is supported for PCM output`);
+		// Unreachable for well-typed callers ('opus' is the only remaining union member);
+		// kept as a defensive guard against as-any casts or future union additions.
+		throw new Error(`Unsupported input encoding '${inputFormat.encoding}' for PCM output: use 'opus', 'l16', or a backend that accepts raw 'ogg'`);
 	}
 	const sampleRate = (outputFormat.sampleRate ?? 24000) as OpusDecoderSampleRate;
 	return new OpusAudioDecoder(sampleRate);

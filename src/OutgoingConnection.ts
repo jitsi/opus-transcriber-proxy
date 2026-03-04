@@ -54,7 +54,7 @@ export class OutgoingConnection {
 
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
-	private inputAudioFormat!: AudioFormat;
+	private inputAudioFormat!: AudioFormat; // set synchronously by updateInputFormat() in the constructor
 
 	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions) {
 		this.localTag = tag;
