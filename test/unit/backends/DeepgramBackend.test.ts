@@ -5,8 +5,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DeepgramBackend } from '../../../src/backends/DeepgramBackend';
 import { mockGlobalWebSocket, MockWebSocket, type MockWebSocketInstance } from '../../helpers/websocket-mock';
-import type { BackendConfig } from '../../../src/backends/TranscriptionBackend';
+import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
+import { config } from '../../../src/config';
 
 // Mock logger
 vi.mock('../../../src/logger', () => ({
@@ -656,9 +657,87 @@ describe('DeepgramBackend', () => {
 	});
 
 	describe('getDesiredAudioFormat', () => {
-		it('should return L16 for linear16 encoding', () => {
+		it('should return l16/24000 when DEEPGRAM_ENCODING=linear16 (default)', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			expect(backend.getDesiredAudioFormat({ encoding: 'l16' })).toEqual({ encoding: 'l16', sampleRate: 24000 });
+		});
+
+		it('should return l16/24000 for opus input when DEEPGRAM_ENCODING=linear16', () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 24000 });
+		});
+
+		it('should pass through opus input when DEEPGRAM_ENCODING=opus', () => {
+			(config.deepgram as any).encoding = 'opus';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const input: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
+				expect(backend.getDesiredAudioFormat(input)).toEqual({ encoding: 'opus', sampleRate: 48000 });
+			} finally {
+				(config.deepgram as any).encoding = 'linear16';
+			}
+		});
+
+		it('should pass through ogg input when DEEPGRAM_ENCODING=opus', () => {
+			(config.deepgram as any).encoding = 'opus';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const input: AudioFormat = { encoding: 'ogg' };
+				expect(backend.getDesiredAudioFormat(input)).toEqual({ encoding: 'ogg' });
+			} finally {
+				(config.deepgram as any).encoding = 'linear16';
+			}
+		});
+
+		it('should return a copy of inputFormat, not the same reference', () => {
+			(config.deepgram as any).encoding = 'opus';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const input: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
+				const result = backend.getDesiredAudioFormat(input);
+				expect(result).toEqual(input);
+				expect(result).not.toBe(input);
+			} finally {
+				(config.deepgram as any).encoding = 'linear16';
+			}
+		});
+	});
+
+	describe('connect with raw-passthrough format', () => {
+		it('should omit encoding and sample_rate params for containerised ogg input', async () => {
+			(config.deepgram as any).encoding = 'opus';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				backend.getDesiredAudioFormat({ encoding: 'ogg' });
+
+				const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+				const connectPromise = backend.connect(backendConfig);
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).not.toContain('encoding=');
+				expect(mockWsManager.mockWs.url).not.toContain('sample_rate=');
+			} finally {
+				(config.deepgram as any).encoding = 'linear16';
+			}
+		});
+
+		it('should include encoding=opus and sample_rate for raw opus input', async () => {
+			(config.deepgram as any).encoding = 'opus';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 });
+
+				const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+				const connectPromise = backend.connect(backendConfig);
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).toContain('encoding=opus');
+				expect(mockWsManager.mockWs.url).toContain('sample_rate=48000');
+			} finally {
+				(config.deepgram as any).encoding = 'linear16';
+			}
 		});
 	});
 });
