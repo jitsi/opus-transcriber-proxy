@@ -213,6 +213,7 @@ export class TranscriberProxy extends EventEmitter {
 		return newConnection;
 	}
 
+	// Public for unit-test access; not intended as part of the public API.
 	handleStartEvent(parsedMessage: any): void {
 		const tag = parsedMessage.start?.tag;
 		logger.debug(`Received start event: ${JSON.stringify(parsedMessage)}`);
@@ -245,14 +246,18 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
+	// Public for unit-test access; not intended as part of the public API.
 	handleMediaEvent(parsedMessage: any): void {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
 			let connection = this.getConnection(tag);
 			if (!connection) {
 				const encoding = this.options.encoding ?? 'opus';
+				// channels: 2 reflects SDP negotiation: Opus is always offered as stereo in
+				// SDP for compatibility, even when the actual content is mono.  The decoder
+				// produces mono output regardless.
 				const mediaFormat: AudioFormat = encoding === 'opus'
-					? { encoding: 'opus', sampleRate: 48000, channels: 2 } // channels: 2 per Opus spec; decoder uses mono
+					? { encoding: 'opus', sampleRate: 48000, channels: 2 }
 					: { encoding: 'ogg' };
 				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
 				connection = this.createConnection(tag, mediaFormat);

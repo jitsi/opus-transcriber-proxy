@@ -16,7 +16,7 @@ export interface DecodeError {
 export interface DecodedAudio {
 	/** The decoded or forwarded audio bytes (PCM for decoded audio, raw frames for pass-through) */
 	audioData: Uint8Array;
-	/** Number of samples decoded */
+	/** Number of samples decoded; 0 for non-PCM pass-through (PassThroughDecoder) */
 	samplesDecoded: number;
 	/** Any errors that occurred during decoding */
 	errors: DecodeError[];
