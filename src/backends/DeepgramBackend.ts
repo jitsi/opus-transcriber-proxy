@@ -49,7 +49,12 @@ export class DeepgramBackend implements TranscriptionBackend {
 			try {
 				// Build query parameters to match the format negotiated by
 				// getDesiredAudioFormat(), which determines what the decoder produces.
-				const fmt = this.negotiatedFormat ?? { encoding: 'l16', sampleRate: 24000 } as AudioFormat;
+				// Fall back to a format that matches the configured encoding in case
+			// getDesiredAudioFormat() was not called before connect().
+			const fmt = this.negotiatedFormat ??
+				(config.deepgram.encoding === 'opus'
+					? { encoding: 'opus' as const, sampleRate: 48000 }
+					: { encoding: 'l16' as const, sampleRate: 24000 });
 				// 'ogg' = containerised Ogg-Opus; Deepgram auto-detects from the header
 				// so we omit encoding and sample_rate in that case.
 				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
