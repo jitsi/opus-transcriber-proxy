@@ -48,6 +48,10 @@ export class L16Decoder implements AudioDecoder {
 			this._lastChunkNo = chunkNo;
 		}
 
+		if (frame.byteLength % 2 !== 0) {
+			throw new Error(`PCM16 frame must have an even byte length, got ${frame.byteLength}`);
+		}
+
 		const audioData = resamplePCM16(frame, this._inputSampleRate, this._outputSampleRate);
 		return [{ audioData, samplesDecoded: audioData.length / 2, errors: [], kind: 'normal' }];
 	}
