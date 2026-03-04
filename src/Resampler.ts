@@ -18,6 +18,10 @@ export const RESAMPLER_SUPPORTED_SAMPLE_RATES: ReadonlySet<number> = new Set([80
  * @returns Resampled PCM16 bytes (little-endian), or the original frame if rates match
  */
 export function resamplePCM16(frame: Uint8Array, inputRate: number, outputRate: number): Uint8Array {
+	if (frame.byteLength % 2 !== 0) {
+		throw new Error(`PCM16 frame must have an even byte length, got ${frame.byteLength}`);
+	}
+
 	if (inputRate === outputRate) {
 		return frame;
 	}

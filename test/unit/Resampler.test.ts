@@ -40,6 +40,18 @@ describe('RESAMPLER_SUPPORTED_SAMPLE_RATES', () => {
 });
 
 describe('resamplePCM16', () => {
+	describe('input validation', () => {
+		it('should throw for an odd-length frame', () => {
+			const odd = new Uint8Array(3);
+			expect(() => resamplePCM16(odd, 16000, 24000)).toThrow('even byte length');
+		});
+
+		it('should throw for an odd-length frame even when rates match', () => {
+			const odd = new Uint8Array(5);
+			expect(() => resamplePCM16(odd, 24000, 24000)).toThrow('even byte length');
+		});
+	});
+
 	describe('identity (rates match)', () => {
 		it('should return the original frame reference unchanged', () => {
 			const frame = toBytes(100, 200, 300);

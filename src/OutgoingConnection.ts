@@ -73,7 +73,18 @@ export class OutgoingConnection {
 		this.inputAudioFormat = validateAudioFormat(inputFormat);
 
 		if (this.backend) {
-			this.reinitializeDecoder().catch((error) => {
+			const promise = this.reinitializeDecoder();
+			// reinitGeneration is incremented synchronously inside reinitializeDecoder
+			// (before its first await), so this.reinitGeneration already reflects the
+			// generation owned by this call.
+			const generation = this.reinitGeneration;
+			promise.catch((error) => {
+				if (generation !== this.reinitGeneration) {
+					// A newer reinitializeDecoder call has already succeeded; don't
+					// tear down the connection that it set up.
+					logger.debug(`Stale reinitializeDecoder error for tag ${this.localTag} (superseded by generation ${this.reinitGeneration}):`, error);
+					return;
+				}
 				logger.error(`Failed to reinitialize decoder for tag ${this.localTag}:`, error);
 				this.onError?.(this.localTag, error instanceof Error ? error.message : String(error));
 				this.doClose(true);
