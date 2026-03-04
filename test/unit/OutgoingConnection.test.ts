@@ -541,6 +541,74 @@ describe('OutgoingConnection', () => {
 		});
 	});
 
+	describe('updateInputFormat', () => {
+		it('should reinitialize decoder and process audio with the new format', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			// Switch to l16 input (uses L16Decoder instead of OpusAudioDecoder)
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			await vi.runAllTimersAsync();
+
+			// Send a valid l16 frame (even-length PCM bytes)
+			const l16Frame = new Uint8Array(480 * 2); // 480 samples of silence
+			const mediaEvent = {
+				media: {
+					tag: 'test-tag',
+					payload: Buffer.from(l16Frame).toString('base64'),
+					chunk: 1,
+					timestamp: 0,
+				},
+			};
+			conn.handleMediaEvent(mediaEvent);
+
+			expect(mockBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+
+		it('should discard pending input frames that were queued for the old format', async () => {
+			// Do NOT await — backend starts connecting but isn't ready yet.
+			// initializeBackend() sets this.backend synchronously, so updateInputFormat
+			// will call reinitializeDecoder() below.
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+
+			// Queue two opus frames while the decoder is still pending
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 0, timestamp: 0 } });
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 1, timestamp: 0 } });
+
+			// Change format — must discard the two opus frames queued above
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+
+			await vi.runAllTimersAsync();
+
+			// The opus frames were for the old decoder and must not have been sent
+			expect(mockBackend.getSentAudioCount()).toBe(0);
+		});
+
+		it('should not close the connection when two rapid updateInputFormat calls race', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// Fire two format changes before either decoder has settled.
+			// The generation counter must ensure only the second decoder wins.
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			conn.updateInputFormat({ encoding: 'opus', sampleRate: 48000 });
+
+			await vi.runAllTimersAsync();
+
+			// Connection must still be alive — no spurious close from the losing reinit
+			expect(onClosedSpy).not.toHaveBeenCalled();
+
+			// And the winning decoder must be working
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 2, timestamp: 0 } });
+			expect(mockBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+	});
+
 	describe('Backend event handlers', () => {
 		it('should forward interim transcriptions', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
