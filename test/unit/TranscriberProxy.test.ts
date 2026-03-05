@@ -548,5 +548,34 @@ describe('TranscriberProxy', () => {
 			// No new error calls after handling the media event
 			expect(vi.mocked(logger.error).mock.calls.length).toBe(errorCallsBefore);
 		});
+
+		it('should drop media events for a tag whose start event was rejected', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			// start event with invalid mediaFormat
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'mp3' } } });
+
+			// media event for the same tag should be silently dropped
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } });
+
+			expect(OutgoingConnection).not.toHaveBeenCalled();
+		});
+
+		it('should allow a connection after a corrected start event for a previously rejected tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			// First start event fails
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'mp3' } } });
+			// Second start event succeeds — clears the failed flag
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+
+			const mediaEvent = { event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(mediaEvent);
+
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
+		});
 	});
 });

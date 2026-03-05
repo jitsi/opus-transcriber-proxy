@@ -33,6 +33,7 @@ export interface TranscriberProxyOptions {
 export class TranscriberProxy extends EventEmitter {
 	private ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
+	private failedStartTags: Set<string> = new Set();
 	private options: TranscriberProxyOptions;
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
@@ -227,8 +228,11 @@ export class TranscriberProxy extends EventEmitter {
 			mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
 		} catch (error) {
 			logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
+			this.failedStartTags.add(tag);
 			return;
 		}
+
+		this.failedStartTags.delete(tag);
 
 		// If the start event says 'opus' but the URL parameter says 'ogg-opus', the
 		// stream is containerised Ogg-Opus.  Some clients send a generic 'opus'
@@ -252,6 +256,10 @@ export class TranscriberProxy extends EventEmitter {
 		if (tag) {
 			let connection = this.getConnection(tag);
 			if (!connection) {
+				if (this.failedStartTags.has(tag)) {
+					logger.debug(`Dropping media event for tag "${tag}": start event was rejected`);
+					return;
+				}
 				const encoding = this.options.encoding ?? 'opus';
 				// channels: 2 reflects SDP negotiation: Opus is always offered as stereo in
 				// SDP for compatibility, even when the actual content is mono.  The decoder
