@@ -477,6 +477,78 @@ describe('OutgoingConnection', () => {
 		});
 	});
 
+	describe('close() called while a promise is pending', () => {
+		it('should not crash or call onClosed twice when close() is called during initializeBackend', async () => {
+			// Backend with a connect delay so we can call close() while it is connecting.
+			mockBackend = new MockTranscriptionBackend({ autoConnect: false, connectDelay: 100 });
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// close() fires before the backend has connected (connect has a 100 ms delay)
+			conn.close();
+
+			// Let the pending connect attempt resolve/reject
+			await vi.runAllTimersAsync();
+
+			// onClosed was NOT set (close() used notify=false) and must not have
+			// been called at all from any error path.
+			expect(onClosedSpy).not.toHaveBeenCalled();
+		});
+
+		it('should not fire onClosed more than once when close() races with a backend error', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// Simulate a backend error (would normally call doClose(true))
+			mockBackend.simulateError('api_error', 'something went wrong');
+
+			// Now call close() directly as well
+			conn.close();
+
+			// onClosed should have fired exactly once (from the error path)
+			expect(onClosedSpy).toHaveBeenCalledTimes(1);
+		});
+
+		it('should not fire onClosed when close() is called during a backend reconnect', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: false, connectDelay: 100 });
+			vi.mocked(createBackend)
+				.mockReturnValueOnce(firstBackend)
+				.mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// Trigger a backend reconnect and immediately close before it finishes
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			conn.close();
+
+			await vi.runAllTimersAsync();
+
+			expect(onClosedSpy).not.toHaveBeenCalled();
+		});
+
+		it('should be idempotent — repeated close() calls do not throw', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			expect(() => {
+				conn.close();
+				conn.close();
+				conn.close();
+			}).not.toThrow();
+		});
+	});
+
 	describe('close', () => {
 		it('should clean up resources on close', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);

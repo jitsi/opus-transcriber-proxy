@@ -39,6 +39,7 @@ export class OutgoingConnection {
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private decoder?: AudioDecoder;
 	private reinitGeneration = 0;
+	private isClosed = false;
 	private backend?: TranscriptionBackend;
 	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
 	private pendingAudioFrames: string[] = [];
@@ -112,6 +113,9 @@ export class OutgoingConnection {
 
 			await this.reinitializeDecoder();
 
+			// close() may have been called while we were initializing the decoder.
+			if (this.isClosed) return;
+
 			this.setupBackendHandlers(this.backend);
 
 			// Get backend configuration
@@ -122,6 +126,10 @@ export class OutgoingConnection {
 			// Connect the backend
 			const connectStartTime = Date.now();
 			await this.backend.connect(backendConfig);
+
+			// close() may have been called while we were connecting.
+			if (this.isClosed) return;
+
 			const connectDurationSec = (Date.now() - connectStartTime) / 1000;
 
 			// OTel metrics: track backend connection
@@ -140,6 +148,9 @@ export class OutgoingConnection {
 				this.processPendingAudioData();
 			}
 		} catch (error) {
+			// Suppress cascading errors if close() was already called — doClose()
+			// has run (or is running) and any further teardown is a no-op.
+			if (this.isClosed) return;
 			logger.error(`Failed to initialize transcription backend for tag ${this.localTag}:`, error);
 			this.backend = undefined;
 			this.onBackendError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
@@ -274,12 +285,16 @@ export class OutgoingConnection {
 			await newBackend.connect(backendConfig);
 
 			if (generation !== this.reinitGeneration) {
-				// A newer reinitializeDecoder has taken over.  Close the backend we
-				// just connected to avoid a resource leak; suppress its onClosed so
-				// it doesn't trigger OutgoingConnection teardown.
+				// A newer reinitializeDecoder has taken over, or close() was called.
+				// Clean up the backend we just connected.  We check the backend's
+				// current status rather than assuming it is connected, because
+				// doClose() may have already closed it and decremented the metric.
 				newBackend.onClosed = undefined;
+				const isConnected = newBackend.getStatus() === 'connected';
 				newBackend.close();
-				getInstruments().backendConnectionsActive.add(-1);
+				if (isConnected) {
+					getInstruments().backendConnectionsActive.add(-1);
+				}
 				return false;
 			}
 
@@ -292,7 +307,7 @@ export class OutgoingConnection {
 			return true;
 		} catch (error) {
 			if (generation !== this.reinitGeneration) {
-				// Stale — the newer call already handles things; don't double-close.
+				// Stale — a newer call or close() already handles cleanup.
 				return false;
 			}
 			logger.error(`Failed to reconnect backend for tag ${this.localTag}:`, error);
@@ -594,6 +609,13 @@ export class OutgoingConnection {
 	}
 
 	private doClose(notify: boolean): void {
+		if (this.isClosed) return;
+		this.isClosed = true;
+
+		// Increment the generation so any in-flight reinitializeDecoder /
+		// reconnectBackend calls detect that they are stale and exit cleanly.
+		++this.reinitGeneration;
+
 		logger.debug(`Closing OutgoingConnection for tag: ${this.localTag}`);
 		this.clearIdleCommitTimeout();
 		this.metricCache.flush();
@@ -601,8 +623,22 @@ export class OutgoingConnection {
 		this.decoder = undefined;
 		this.decoderStatus = 'closed';
 
-		this.backend?.close();
-		this.backend = undefined;
+		if (this.backend) {
+			// Detach callbacks before calling close() so that asynchronous backend
+			// events (e.g. a WebSocket 'close' frame arriving after we return) do
+			// not invoke handlers on this already-torn-down connection.
+			this.backend.onClosed = undefined;
+			this.backend.onError = undefined;
+			this.backend.onInterimTranscription = undefined;
+			this.backend.onCompleteTranscription = undefined;
+			const wasConnected = this.backend.getStatus() === 'connected';
+			this.backend.close();
+			this.backend = undefined;
+			if (wasConnected) {
+				// onClosed was suppressed above, so decrement the metric manually.
+				getInstruments().backendConnectionsActive.add(-1);
+			}
+		}
 
 		if (notify) {
 			this.onClosed?.(this.localTag);
