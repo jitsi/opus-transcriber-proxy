@@ -13,6 +13,10 @@ import { getInstruments } from './telemetry/instruments';
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
+function audioFormatsDiffer(a: AudioFormat, b: AudioFormat): boolean {
+	return a.encoding !== b.encoding || a.sampleRate !== b.sampleRate || a.channels !== b.channels;
+}
+
 export class OutgoingConnection {
 	private localTag!: string;
 	private serverAcknowledgedTag!: string;
@@ -38,6 +42,8 @@ export class OutgoingConnection {
 	private backend?: TranscriptionBackend;
 	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
 	private pendingAudioFrames: string[] = [];
+	/** The audio format the current backend instance was initialized for (set synchronously in reinitializeDecoder). */
+	private activeDesiredFormat: AudioFormat | undefined;
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -106,35 +112,7 @@ export class OutgoingConnection {
 
 			await this.reinitializeDecoder();
 
-			// Set up event handlers
-			this.backend.onInterimTranscription = (message) => {
-				// OTel metrics: track interim transcription received
-				getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'true' });
-				this.onInterimTranscription?.(message);
-			};
-
-			this.backend.onCompleteTranscription = (message) => {
-				// OTel metrics: track final transcription received
-				getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'false' });
-				this.clearIdleCommitTimeout();
-				this.onCompleteTranscription?.(message);
-			};
-
-			this.backend.onError = (errorType, errorMessage) => {
-				// OTel metrics: track backend errors
-				getInstruments().backendErrorsTotal.add(1, { provider: this.options.provider || 'unknown', type: errorType });
-				this.onBackendError?.(errorType, errorMessage);
-				this.doClose(true);
-				this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
-			};
-
-			this.backend.onClosed = () => {
-				logger.info(`Backend closed for tag ${this.localTag}, cleaning up OutgoingConnection`);
-				// OTel metrics: decrement backend connection count
-				getInstruments().backendConnectionsActive.add(-1);
-				// Close this OutgoingConnection and notify TranscriberProxy to remove it
-				this.doClose(true);
-			};
+			this.setupBackendHandlers(this.backend);
 
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
@@ -170,32 +148,74 @@ export class OutgoingConnection {
 		}
 	}
 
+	private setupBackendHandlers(backend: TranscriptionBackend): void {
+		backend.onInterimTranscription = (message) => {
+			getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'true' });
+			this.onInterimTranscription?.(message);
+		};
+
+		backend.onCompleteTranscription = (message) => {
+			getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'false' });
+			this.clearIdleCommitTimeout();
+			this.onCompleteTranscription?.(message);
+		};
+
+		backend.onError = (errorType, errorMessage) => {
+			getInstruments().backendErrorsTotal.add(1, { provider: this.options.provider || 'unknown', type: errorType });
+			this.onBackendError?.(errorType, errorMessage);
+			this.doClose(true);
+			this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
+		};
+
+		backend.onClosed = () => {
+			logger.info(`Backend closed for tag ${this.localTag}, cleaning up OutgoingConnection`);
+			getInstruments().backendConnectionsActive.add(-1);
+			this.doClose(true);
+		};
+	}
+
 	private async reinitializeDecoder(): Promise<void> {
 		if (!this.backend) {
 			throw new Error('Cannot initialize decoder without a backend');
 		}
 
-		// Capture a generation token before the await. If another reinitializeDecoder
-		// call starts while we're awaiting, it will increment reinitGeneration, and we
-		// will discard our result rather than overwriting the newer decoder.
+		// Capture a generation token before the first await. Any concurrent call
+		// increments reinitGeneration, letting us detect and discard stale work.
 		const generation = ++this.reinitGeneration;
 
-		// Discard frames that were queued for the old decoder — they are in the old
-		// audio format.  Frames arriving after this point will use the new format.
-		// Any already-decoded audio (pendingAudioFrames) was produced by the old
-		// decoder and must be discarded too.
+		// Discard frames queued for the old decoder — they are in the old audio
+		// format.  Frames arriving after this point will use the new format.
+		// Already-decoded audio (pendingAudioFrames) was produced by the old decoder
+		// and must be discarded too.
 		this.pendingInputFrames = [];
 		this.pendingAudioFrames = [];
 		this.decoder?.free();
 		this.decoder = undefined;
 		this.decoderStatus = 'pending';
 
+		const oldDesiredFormat = this.activeDesiredFormat;
 		const desiredFormat = this.backend.getDesiredAudioFormat(this.inputAudioFormat);
+
+		// Record the target format synchronously so that any concurrent
+		// reinitializeDecoder call sees the new value immediately and can decide
+		// whether it also needs to replace the backend.
+		this.activeDesiredFormat = desiredFormat;
+
+		// If the backend's desired audio format has changed and a backend already
+		// exists, close it and open a fresh connection with the new format.
+		// This covers mid-session input-format changes (e.g. Deepgram switching
+		// between raw-Opus pass-through and decoded PCM).
+		if (oldDesiredFormat !== undefined && audioFormatsDiffer(desiredFormat, oldDesiredFormat)) {
+			const reconnected = await this.reconnectBackend(generation);
+			if (!reconnected) {
+				return; // stale or fatal error — a newer call has taken over
+			}
+		}
+
 		const newDecoder = createAudioDecoder(this.inputAudioFormat, desiredFormat);
 		await newDecoder.ready;
 
 		if (generation !== this.reinitGeneration) {
-			// A newer reinitializeDecoder call has taken over; discard this result.
 			logger.debug(`Discarding stale decoder for tag: ${this.localTag} (superseded by generation ${this.reinitGeneration})`);
 			newDecoder.free();
 			return;
@@ -205,9 +225,82 @@ export class OutgoingConnection {
 		this.decoderStatus = 'ready';
 		logger.info(`Audio decoder ready for tag: ${this.localTag} (output: ${desiredFormat.encoding})`);
 
-		if (this.backend.getStatus() === 'connected') {
+		if (this.backend?.getStatus() === 'connected') {
 			this.processPendingInputFrames();
 			this.processPendingAudioData();
+		}
+	}
+
+	/**
+	 * Close the current backend and open a new one for the format stored in
+	 * this.activeDesiredFormat.  Returns true if the new backend connected
+	 * successfully and the generation is still current; false if the call is
+	 * stale (a newer reinitializeDecoder took over) or a fatal error occurred.
+	 */
+	private async reconnectBackend(generation: number): Promise<boolean> {
+		// Detach all handlers from the old backend before closing it so that its
+		// onClosed / onError callbacks don't trigger OutgoingConnection teardown
+		// while we're replacing it.
+		const oldBackend = this.backend!;
+		const wasConnected = oldBackend.getStatus() === 'connected';
+		oldBackend.onInterimTranscription = undefined;
+		oldBackend.onCompleteTranscription = undefined;
+		oldBackend.onError = undefined;
+		oldBackend.onClosed = undefined;
+		oldBackend.close();
+
+		if (wasConnected) {
+			// onClosed was suppressed above, so we decrement the metric manually.
+			getInstruments().backendConnectionsActive.add(-1);
+		}
+
+		logger.info(`Reconnecting backend for tag ${this.localTag} (format changed to: ${this.activeDesiredFormat?.encoding})`);
+
+		const newBackend = createBackend(this.localTag, this.participant, this.options.provider);
+		this.setupBackendHandlers(newBackend);
+		this.backend = newBackend;
+
+		// Call getDesiredAudioFormat on the new instance so that backends with
+		// connect-time side effects (e.g. DeepgramBackend stores negotiatedFormat)
+		// are correctly configured before connect() is called.
+		newBackend.getDesiredAudioFormat(this.inputAudioFormat);
+
+		const backendConfig = getBackendConfig(this.options.provider);
+		backendConfig.language = this.options.language;
+		backendConfig.tags = this.options.tags;
+
+		try {
+			const connectStartTime = Date.now();
+			await newBackend.connect(backendConfig);
+
+			if (generation !== this.reinitGeneration) {
+				// A newer reinitializeDecoder has taken over.  Close the backend we
+				// just connected to avoid a resource leak; suppress its onClosed so
+				// it doesn't trigger OutgoingConnection teardown.
+				newBackend.onClosed = undefined;
+				newBackend.close();
+				getInstruments().backendConnectionsActive.add(-1);
+				return false;
+			}
+
+			const connectDurationSec = (Date.now() - connectStartTime) / 1000;
+			const instruments = getInstruments();
+			instruments.backendConnectionsActive.add(1);
+			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
+
+			logger.info(`Backend reconnected for tag: ${this.localTag}`);
+			return true;
+		} catch (error) {
+			if (generation !== this.reinitGeneration) {
+				// Stale — the newer call already handles things; don't double-close.
+				return false;
+			}
+			logger.error(`Failed to reconnect backend for tag ${this.localTag}:`, error);
+			this.backend = undefined;
+			this.onBackendError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
+			this.doClose(true);
+			this.onError?.(this.localTag, `Error reconnecting backend: ${error instanceof Error ? error.message : String(error)}`);
+			return false;
 		}
 	}
 

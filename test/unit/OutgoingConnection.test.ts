@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OutgoingConnection } from '../../src/OutgoingConnection';
 import { MockTranscriptionBackend } from '../helpers/backend-mock';
 import type { TranscriberProxyOptions } from '../../src/transcriberproxy';
+import { createBackend } from '../../src/backends/BackendFactory';
 
 // Mock logger
 vi.mock('../../src/logger', () => ({
@@ -606,6 +607,127 @@ describe('OutgoingConnection', () => {
 			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
 			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 2, timestamp: 0 } });
 			expect(mockBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+	});
+
+	describe('backend reconnection on format change', () => {
+		it('should reconnect the backend when the desired audio format changes', async () => {
+			// First backend passes raw opus through; second (after reconnect) wants PCM
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend)
+				.mockReturnValueOnce(firstBackend)
+				.mockReturnValueOnce(secondBackend);
+
+			// Start with opus input — firstBackend.getDesiredAudioFormat returns {encoding:'opus'}
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			expect(firstBackend.getConnectCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(0);
+
+			// Switch to l16 input — firstBackend.getDesiredAudioFormat({encoding:'l16'})
+			// returns {encoding:'l16', sampleRate:24000} (l16 input never passes through).
+			// This differs from the initial {encoding:'opus'} → reconnect should fire.
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			await vi.runAllTimersAsync();
+
+			expect(firstBackend.getCloseCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(1);
+
+			// Audio should now flow through secondBackend
+			const l16Frame = new Uint8Array(480 * 2); // 480 samples of silence
+			conn.handleMediaEvent({
+				media: { tag: 'test-tag', payload: Buffer.from(l16Frame).toString('base64'), chunk: 1, timestamp: 0 },
+			});
+			expect(secondBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+
+		it('should not reconnect the backend when the desired format is unchanged', async () => {
+			// Backend always wants PCM regardless of input format (wantsRawAudio: false)
+			const backend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend).mockReturnValue(backend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			// Change to a different opus parameterisation — getDesiredAudioFormat still
+			// returns {encoding:'l16', sampleRate:24000} so no reconnect is needed.
+			conn.updateInputFormat({ encoding: 'opus', sampleRate: 48000, channels: 2 });
+			await vi.runAllTimersAsync();
+
+			// createBackend was called only once (during construction)
+			expect(vi.mocked(createBackend)).toHaveBeenCalledTimes(1);
+			expect(backend.getConnectCallCount()).toBe(1);
+		});
+
+		it('should not fire onClosed on the OutgoingConnection during a backend swap', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend)
+				.mockReturnValueOnce(firstBackend)
+				.mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			await vi.runAllTimersAsync();
+
+			expect(onClosedSpy).not.toHaveBeenCalled();
+		});
+
+		it('should close the OutgoingConnection if the reconnected backend fails to connect', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ status: 'failed' });
+			vi.mocked(createBackend)
+				.mockReturnValueOnce(firstBackend)
+				.mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onBackendErrorSpy = vi.fn();
+			const onClosedSpy = vi.fn();
+			conn.onBackendError = onBackendErrorSpy;
+			conn.onClosed = onClosedSpy;
+
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			await vi.runAllTimersAsync();
+
+			expect(onBackendErrorSpy).toHaveBeenCalledWith('connection_failed', expect.any(String));
+			expect(onClosedSpy).toHaveBeenCalled();
+		});
+
+		it('should not close the OutgoingConnection on concurrent format changes', async () => {
+			// Three backends: initial, plus one for each of the two rapid format changes.
+			// Only the second reconnect (thirdBackend) should ultimately win.
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const thirdBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend)
+				.mockReturnValueOnce(firstBackend)
+				.mockReturnValueOnce(secondBackend)
+				.mockReturnValueOnce(thirdBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// Fire two format changes before either reconnect has settled.
+			// The second one (ogg → thirdBackend) must win; the first is stale.
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 });
+			conn.updateInputFormat({ encoding: 'ogg' });
+
+			await vi.runAllTimersAsync();
+
+			expect(onClosedSpy).not.toHaveBeenCalled();
+			expect(thirdBackend.getConnectCallCount()).toBe(1);
 		});
 	});
 
