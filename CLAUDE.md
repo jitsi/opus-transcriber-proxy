@@ -116,6 +116,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Handles ping/pong keepalive
 - Optional dispatcher forwarding (sends transcriptions to external service)
 - Optional WebSocket message dumping for debugging
+- Tracks `failedStartTags`: if a `start` event has an invalid `mediaFormat`, subsequent `media` events for that tag are dropped (not auto-connected with defaults) until a valid `start` event arrives
 
 **OutgoingConnection** (`src/OutgoingConnection.ts`)
 - Manages one participant's audio stream
@@ -124,6 +125,8 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Sends decoded (or raw) audio to transcription backend
 - Implements idle commit timeout (forces transcription when audio stops)
 - Maintains transcript history for context injection
+- On every `reinitializeDecoder` call, compares the new desired format against `activeDesiredFormat`; if they differ, closes the old backend and opens a fresh connection (via `reconnectBackend`) before creating the decoder
+- `doClose()` is idempotent (guarded by `isClosed`); it increments `reinitGeneration` to make in-flight async operations detect they are stale, and detaches backend callbacks before calling `close()` to prevent stale events from firing after teardown
 
 **AudioDecoder** (`src/AudioDecoder.ts`)
 - Interface for format-agnostic audio decoding with chunk-sequence tracking
@@ -245,7 +248,7 @@ See `src/backends/DummyBackend.ts` for a minimal example.
   - `OpusAudioDecoder` when input is Opus and output encoding is `'l16'` (decode to PCM)
 - PCM format: 24kHz, 16-bit, mono (`audioData` is a `Uint8Array` of raw PCM bytes)
 - Deepgram can accept raw Opus to avoid decode/re-encode
-- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` to swap the decoder if the format changes mid-session; **only the decoder is swapped** — the backend connection is not re-established (a PCM↔raw-Opus boundary crossing would cause a protocol mismatch, but this does not arise in practice)
+- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` when the format changes. If `backend.getDesiredAudioFormat(newInputFormat)` returns a different encoding than the one the backend was connected with, `reinitializeDecoder` closes the old backend and opens a fresh one (`reconnectBackend`) before creating the decoder. The generation counter (`reinitGeneration`) ensures concurrent calls are safe: `activeDesiredFormat` is set synchronously so concurrent calls immediately see the new target format.
 
 ### Session Resumption
 
@@ -385,5 +388,6 @@ See README.md for complete list. Key ones:
 - The `tag` field identifies a participant within a session. Format can be `{id}-{ssrc}` or just `{id}`.
 - Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
-- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly.
+- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly. This method is called on every `reinitializeDecoder` call (not just once at construction), so it must be a pure function of `inputFormat` for a given backend configuration. If the method has connect-time side effects (like `DeepgramBackend` storing `negotiatedFormat`), it will also be called on any new backend instance before `connect()`, so those side effects will be applied correctly.
 - `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
+- `doClose()` is idempotent. Do not call it more than once expecting repeated side effects — the `isClosed` guard makes subsequent calls no-ops. Backend callbacks (`onClosed`, `onError`, etc.) are nulled before `close()` is called, so async backend events arriving after teardown are silently dropped.

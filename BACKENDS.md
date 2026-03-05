@@ -131,7 +131,7 @@ All backends implement the `TranscriptionBackend` interface:
 
 ```typescript
 interface AudioFormat {
-  encoding: string;   // e.g. 'l16', 'opus', 'ogg'
+  encoding: 'l16' | 'opus' | 'ogg';
   channels?: number;
   sampleRate?: number;
 }
@@ -169,13 +169,16 @@ interface TranscriptionBackend {
 
 ### Audio Format Negotiation
 
-`OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` once when the backend is
-initialized. The returned `AudioFormat` tells `AudioDecoderFactory` what to produce:
+`OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` on every
+`reinitializeDecoder` call — at initial setup and whenever `updateInputFormat()` is called.
+The returned `AudioFormat` tells `AudioDecoderFactory` what to produce:
 
 ```
-Client audio (ogg-opus / raw opus)
+Client audio (ogg-opus / raw opus / l16 / …)
         ↓
 OutgoingConnection calls getDesiredAudioFormat(inputFormat)
+        ↓
+  desiredFormat differs from previous?  →  close old backend, open fresh one
         ↓
 AudioDecoderFactory.createAudioDecoder(inputFormat, desiredFormat)
         ↓
@@ -184,6 +187,15 @@ AudioDecoderFactory.createAudioDecoder(inputFormat, desiredFormat)
         ↓
 sendAudio() called with base64-encoded bytes in the negotiated format
 ```
+
+If the desired format changes between calls (e.g. input switches from `opus` to `l16` and
+Deepgram now wants `linear16` instead of `opus`), `OutgoingConnection` closes the old backend
+connection and opens a fresh one before creating the new decoder. This means `getDesiredAudioFormat`
+must be a **pure function of `inputFormat`** for a given backend configuration.
+
+If your backend stores the result as a side effect for use in `connect()` (like `DeepgramBackend`
+stores `negotiatedFormat` to build the WebSocket URL), that side effect will be re-applied when
+`getDesiredAudioFormat` is called on the new backend instance, so the behaviour is correct.
 
 **PCM mode (default):** Return `{ encoding: 'l16', sampleRate: 24000 }` to receive decoded
 24 kHz, 16-bit, mono PCM. Used by OpenAI and Gemini.
@@ -278,13 +290,13 @@ export class YourBackend implements TranscriptionBackend {
     logger.info(`Your backend connected for tag: ${this.tag}`);
   }
 
-  getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
+  getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
     // Return the format you want to receive.
     // For PCM (most backends):
     return { encoding: 'l16', sampleRate: 24000 };
     // For raw pass-through (if your provider supports Opus/Ogg natively):
-    // if (_inputFormat.encoding === 'opus' || _inputFormat.encoding === 'ogg') {
-    //   return _inputFormat;
+    // if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
+    //   return { ...inputFormat };  // shallow copy — never return the reference directly
     // }
     // return { encoding: 'l16', sampleRate: 24000 };
   }
