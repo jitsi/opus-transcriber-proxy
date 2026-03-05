@@ -97,7 +97,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 		// but the input is already l16, we fall back to l16 output — meaning a test
 		// that sets wantsRawAudio: true with l16 input will NOT exercise pass-through.
 		if (this._wantsRawAudio && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
-			return inputFormat;
+			return { ...inputFormat };
 		}
 		return { encoding: 'l16', sampleRate: 24000 };
 	}

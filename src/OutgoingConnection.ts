@@ -11,7 +11,6 @@ import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
-
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
 export class OutgoingConnection {
