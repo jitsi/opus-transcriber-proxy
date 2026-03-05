@@ -379,6 +379,15 @@ See README.md for complete list. Key ones:
 - `USE_DISPATCHER` - Enable dispatcher forwarding
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
 
+## Keeping Documentation Current
+
+When making code changes, update `CLAUDE.md` and `BACKENDS.md` in the same commit:
+
+- **CLAUDE.md** — update the relevant Key Components description, Common Patterns section, or Notes for Claude whenever behaviour, interfaces, or invariants change.
+- **BACKENDS.md** — update whenever the `TranscriptionBackend` interface changes, audio format negotiation behaviour changes, or backend-specific behaviour changes.
+
+Do not leave stale descriptions. If a note says "only X happens" and you change it so Y also happens, fix the note.
+
 ## Notes for Claude
 
 - The WASM build requires Emscripten to be installed and activated (see Prerequisites section). If build fails, check that Emscripten is installed and that `npm run configure` was run.
