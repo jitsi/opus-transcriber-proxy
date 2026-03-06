@@ -11,6 +11,7 @@ import type { TranscriptionBackend, BackendConfig, AudioFormat } from './Transcr
 import type { TranscriptionMessage } from '../transcriberproxy';
 
 const DUMMY_BACKEND_SAMPLE_RATE = 24000;
+const BYTES_PER_L16_SAMPLE = 2;
 
 export class DummyBackend implements TranscriptionBackend {
 	private status: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
@@ -53,7 +54,7 @@ export class DummyBackend implements TranscriptionBackend {
 		// getDesiredAudioFormat() always returns { encoding: 'l16' }.
 		const audioBytes = Buffer.byteLength(audioBase64, 'base64');
 		this.stats.audioBytes += audioBytes;
-		this.stats.totalSamples += audioBytes / 2; // 2 bytes per l16 sample
+		this.stats.totalSamples += audioBytes / BYTES_PER_L16_SAMPLE;
 		this.stats.packetCount++;
 	}
 
