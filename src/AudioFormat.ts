@@ -1,0 +1,56 @@
+export interface AudioFormat {
+	encoding: 'opus' | 'ogg' | 'l16';
+	channels?: number;
+	sampleRate?: number;
+}
+
+const VALID_INPUT_ENCODINGS = ['opus', 'ogg', 'ogg-opus', 'l16'] as const;
+
+/**
+ * Validates that an unknown value is a well-formed AudioFormat suitable for use
+ * as a client-supplied input format (i.e. the mediaFormat field of a start event).
+ * Throws a descriptive Error if validation fails.
+ *
+ * The external client-facing encoding 'ogg-opus' is normalised to the internal
+ * value 'ogg' in the returned AudioFormat.
+ */
+export function validateAudioFormat(format: unknown): AudioFormat {
+	if (format === null || typeof format !== 'object' || Array.isArray(format)) {
+		throw new Error(`mediaFormat must be an object, got: ${JSON.stringify(format)}`);
+	}
+
+	const { encoding, channels, sampleRate } = format as Record<string, unknown>;
+
+	if (typeof encoding !== 'string' || encoding === '') {
+		throw new Error(`mediaFormat.encoding must be a non-empty string, got: ${JSON.stringify(encoding)}`);
+	}
+
+	const normalizedEncoding = encoding.toLowerCase();
+
+	if (!(VALID_INPUT_ENCODINGS as readonly string[]).includes(normalizedEncoding)) {
+		throw new Error(`mediaFormat.encoding must be one of [${VALID_INPUT_ENCODINGS.join(', ')}], got: ${JSON.stringify(encoding)}`);
+	}
+
+	if (channels !== undefined && (!Number.isInteger(channels) || (channels as number) <= 0)) {
+		throw new Error(`mediaFormat.channels must be a positive integer, got: ${JSON.stringify(channels)}`);
+	}
+
+	if (sampleRate !== undefined && (!Number.isInteger(sampleRate) || (sampleRate as number) <= 0)) {
+		throw new Error(`mediaFormat.sampleRate must be a positive integer, got: ${JSON.stringify(sampleRate)}`);
+	}
+
+	// Normalise the external 'ogg-opus' encoding name to the internal 'ogg' value
+	if (normalizedEncoding === 'ogg-opus') {
+		return {
+			encoding: 'ogg',
+			...(channels !== undefined && { channels: channels as number }),
+			...(sampleRate !== undefined && { sampleRate: sampleRate as number }),
+		};
+	}
+
+	return {
+		encoding: normalizedEncoding as AudioFormat['encoding'],
+		...(channels !== undefined && { channels: channels as number }),
+		...(sampleRate !== undefined && { sampleRate: sampleRate as number }),
+	};
+}

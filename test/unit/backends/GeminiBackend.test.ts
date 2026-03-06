@@ -59,7 +59,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -79,7 +79,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: 'Custom transcription prompt',
 			};
 
@@ -124,7 +124,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -147,7 +147,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -169,7 +169,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -187,7 +187,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -205,7 +205,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -224,7 +224,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -249,7 +249,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -285,7 +285,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -305,7 +305,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -328,7 +328,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -354,7 +354,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -391,7 +391,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -429,7 +429,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -464,7 +464,7 @@ describe('GeminiBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -490,7 +490,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -515,7 +515,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -542,7 +542,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -556,7 +556,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -572,7 +572,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -587,7 +587,7 @@ describe('GeminiBackend', () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gemini-2.0-flash-exp',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 

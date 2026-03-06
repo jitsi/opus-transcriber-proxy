@@ -83,7 +83,7 @@ Uses Deepgram's WebSocket streaming API for real-time transcription.
 ```bash
 DEEPGRAM_API_KEY=your-key-here
 DEEPGRAM_MODEL=nova-2
-DEEPGRAM_ENCODING=linear16        # Audio encoding: linear16 (PCM) or opus (default: linear16)
+DEEPGRAM_ENCODING=opus            # Audio encoding: opus (default, passes raw Opus/Ogg) or linear16 (decoded PCM)
 DEEPGRAM_LANGUAGE=multi           # Multilingual code-switching (default)
 DEEPGRAM_INCLUDE_LANGUAGE=true    # Append language to transcript (e.g., "Hello [en]")
 DEEPGRAM_PUNCTUATE=true
@@ -102,10 +102,9 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
 
 **Technical Details:**
 - Uses WebSocket API: `wss://api.deepgram.com/v1/listen`
-- Audio encoding options (via `DEEPGRAM_ENCODING` env var or `encoding` URL parameter):
-  - **linear16** (default): Sends decoded PCM audio at 24kHz, 16-bit, mono. Uses more CPU for Opus decoding but universally compatible.
-  - **opus**: Sends raw Opus frames at 48kHz. More efficient (skips decoding step), lower CPU usage, native Opus support.
-  - **ogg-opus**: Sends containerized Ogg-Opus audio (e.g., from Voximplant). Deepgram auto-detects encoding from the container header - no `encoding` or `sample_rate` params are sent to Deepgram.
+- Audio encoding options (via `DEEPGRAM_ENCODING` env var):
+  - **opus** (default): Passes the client's raw audio directly to Deepgram without decoding. When the client sends raw Opus frames (`?encoding=opus`) Deepgram receives raw Opus at 48kHz; when the client sends Ogg-Opus (`?encoding=ogg-opus`) Deepgram receives the Ogg container and auto-detects the encoding from the header. More efficient (skips decoding), lower CPU usage.
+  - **linear16**: Decodes audio to PCM at 24kHz, 16-bit, mono before sending to Deepgram. Higher CPU usage but universally compatible.
 - Returns both interim and final transcriptions
 - Supports KeepAlive, Finalize, and CloseStream control messages
 - Authentication via Sec-WebSocket-Protocol header
@@ -131,13 +130,17 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
 All backends implement the `TranscriptionBackend` interface:
 
 ```typescript
-type AudioEncoding = 'opus' | 'ogg-opus';
+interface AudioFormat {
+  encoding: 'l16' | 'opus' | 'ogg';
+  channels?: number;
+  sampleRate?: number;
+}
 
 interface BackendConfig {
-  language: string | null;
+  language?: string;
   prompt?: string;
   model?: string;
-  encoding?: AudioEncoding;  // Audio format from client
+  tags?: string[];
 }
 
 interface TranscriptionBackend {
@@ -149,7 +152,9 @@ interface TranscriptionBackend {
   // Audio
   sendAudio(audioBase64: string): Promise<void>;
   forceCommit(): void;
-  wantsRawOpus?(encoding?: AudioEncoding): boolean;  // Opt-in to raw audio
+
+  // Format negotiation — called once before the decoder is created
+  getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat;
 
   // Configuration
   updatePrompt(prompt: string): void;
@@ -162,15 +167,68 @@ interface TranscriptionBackend {
 }
 ```
 
-### Audio Format
-By default, backends receive **24 kHz, 16-bit, mono PCM audio** encoded as base64 strings.
+### Audio Format Negotiation
 
-The opus-transcriber-proxy handles:
-1. Receiving Opus-encoded packets from clients
-2. Decoding to PCM (unless backend opts out)
-3. Sending audio to the transcription backend
+`OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` on every
+`reinitializeDecoder` call — at initial setup and whenever `updateInputFormat()` is called.
+The returned `AudioFormat` tells `AudioDecoderFactory` what to produce:
 
-**Raw Audio Mode:** Backends can implement `wantsRawOpus(encoding?: AudioEncoding): boolean` to receive raw audio instead of decoded PCM. This is useful for backends like Deepgram that natively support Opus or Ogg-Opus formats.
+```
+Client audio (ogg-opus / raw opus / l16 / …)
+        ↓
+OutgoingConnection calls getDesiredAudioFormat(inputFormat)
+        ↓
+  desiredFormat differs from previous?  →  close old backend, open fresh one
+        ↓
+AudioDecoderFactory.createAudioDecoder(inputFormat, desiredFormat)
+        ↓
+  outputFormat.encoding === 'opus' or 'ogg'  →  PassThroughDecoder (no decode)
+  outputFormat.encoding === 'l16'            →  OpusAudioDecoder   (decode to PCM)
+        ↓
+sendAudio() called with base64-encoded bytes in the negotiated format
+```
+
+If the desired format changes between calls (e.g. input switches from `opus` to `l16` and
+Deepgram now wants `linear16` instead of `opus`), `OutgoingConnection` closes the old backend
+connection and opens a fresh one before creating the new decoder. This means `getDesiredAudioFormat`
+must be a **pure function of `inputFormat`** for a given backend configuration.
+
+If your backend stores the result as a side effect for use in `connect()` (like `DeepgramBackend`
+stores `negotiatedFormat` to build the WebSocket URL), that side effect will be re-applied when
+`getDesiredAudioFormat` is called on the new backend instance, so the behaviour is correct.
+
+**PCM mode (default):** Return `{ encoding: 'l16', sampleRate: 24000 }` to receive decoded
+24 kHz, 16-bit, mono PCM. Used by OpenAI and Gemini.
+
+**Raw pass-through mode:** Return the input encoding unchanged (mirror `inputFormat.encoding`)
+to skip decoding entirely. Useful when the provider natively supports the client's format.
+Deepgram uses this for `opus` and `ogg` input, avoiding unnecessary decode/re-encode overhead.
+
+Example implementations:
+
+```typescript
+// Always want PCM (OpenAI, Gemini)
+getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
+  return { encoding: 'l16', sampleRate: 24000 };
+}
+
+// Pass through raw audio when possible (Deepgram)
+getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+  if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
+    return { ...inputFormat };  // shallow copy — do not return the input reference directly
+  }
+  return { encoding: 'l16', sampleRate: 24000 };
+}
+```
+
+**Encoding values** used internally (note: the client-facing `ogg-opus` value is normalised to
+`ogg` by `validateAudioFormat()` before it ever reaches `getDesiredAudioFormat`):
+
+| Value  | Description |
+|--------|-------------|
+| `l16`  | 16-bit linear PCM, little-endian |
+| `opus` | Raw Opus frames (no container) |
+| `ogg`  | Ogg-Opus containerized audio |
 
 **URL Parameter:** Clients can specify the audio encoding format via the `encoding` URL parameter:
 - `encoding=opus` (default): Raw Opus frames at 48kHz
@@ -200,7 +258,7 @@ interface TranscriptionMessage {
 Create `src/backends/YourBackend.ts`:
 
 ```typescript
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import logger from '../logger';
 import { config } from '../config';
@@ -232,13 +290,27 @@ export class YourBackend implements TranscriptionBackend {
     logger.info(`Your backend connected for tag: ${this.tag}`);
   }
 
+  getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+    // Return the format you want to receive.
+    // For PCM (most backends):
+    return { encoding: 'l16', sampleRate: 24000 };
+    // For raw pass-through (if your provider supports Opus/Ogg natively):
+    // if (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg') {
+    //   return { ...inputFormat };  // shallow copy — never return the reference directly
+    // }
+    // return { encoding: 'l16', sampleRate: 24000 };
+  }
+
   async sendAudio(audioBase64: string): Promise<void> {
     if (this.status !== 'connected') {
       throw new Error('Backend not connected');
     }
 
-    // Send audio to your transcription service
-    // Format: 24kHz, 16-bit, mono PCM (base64-encoded)
+    // Send audio to your transcription service.
+    // Format matches what getDesiredAudioFormat() returned:
+    //   l16  → 24kHz, 16-bit, mono PCM (base64-encoded)
+    //   opus → raw Opus frames (base64-encoded)
+    //   ogg  → Ogg-Opus container (base64-encoded)
   }
 
   forceCommit(): void {
@@ -315,8 +387,8 @@ Update `src/backends/BackendFactory.ts`:
 ```typescript
 import { YourBackend } from './YourBackend';
 
-export function createBackend(tag: string, participantInfo: any): TranscriptionBackend {
-  const backendType = config.transcriptionBackend;
+export function createBackend(tag: string, participantInfo: any, provider?: Provider): TranscriptionBackend {
+  const backendType = provider || getDefaultProvider();
 
   switch (backendType) {
     case 'openai':
@@ -330,14 +402,14 @@ export function createBackend(tag: string, participantInfo: any): TranscriptionB
   }
 }
 
-export function getBackendConfig(): BackendConfig {
-  const backendType = config.transcriptionBackend;
+export function getBackendConfig(provider?: Provider): BackendConfig {
+  const backendType = provider || getDefaultProvider();
 
   switch (backendType) {
     // ... existing cases ...
     case 'yourbackend':
       return {
-        language: null,
+        language: undefined, // Will be set per-connection based on options
         prompt: config.yourbackend.transcriptionPrompt,
         model: config.yourbackend.model,
       };

@@ -6,6 +6,7 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
 export interface TranscriptionMessage {
@@ -20,7 +21,7 @@ export interface TranscriptionMessage {
 }
 
 export interface TranscriberProxyOptions {
-	language: string | null;
+	language?: string;
 	sessionId?: string;
 	provider?: Provider;
 	encoding?: AudioEncoding;
@@ -32,6 +33,7 @@ export interface TranscriberProxyOptions {
 export class TranscriberProxy extends EventEmitter {
 	private ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
+	private failedStartTags: Set<string> = new Set();
 	private options: TranscriberProxyOptions;
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
@@ -108,6 +110,8 @@ export class TranscriberProxy extends EventEmitter {
 					pongMessage.id = parsedMessage.id;
 				}
 				this.ws.send(JSON.stringify(pongMessage));
+			} else if (parsedMessage && parsedMessage.event === 'start') {
+				this.handleStartEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
 			}
@@ -143,15 +147,13 @@ export class TranscriberProxy extends EventEmitter {
 		}
 	}
 
-	private getConnection(tag: string): OutgoingConnection {
-		// Check if connection already exists for this tag
-		const connection = this.outgoingConnections.get(tag);
-		if (connection !== undefined) {
-			return connection;
-		}
+	private getConnection(tag: string): OutgoingConnection | undefined {
+		return this.outgoingConnections.get(tag);
+	}
 
+	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
 		// Create a new connection for this tag (no limit, no reuse)
-		const newConnection = new OutgoingConnection(tag, this.options);
+		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 
 		newConnection.onInterimTranscription = (message) => {
 			this.emit('interim_transcription', message);
@@ -212,10 +214,62 @@ export class TranscriberProxy extends EventEmitter {
 		return newConnection;
 	}
 
+	// Public for unit-test access; not intended as part of the public API.
+	handleStartEvent(parsedMessage: any): void {
+		const tag = parsedMessage.start?.tag;
+		logger.debug(`Received start event: ${JSON.stringify(parsedMessage)}`);
+		if (!tag) {
+			logger.error(`Received start event with no tag: ${JSON.stringify(parsedMessage)}`);
+			return;
+		}
+
+		let mediaFormat: AudioFormat;
+		try {
+			mediaFormat = validateAudioFormat(parsedMessage.start?.mediaFormat);
+		} catch (error) {
+			logger.error(`Invalid mediaFormat in start event for tag "${tag}": ${error instanceof Error ? error.message : String(error)}`);
+			this.failedStartTags.add(tag);
+			return;
+		}
+
+		this.failedStartTags.delete(tag);
+
+		// If the start event says 'opus' but the URL parameter says 'ogg-opus', the
+		// stream is containerised Ogg-Opus.  Some clients send a generic 'opus'
+		// encoding in the start event without specifying the framing; the URL parameter
+		// is the authoritative source for the container format.
+		if (mediaFormat.encoding === 'opus' && this.options.encoding === 'ogg-opus') {
+			mediaFormat = { ...mediaFormat, encoding: 'ogg' };
+		}
+
+		const connection = this.getConnection(tag);
+		if (connection) {
+			connection.updateInputFormat(mediaFormat);
+		} else {
+			this.createConnection(tag, mediaFormat);
+		}
+	}
+
+	// Public for unit-test access; not intended as part of the public API.
 	handleMediaEvent(parsedMessage: any): void {
 		const tag = parsedMessage.media?.tag;
 		if (tag) {
-			const connection = this.getConnection(tag);
+			let connection = this.getConnection(tag);
+			if (!connection) {
+				if (this.failedStartTags.has(tag)) {
+					logger.debug(`Dropping media event for tag "${tag}": start event was rejected`);
+					return;
+				}
+				const encoding = this.options.encoding ?? 'opus';
+				// channels: 2 reflects SDP negotiation: Opus is always offered as stereo in
+				// SDP for compatibility, even when the actual content is mono.  The decoder
+				// produces mono output regardless.
+				const mediaFormat: AudioFormat = encoding === 'opus'
+					? { encoding: 'opus', sampleRate: 48000, channels: 2 }
+					: { encoding: 'ogg' };
+				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
+				connection = this.createConnection(tag, mediaFormat);
+			}
 			connection.handleMediaEvent(parsedMessage);
 		}
 	}

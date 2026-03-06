@@ -69,7 +69,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -88,7 +88,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -129,7 +129,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: 'Custom transcription prompt',
 			};
 
@@ -146,7 +146,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -163,7 +163,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -182,7 +182,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -200,7 +200,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -220,7 +220,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -256,7 +256,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -289,7 +289,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: 'Initial prompt',
 			};
 
@@ -326,7 +326,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -358,7 +358,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -388,7 +388,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -421,7 +421,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -457,7 +457,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -481,7 +481,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -510,7 +510,7 @@ describe('OpenAIBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -539,7 +539,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -560,7 +560,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -581,7 +581,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -610,7 +610,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -631,7 +631,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -657,7 +657,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -672,7 +672,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -688,7 +688,7 @@ describe('OpenAIBackend', () => {
 			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'gpt-4o-transcribe',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 

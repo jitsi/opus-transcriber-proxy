@@ -2,13 +2,13 @@ export type AudioEncoding = 'opus' | 'ogg-opus';
 
 export interface ISessionParameters {
 	url: URL;
-	sessionId: string | null;
-	connect: string | null;
+	sessionId?: string;
+	connect?: string;
 	useDispatcher: boolean;
 	sendBack: boolean;
 	sendBackInterim: boolean;
-	language: string | null;
-	provider: string | null;
+	language?: string;
+	provider?: string;
 	encoding: AudioEncoding;
 	tags: string[];
 }
@@ -46,8 +46,14 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const lang = parsedUrl.searchParams.get('lang');
 	const provider = parsedUrl.searchParams.get('provider');
 	const encodingParam = parsedUrl.searchParams.get('encoding');
-	// Default to 'opus' (raw opus frames) for backwards compatibility
-	const encoding: AudioEncoding = encodingParam === 'ogg-opus' ? 'ogg-opus' : 'opus';
+	let encoding: AudioEncoding;
+	if (encodingParam === null || encodingParam === 'opus') {
+		encoding = 'opus';
+	} else if (encodingParam === 'ogg-opus') {
+		encoding = 'ogg-opus';
+	} else {
+		throw new Error(`Invalid encoding parameter: "${encodingParam}". Valid values are: opus, ogg-opus`);
+	}
 	// Parse tags as multiple tag= parameters (like Deepgram API), filter empty strings
 	const tags = parsedUrl.searchParams.getAll('tag').filter((t) => t);
 
@@ -56,13 +62,13 @@ export function extractSessionParameters(url: string): ISessionParameters {
 
 	return {
 		url: parsedUrl,
-		sessionId,
-		connect,
+		sessionId: sessionId ?? undefined,
+		connect: connect ?? undefined,
 		useDispatcher: useDispatcher === 'true',
 		sendBack: sendBack === 'true',
 		sendBackInterim: sendBackInterim === 'true',
-		language: lang,
-		provider,
+		language: lang ?? undefined,
+		provider: provider ?? undefined,
 		encoding,
 		tags,
 	};

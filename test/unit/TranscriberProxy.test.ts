@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TranscriberProxy, type TranscriptionMessage } from '../../src/transcriberproxy';
 import { WebSocket } from 'ws';
 import * as fs from 'fs';
+import { OutgoingConnection } from '../../src/OutgoingConnection';
+import logger from '../../src/logger';
 
 // Mock logger
 vi.mock('../../src/logger', () => ({
@@ -39,17 +41,29 @@ vi.mock('../../src/config', () => ({
 }));
 
 // Mock OutgoingConnection
+// NOTE: Use vi.fn(impl) (not vi.fn().mockImplementation(impl)) inside vi.mock() factories.
+// When vi.fn().mockImplementation() is used in a vi.mock() factory, property assignments
+// to `this` in the implementation do not persist on the created instance. Passing the
+// implementation directly to vi.fn() avoids this issue.
 vi.mock('../../src/OutgoingConnection', () => ({
-	OutgoingConnection: vi.fn().mockImplementation((tag: string, options: any) => ({
-		localTag: tag,
-		participantId: tag.split('-')[0], // Extract participant ID from tag like "participant1-ssrc123"
-		handleMediaEvent: vi.fn(),
-		addTranscriptContext: vi.fn(),
-		close: vi.fn(),
-		onInterimTranscription: undefined,
-		onCompleteTranscription: undefined,
-		onClosed: undefined,
-		onError: undefined,
+	OutgoingConnection: vi.fn(function (this: any, tag: string) {
+		this.localTag = tag;
+		this.participantId = tag.split('-')[0]; // Extract participant ID from tag like "participant1-ssrc123"
+		this.handleMediaEvent = vi.fn();
+		this.addTranscriptContext = vi.fn();
+		this.updateInputFormat = vi.fn();
+		this.close = vi.fn();
+		this.onInterimTranscription = undefined;
+		this.onCompleteTranscription = undefined;
+		this.onClosed = undefined;
+		this.onError = undefined;
+	}),
+}));
+
+// Mock telemetry instruments (required by createConnection)
+vi.mock('../../src/telemetry/instruments', () => ({
+	getInstruments: vi.fn(() => ({
+		participantsActive: { add: vi.fn() },
 	})),
 }));
 
@@ -107,6 +121,7 @@ describe('TranscriberProxy', () => {
 			sessionId: null,
 			language: 'en',
 			provider: 'openai' as any,
+			encoding: 'opus' as any,
 		};
 	});
 
@@ -354,6 +369,213 @@ describe('TranscriberProxy', () => {
 
 			// Should have responded to pings
 			expect(mockWebSocket.send).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe('handleStartEvent', () => {
+		const validStart = (tag: string, mediaFormat: object = { encoding: 'opus' }) => ({
+			event: 'start',
+			start: { tag, mediaFormat },
+		});
+
+		it('should create a new OutgoingConnection for a valid start event', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1'));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			expect(OutgoingConnection).toHaveBeenCalledWith('tag1', { encoding: 'opus' }, options);
+		});
+
+		it('should log an error and not create a connection when tag is missing', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent({ event: 'start', start: { mediaFormat: { encoding: 'opus' } } });
+
+			expect(OutgoingConnection).not.toHaveBeenCalled();
+			expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+				expect.stringMatching(/no tag/),
+			);
+		});
+
+		it('should log an error and not create a connection when mediaFormat is missing', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1' } });
+
+			expect(OutgoingConnection).not.toHaveBeenCalled();
+			expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+				expect.stringMatching(/Invalid mediaFormat/),
+			);
+		});
+
+		it('should log an error for an invalid mediaFormat encoding', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'mp3' }));
+
+			expect(OutgoingConnection).not.toHaveBeenCalled();
+			expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+				expect.stringMatching(/Invalid mediaFormat.*tag1/),
+			);
+		});
+
+		it('should call updateInputFormat when a connection for that tag already exists', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+
+			// First start event — creates the connection
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			// Second start event with the same tag — should update, not recreate
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'l16', sampleRate: 16000 }));
+
+			// Constructor called exactly once (for the first event only)
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+
+			// updateInputFormat called on the connection instance
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.updateInputFormat).toHaveBeenCalledWith({
+				encoding: 'l16',
+				sampleRate: 16000,
+			});
+		});
+
+		it('should create separate connections for different tags', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1'));
+			proxy.handleStartEvent(validStart('tag2'));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(2);
+		});
+
+		it('should accept a start event with an L16 mediaFormat', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'l16', sampleRate: 16000 }));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
+		});
+
+		it('should promote opus to ogg when URL encoding is ogg-opus', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, { ...options, encoding: 'ogg-opus' });
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			const [, format] = vi.mocked(OutgoingConnection).mock.calls[0];
+			expect(format).toMatchObject({ encoding: 'ogg' });
+		});
+
+		it('should not promote opus when URL encoding is opus', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, { ...options, encoding: 'opus' });
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			const [, format] = vi.mocked(OutgoingConnection).mock.calls[0];
+			expect(format).toMatchObject({ encoding: 'opus' });
+		});
+	});
+
+	describe('handleMediaEvent', () => {
+		it('should route the event to the correct OutgoingConnection', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+
+			const mediaEvent = { event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(mediaEvent);
+
+			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
+		});
+
+		it('should create a connection and warn when a media event arrives for an unknown tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			const mediaEvent = { event: 'media', media: { tag: 'unknown-tag', payload: 'abc=', chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(mediaEvent);
+
+			// Should warn, not error
+			expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+				expect.stringMatching(/unknown-tag.*no prior start event/),
+			);
+			expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
+
+			// Should create a connection with default opus format
+			expect(OutgoingConnection).toHaveBeenCalledWith(
+				'unknown-tag',
+				{ encoding: 'opus', sampleRate: 48000, channels: 2 },
+				options,
+			);
+
+			// Should still route the event to the new connection
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
+		});
+
+		it('should create a connection with ogg-opus format when that is the session encoding', () => {
+			const oggOptions = { ...options, encoding: 'ogg-opus' as any };
+			const proxy = new TranscriberProxy(mockWebSocket, oggOptions);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } });
+
+			expect(OutgoingConnection).toHaveBeenCalledWith(
+				'tag1',
+				{ encoding: 'ogg' },
+				oggOptions,
+			);
+		});
+
+		it('should not log an error for a known tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			const errorCallsBefore = vi.mocked(logger.error).mock.calls.length;
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } });
+
+			// No new error calls after handling the media event
+			expect(vi.mocked(logger.error).mock.calls.length).toBe(errorCallsBefore);
+		});
+
+		it('should drop media events for a tag whose start event was rejected', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			// start event with invalid mediaFormat
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'mp3' } } });
+
+			// media event for the same tag should be silently dropped
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } });
+
+			expect(OutgoingConnection).not.toHaveBeenCalled();
+		});
+
+		it('should allow a connection after a corrected start event for a previously rejected tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			// First start event fails
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'mp3' } } });
+			// Second start event succeeds — clears the failed flag
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+
+			const mediaEvent = { event: 'media', media: { tag: 'tag1', payload: 'abc=', chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(mediaEvent);
+
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
 		});
 	});
 });

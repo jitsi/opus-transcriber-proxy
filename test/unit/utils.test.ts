@@ -180,6 +180,16 @@ describe('extractSessionParameters', () => {
 			expect(params.encoding).toBe('ogg-opus');
 		});
 
+		it('should throw for an unrecognised encoding parameter', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&encoding=mp3';
+			expect(() => extractSessionParameters(url)).toThrow('Invalid encoding parameter: "mp3"');
+		});
+
+		it('should throw for an L16 encoding parameter (not valid at the URL level)', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&encoding=L16';
+			expect(() => extractSessionParameters(url)).toThrow('Invalid encoding parameter: "L16"');
+		});
+
 		it('should extract useDispatcher as boolean', () => {
 			const url = 'ws://localhost:8080/transcribe?sessionId=test&useDispatcher=true';
 			const params = extractSessionParameters(url);
