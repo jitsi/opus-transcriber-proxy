@@ -7,6 +7,8 @@ import { createAudioDecoder } from '../../src/AudioDecoderFactory';
 import { PassThroughDecoder } from '../../src/PassThroughDecoder';
 import { L16Decoder } from '../../src/L16Decoder';
 import { OpusAudioDecoder } from '../../src/OpusDecoder/OpusAudioDecoder';
+import { OggOpusDecapsulator } from '../../src/OggOpusDecapsulator';
+import { CascadedDecoder } from '../../src/CascadedDecoder';
 
 // Mock the WASM-backed OpusDecoder so tests don't require a compiled WASM module
 vi.mock('../../src/OpusDecoder/OpusDecoder', () => {
@@ -57,6 +59,30 @@ describe('createAudioDecoder', () => {
 		});
 	});
 
+	describe('OggOpusDecapsulator (ogg input → opus output)', () => {
+		it('should return an OggOpusDecapsulator for ogg input and opus output', () => {
+			const decoder = createAudioDecoder({ encoding: 'ogg' }, { encoding: 'opus' });
+			expect(decoder).toBeInstanceOf(OggOpusDecapsulator);
+		});
+	});
+
+	describe('CascadedDecoder (ogg input → l16 output)', () => {
+		it('should return a CascadedDecoder for ogg input and l16 output', () => {
+			const decoder = createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' });
+			expect(decoder).toBeInstanceOf(CascadedDecoder);
+		});
+
+		it('should not throw for the default sample rate', () => {
+			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' })).not.toThrow();
+		});
+
+		it('should respect an explicit output sample rate', () => {
+			expect(() =>
+				createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16', sampleRate: 16000 }),
+			).not.toThrow();
+		});
+	});
+
 	describe('L16Decoder (PCM input → PCM output)', () => {
 		it('should return an L16Decoder for L16 input and L16 output', () => {
 			const decoder = createAudioDecoder({ encoding: 'l16' }, { encoding: 'l16' });
@@ -75,20 +101,6 @@ describe('createAudioDecoder', () => {
 					{ encoding: 'l16', sampleRate: 24000 },
 				),
 			).not.toThrow();
-		});
-	});
-
-	describe('ogg input → PCM output (unsupported)', () => {
-		it('should throw with a descriptive error', () => {
-			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' })).toThrow(
-				'ogg-opus input cannot be decoded to PCM',
-			);
-		});
-
-		it('should mention Deepgram with DEEPGRAM_ENCODING=opus as a workaround', () => {
-			expect(() => createAudioDecoder({ encoding: 'ogg' }, { encoding: 'l16' })).toThrow(
-				'DEEPGRAM_ENCODING=opus',
-			);
 		});
 	});
 
