@@ -223,7 +223,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
-function handleWebSocketConnection(ws: WebSocket, parameters: any) {
+function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters) {
 	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags } = parameters;
 	const connectionId = ++wsConnectionId;
 

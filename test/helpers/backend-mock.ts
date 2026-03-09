@@ -3,19 +3,19 @@
  * Mocks the TranscriptionBackend interface without external API calls
  */
 
-import type { TranscriptionBackend, BackendConfig } from '../../src/backends/TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from '../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../src/transcriberproxy';
 
 export interface MockTranscriptionBackendOptions {
 	status?: 'pending' | 'connected' | 'failed' | 'closed';
-	wantsRawOpus?: boolean;
+	wantsRawAudio?: boolean;
 	connectDelay?: number;
 	autoConnect?: boolean;
 }
 
 export class MockTranscriptionBackend implements TranscriptionBackend {
 	private _status: 'pending' | 'connected' | 'failed' | 'closed';
-	private _wantsRawOpus: boolean;
+	private _wantsRawAudio: boolean;
 	private _connectDelay: number;
 	private _sentAudio: string[] = [];
 	private _promptHistory: string[] = [];
@@ -31,7 +31,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 
 	constructor(options: MockTranscriptionBackendOptions = {}) {
 		this._status = options.status || 'pending';
-		this._wantsRawOpus = options.wantsRawOpus || false;
+		this._wantsRawAudio = options.wantsRawAudio || false;
 		this._connectDelay = options.connectDelay || 0;
 
 		// Auto-connect if requested
@@ -92,8 +92,14 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 		return this._status;
 	}
 
-	wantsRawOpus?(): boolean {
-		return this._wantsRawOpus;
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		// Pass-through only activates for opus/ogg input. If wantsRawAudio is true
+		// but the input is already l16, we fall back to l16 output — meaning a test
+		// that sets wantsRawAudio: true with l16 input will NOT exercise pass-through.
+		if (this._wantsRawAudio && (inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
+			return { ...inputFormat };
+		}
+		return { encoding: 'l16', sampleRate: 24000 };
 	}
 
 	// Test helper methods

@@ -153,7 +153,7 @@ describe('BackendFactory', () => {
 			const config = getBackendConfig('openai');
 
 			expect(config).toEqual({
-				language: null,
+				language: undefined,
 				prompt: 'Transcribe this',
 				model: 'gpt-4o-transcribe',
 			});
@@ -168,7 +168,7 @@ describe('BackendFactory', () => {
 			const config = getBackendConfig('gemini');
 
 			expect(config).toEqual({
-				language: null,
+				language: undefined,
 				prompt: 'Transcribe audio',
 				model: 'gemini-2.0',
 			});
@@ -182,7 +182,7 @@ describe('BackendFactory', () => {
 			const config = getBackendConfig('deepgram');
 
 			expect(config).toEqual({
-				language: null,
+				language: undefined,
 				prompt: undefined, // Deepgram doesn't support prompts
 				model: 'nova-2',
 			});
@@ -194,7 +194,7 @@ describe('BackendFactory', () => {
 			const config = getBackendConfig('dummy');
 
 			expect(config).toEqual({
-				language: null,
+				language: undefined,
 				prompt: undefined,
 				model: undefined,
 			});

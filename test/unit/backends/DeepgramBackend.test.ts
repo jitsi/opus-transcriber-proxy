@@ -5,8 +5,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DeepgramBackend } from '../../../src/backends/DeepgramBackend';
 import { mockGlobalWebSocket, MockWebSocket, type MockWebSocketInstance } from '../../helpers/websocket-mock';
-import type { BackendConfig } from '../../../src/backends/TranscriptionBackend';
+import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
+import { config } from '../../../src/config';
 
 // Mock logger
 vi.mock('../../../src/logger', () => ({
@@ -28,7 +29,7 @@ vi.mock('../../../src/config', () => ({
 	config: {
 		deepgram: {
 			apiKey: 'test-deepgram-key',
-			encoding: 'linear16',
+			encoding: 'opus',
 			model: 'nova-2',
 			language: 'en',
 			punctuate: true,
@@ -65,29 +66,47 @@ describe('DeepgramBackend', () => {
 	describe('connect', () => {
 		it('should connect to Deepgram WebSocket with correct URL and protocol', async () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
-			const config: BackendConfig = {
+			const backendConfig: BackendConfig = {
 				model: 'nova-2',
 				language: 'en',
 				prompt: undefined,
 			};
 
-			const connectPromise = backend.connect(config);
+			const connectPromise = backend.connect(backendConfig);
 			mockWsManager.mockWs.simulateOpen();
 			await connectPromise;
 
+			// Default mock config has encoding='opus', so the URL uses raw-Opus params
 			expect(mockWsManager.mockWs.url).toContain('wss://api.deepgram.com/v1/listen');
-			expect(mockWsManager.mockWs.url).toContain('encoding=linear16');
-			expect(mockWsManager.mockWs.url).toContain('sample_rate=24000');
+			expect(mockWsManager.mockWs.url).toContain('encoding=opus');
+			expect(mockWsManager.mockWs.url).toContain('sample_rate=48000');
 			expect(mockWsManager.mockWs.url).toContain('channels=1');
 			expect(mockWsManager.mockWs.url).toContain('interim_results=true');
 			expect(mockWsManager.mockWs.protocols).toEqual(['token', 'test-deepgram-key']);
+		});
+
+		it('should use linear16 encoding params when DEEPGRAM_ENCODING=linear16', async () => {
+			(config.deepgram as any).encoding = 'linear16';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+
+				const connectPromise = backend.connect(backendConfig);
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).toContain('encoding=linear16');
+				expect(mockWsManager.mockWs.url).toContain('sample_rate=24000');
+			} finally {
+				(config.deepgram as any).encoding = 'opus';
+			}
 		});
 
 		it('should include model in URL if provided', async () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2-general',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -133,7 +152,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -149,7 +168,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -165,7 +184,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -190,7 +209,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -207,7 +226,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -225,7 +244,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -243,7 +262,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -263,7 +282,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -298,7 +317,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -331,7 +350,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -356,7 +375,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -394,7 +413,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -431,7 +450,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -463,7 +482,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -483,7 +502,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -503,7 +522,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -527,7 +546,7 @@ describe('DeepgramBackend', () => {
 
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -551,7 +570,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -585,7 +604,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -611,7 +630,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -626,7 +645,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -641,7 +660,7 @@ describe('DeepgramBackend', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
 				model: 'nova-2',
-				language: null,
+				language: undefined,
 				prompt: undefined,
 			};
 
@@ -655,10 +674,73 @@ describe('DeepgramBackend', () => {
 		});
 	});
 
-	describe('wantsRawOpus', () => {
-		it('should return false for linear16 encoding', () => {
+	describe('getDesiredAudioFormat', () => {
+		it('should return l16/24000 when DEEPGRAM_ENCODING=linear16', () => {
+			(config.deepgram as any).encoding = 'linear16';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				expect(backend.getDesiredAudioFormat({ encoding: 'l16' })).toEqual({ encoding: 'l16', sampleRate: 24000 });
+			} finally {
+				(config.deepgram as any).encoding = 'opus';
+			}
+		});
+
+		it('should return l16/24000 for opus input when DEEPGRAM_ENCODING=linear16', () => {
+			(config.deepgram as any).encoding = 'linear16';
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 24000 });
+			} finally {
+				(config.deepgram as any).encoding = 'opus';
+			}
+		});
+
+		it('should pass through opus input when DEEPGRAM_ENCODING=opus (default)', () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
-			expect(backend.wantsRawOpus()).toBe(false);
+			const input: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
+			expect(backend.getDesiredAudioFormat(input)).toEqual({ encoding: 'opus', sampleRate: 48000 });
+		});
+
+		it('should pass through ogg input when DEEPGRAM_ENCODING=opus (default)', () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const input: AudioFormat = { encoding: 'ogg' };
+			expect(backend.getDesiredAudioFormat(input)).toEqual({ encoding: 'ogg' });
+		});
+
+		it('should return a copy of inputFormat, not the same reference', () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const input: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
+			const result = backend.getDesiredAudioFormat(input);
+			expect(result).toEqual(input);
+			expect(result).not.toBe(input);
+		});
+	});
+
+	describe('connect with raw-passthrough format', () => {
+		it('should omit encoding and sample_rate params for containerised ogg input', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			backend.getDesiredAudioFormat({ encoding: 'ogg' });
+
+			const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+			const connectPromise = backend.connect(backendConfig);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).not.toContain('encoding=');
+			expect(mockWsManager.mockWs.url).not.toContain('sample_rate=');
+		});
+
+		it('should include encoding=opus and sample_rate for raw opus input', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 });
+
+			const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+			const connectPromise = backend.connect(backendConfig);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).toContain('encoding=opus');
+			expect(mockWsManager.mockWs.url).toContain('sample_rate=48000');
 		});
 	});
 });

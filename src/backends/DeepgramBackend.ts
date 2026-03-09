@@ -8,7 +8,7 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
-import type { TranscriptionBackend, BackendConfig } from './TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 
@@ -25,6 +25,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 	private participantInfo: any;
 	private tag: string;
 	private keepAliveTimer?: NodeJS.Timeout;
+	/** Format negotiated by getDesiredAudioFormat(); used by connect() to set Deepgram params */
+	private negotiatedFormat?: AudioFormat;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
@@ -45,23 +47,29 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 		return new Promise((resolve, reject) => {
 			try {
-				// Build query parameters based on encoding type
-				// Use per-connection encoding if specified, otherwise use global config
-				const encoding = backendConfig.encoding || config.deepgram.encoding;
-				const isContainerized = encoding === 'ogg-opus';
+				// Build query parameters to match the format negotiated by
+				// getDesiredAudioFormat(), which determines what the decoder produces.
+				// Fall back to a format that matches the configured encoding in case
+				// getDesiredAudioFormat() was not called before connect().
+				const fmt = this.negotiatedFormat ??
+					(config.deepgram.encoding === 'opus'
+						? { encoding: 'opus' as const, sampleRate: 48000 }
+						: { encoding: 'l16' as const, sampleRate: 24000 });
+				// 'ogg' = containerised Ogg-Opus; Deepgram auto-detects from the header
+				// so we omit encoding and sample_rate in that case.
+				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
+				const isContainerized = fmt.encoding === 'ogg';
 
 				const params = new URLSearchParams({
 					channels: '1',
 					interim_results: 'true',
 				});
 
-				// For containerized audio (ogg-opus), omit encoding and sample_rate
-				// Deepgram will auto-detect from the container header
-				// See: https://developers.deepgram.com/docs/determining-your-audio-format-for-live-streaming-audio
 				if (!isContainerized) {
-					params.set('encoding', encoding);
-					const sampleRate = encoding === 'opus' ? '48000' : '24000';
-					params.set('sample_rate', sampleRate);
+					// Map internal encoding names to Deepgram's API names
+					const deepgramEncoding = fmt.encoding === 'opus' ? 'opus' : 'linear16';
+					params.set('encoding', deepgramEncoding);
+					params.set('sample_rate', (fmt.sampleRate ?? (fmt.encoding === 'opus' ? 48000 : 24000)).toString());
 				}
 
 				// Add model if specified
@@ -223,11 +231,19 @@ export class DeepgramBackend implements TranscriptionBackend {
 		return this.status;
 	}
 
-	wantsRawOpus(encoding?: 'opus' | 'ogg-opus'): boolean {
-		// Return true for raw opus or containerized ogg-opus (both skip decoding)
-		// Use provided encoding or fall back to global config
-		const effectiveEncoding = encoding || config.deepgram.encoding;
-		return effectiveEncoding === 'opus' || effectiveEncoding === 'ogg-opus';
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		// Pass raw Opus/Ogg through only when DEEPGRAM_ENCODING=opus is
+		// configured globally.  The client-side ?encoding= URL parameter describes
+		// what the client is sending; it does not independently override the Deepgram
+		// output format.  Without this guard, Deepgram would receive Opus bytes but
+		// be told the encoding is linear16 (the default), causing a protocol mismatch.
+		if ((config.deepgram.encoding === 'opus') &&
+			(inputFormat.encoding === 'opus' || inputFormat.encoding === 'ogg')) {
+			this.negotiatedFormat = { ...inputFormat };
+		} else {
+			this.negotiatedFormat = { encoding: 'l16', sampleRate: 24000 };
+		}
+		return this.negotiatedFormat;
 	}
 
 	private startKeepAlive(): void {

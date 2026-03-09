@@ -189,7 +189,7 @@ describe('OpusDecoder', () => {
 			expect(result.sampleRate).toBe(24000);
 			expect(result.channels).toBe(1);
 			expect(result.errors).toHaveLength(0);
-			expect(result.pcmData).toBeInstanceOf(Int16Array);
+			expect(result.audioData).toBeInstanceOf(Uint8Array);
 		});
 
 		it('should handle decode errors', async () => {
@@ -249,8 +249,8 @@ describe('OpusDecoder', () => {
 			const opusFrame = new Uint8Array([0x01, 0x02]);
 			const result = decoder.decodeFrame(opusFrame);
 
-			// PCM data length should be samplesDecoded * channels
-			expect(result.pcmData.length).toBe(480 * 2);
+			// audioData length should be samplesDecoded * channels * 2 (bytes per Int16 sample)
+			expect(result.audioData.length).toBe(480 * 2 * 2);
 		});
 	});
 

@@ -32,8 +32,8 @@ export const TEST_PCM_DATA = {
 };
 
 // Sample decoded audio result
-export const TEST_DECODED_AUDIO: OpusDecodedAudio = {
-	pcmData: TEST_PCM_DATA.silence_1sec.slice(0, 480), // 20ms at 24kHz
+export const TEST_DECODED_AUDIO: OpusDecodedAudio<24000> = {
+	audioData: new Uint8Array(TEST_PCM_DATA.silence_1sec.slice(0, 480).buffer), // 20ms at 24kHz
 	samplesDecoded: 480,
 	sampleRate: 24000,
 	errors: [],

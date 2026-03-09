@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a real-time WebSocket transcription proxy that routes Opus-encoded audio to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
+This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
 - Multi-participant sessions (one WebSocket handles multiple audio streams)
 - Provider fallback with configurable priority
 - Two deployment modes: Node.js standalone or Cloudflare Workers with Containers
@@ -97,7 +97,10 @@ TranscriberProxy (transcriberproxy.ts)
     └─ Routes to multiple OutgoingConnections
         ↓
 OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
-    ├─ OpusDecoder (WASM) - Decodes Opus frames to PCM
+    ├─ AudioDecoder (via AudioDecoderFactory)
+    │   ├─ OpusAudioDecoder - Decodes Opus frames to PCM (WASM-backed)
+    │   ├─ L16Decoder - Resamples or passes through raw PCM l16
+    │   └─ PassThroughDecoder - Forwards raw Opus/Ogg frames unchanged
     └─ TranscriptionBackend - Sends audio to provider
         ↓
     Backend (OpenAIBackend, DeepgramBackend, GeminiBackend)
@@ -113,20 +116,55 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Handles ping/pong keepalive
 - Optional dispatcher forwarding (sends transcriptions to external service)
 - Optional WebSocket message dumping for debugging
+- Tracks `failedStartTags`: if a `start` event has an invalid `mediaFormat`, subsequent `media` events for that tag are dropped (not auto-connected with defaults) until a valid `start` event arrives
 
 **OutgoingConnection** (`src/OutgoingConnection.ts`)
 - Manages one participant's audio stream
-- Buffers Opus frames until decoder is ready
-- Decodes Opus to PCM (unless backend wants raw Opus)
-- Sends audio to transcription backend
+- Buffers audio frames until decoder is ready
+- Creates an `AudioDecoder` via `AudioDecoderFactory` based on input/output format negotiation
+- Sends decoded (or raw) audio to transcription backend
 - Implements idle commit timeout (forces transcription when audio stops)
 - Maintains transcript history for context injection
+- On every `reinitializeDecoder` call, compares the new desired format against `activeDesiredFormat`; if they differ, closes the old backend and opens a fresh connection (via `reconnectBackend`) before creating the decoder
+- `doClose()` is idempotent (guarded by `isClosed`); it increments `reinitGeneration` to make in-flight async operations detect they are stale, and detaches backend callbacks before calling `close()` to prevent stale events from firing after teardown
+
+**AudioDecoder** (`src/AudioDecoder.ts`)
+- Interface for format-agnostic audio decoding with chunk-sequence tracking
+- `decodeChunk()` returns `DecodedAudio[]` (with `audioData: Uint8Array`) or `null` for out-of-order packets
+- `DecodedAudio.kind` distinguishes `'normal'` from `'concealment'` frames (for metrics)
+- `DecodedAudio.samplesDecoded` is 0 for non-PCM pass-through (`PassThroughDecoder`)
+- Implementations: `OpusAudioDecoder`, `L16Decoder`, `PassThroughDecoder`
+
+**AudioDecoderFactory** (`src/AudioDecoderFactory.ts`)
+- `createAudioDecoder(inputFormat, outputFormat)` selects the right decoder
+- Returns `PassThroughDecoder` when output is raw Opus or Ogg (no decoding needed)
+- Returns `L16Decoder` when input is already l16 and output is l16 (resample or pass-through)
+- Returns `OpusAudioDecoder` when input is Opus and PCM output is required
+
+**OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
+- Implements `AudioDecoder` with packet-loss concealment logic
+- Wraps the low-level WASM `OpusDecoder`; handles gap detection and concealment frames
+- Decodes Opus frames at 48kHz to PCM at 24kHz mono
+
+**L16Decoder** (`src/L16Decoder.ts`)
+- Implements `AudioDecoder` for raw PCM l16 input
+- If input and output sample rates match, frames are forwarded unchanged; otherwise resampled via linear interpolation
+- Still performs out-of-order packet detection; validates even byte length before resampling
+
+**PassThroughDecoder** (`src/PassThroughDecoder.ts`)
+- Implements `AudioDecoder` without actual decoding
+- Forwards raw Opus or Ogg frames unchanged; still performs out-of-order packet detection
+- `samplesDecoded` is always 0 (no PCM to count)
+
+**OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
+- Low-level TypeScript wrapper around the WASM Opus decoder
+- Used by `OpusAudioDecoder`; not used directly by `OutgoingConnection`
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers
 - Implementations: `OpenAIBackend`, `DeepgramBackend`, `GeminiBackend`, `DummyBackend`
 - Each backend handles provider-specific WebSocket protocol
-- `wantsRawOpus()` determines if backend wants Opus frames or decoded PCM
+- `getDesiredAudioFormat(inputFormat)` returns the `AudioFormat` the backend wants to receive (replaces the old `wantsRawOpus()`)
 
 **BackendFactory** (`src/backends/BackendFactory.ts`)
 - Creates backend instances based on provider name
@@ -138,11 +176,6 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Detached sessions maintain their `OutgoingConnection` instances
 - Metrics tracking for active sessions
 
-**OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
-- TypeScript wrapper around WASM Opus decoder
-- Decodes Opus frames at 48kHz to PCM at 24kHz mono
-- Each `OutgoingConnection` creates its own decoder instance
-
 ### Backend-Specific Behavior
 
 **OpenAI**
@@ -152,7 +185,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Real-time streaming transcription
 
 **Deepgram**
-- Can accept raw Opus (set `DEEPGRAM_ENCODING=opus`)
+- Passes raw Opus/Ogg through by default (`DEEPGRAM_ENCODING=opus`); set `DEEPGRAM_ENCODING=linear16` to decode to PCM first
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
 
@@ -208,9 +241,14 @@ See `src/backends/DummyBackend.ts` for a minimal example.
 ### Audio Encoding Notes
 
 - Client sends Opus frames (raw or Ogg-Opus container)
-- `OutgoingConnection` decodes to PCM unless `backend.wantsRawOpus()` returns true
-- PCM format: 24kHz, 16-bit, mono
+- `OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` to determine what the backend wants
+- `AudioDecoderFactory.createAudioDecoder(inputFormat, outputFormat)` then creates the right decoder:
+  - `PassThroughDecoder` when output encoding is `'opus'` or `'ogg'` (no decode/re-encode)
+  - `L16Decoder` when input encoding is `'l16'` and output encoding is `'l16'` (resample or identity)
+  - `OpusAudioDecoder` when input is Opus and output encoding is `'l16'` (decode to PCM)
+- PCM format: 24kHz, 16-bit, mono (`audioData` is a `Uint8Array` of raw PCM bytes)
 - Deepgram can accept raw Opus to avoid decode/re-encode
+- `OutgoingConnection.updateInputFormat()` calls `reinitializeDecoder()` when the format changes. If `backend.getDesiredAudioFormat(newInputFormat)` returns a different encoding than the one the backend was connected with, `reinitializeDecoder` closes the old backend and opens a fresh one (`reconnectBackend`) before creating the decoder. The generation counter (`reinitGeneration`) ensures concurrent calls are safe: `activeDesiredFormat` is set synchronously so concurrent calls immediately see the new target format.
 
 ### Session Resumption
 
@@ -231,6 +269,10 @@ src/
 ├── server.ts                  # HTTP/WS server entry (Node.js)
 ├── transcriberproxy.ts        # Main proxy orchestration
 ├── OutgoingConnection.ts      # Per-participant handler
+├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types
+├── AudioDecoderFactory.ts     # Selects decoder based on format negotiation
+├── L16Decoder.ts              # PCM l16 decoder (resample or identity)
+├── PassThroughDecoder.ts      # Raw-audio pass-through (no decode)
 ├── SessionManager.ts          # Session lifecycle management
 ├── config.ts                  # Configuration
 ├── dispatcher.ts              # Dispatcher WebSocket forwarding
@@ -241,14 +283,15 @@ src/
 ├── utils.ts                   # Shared utilities
 ├── MetricCache.ts             # Metric aggregation
 ├── backends/
-│   ├── TranscriptionBackend.ts   # Abstract interface
+│   ├── TranscriptionBackend.ts   # Abstract interface (incl. getDesiredAudioFormat)
 │   ├── BackendFactory.ts         # Provider factory
 │   ├── OpenAIBackend.ts          # OpenAI implementation
 │   ├── DeepgramBackend.ts        # Deepgram implementation
 │   ├── GeminiBackend.ts          # Gemini implementation
 │   └── DummyBackend.ts           # Test/stats backend
 └── OpusDecoder/
-    ├── OpusDecoder.ts            # TypeScript wrapper
+    ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
+    ├── OpusDecoder.ts            # Low-level WASM wrapper
     ├── opus_frame_decoder.c/h    # C code for WASM
     └── opus/                     # libopus source (submodule)
 
@@ -336,6 +379,15 @@ See README.md for complete list. Key ones:
 - `USE_DISPATCHER` - Enable dispatcher forwarding
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
 
+## Keeping Documentation Current
+
+When making code changes, update `CLAUDE.md` and `BACKENDS.md` in the same commit:
+
+- **CLAUDE.md** — update the relevant Key Components description, Common Patterns section, or Notes for Claude whenever behaviour, interfaces, or invariants change.
+- **BACKENDS.md** — update whenever the `TranscriptionBackend` interface changes, audio format negotiation behaviour changes, or backend-specific behaviour changes.
+
+Do not leave stale descriptions. If a note says "only X happens" and you change it so Y also happens, fix the note.
+
 ## Notes for Claude
 
 - The WASM build requires Emscripten to be installed and activated (see Prerequisites section). If build fails, check that Emscripten is installed and that `npm run configure` was run.
@@ -343,4 +395,8 @@ See README.md for complete list. Key ones:
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant within a session. Format can be `{id}-{ssrc}` or just `{id}`.
-- Deepgram is the only backend that supports raw Opus (via `wantsRawOpus()`).
+- Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
+- `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
+- When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly. This method is called on every `reinitializeDecoder` call (not just once at construction), so it must be a pure function of `inputFormat` for a given backend configuration. If the method has connect-time side effects (like `DeepgramBackend` storing `negotiatedFormat`), it will also be called on any new backend instance before `connect()`, so those side effects will be applied correctly.
+- `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
+- `doClose()` is idempotent. Do not call it more than once expecting repeated side effects — the `isClosed` guard makes subsequent calls no-ops. Backend callbacks (`onClosed`, `onError`, etc.) are nulled before `close()` is called, so async backend events arriving after teardown are silently dropped.
