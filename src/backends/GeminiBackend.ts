@@ -115,7 +115,7 @@ export class GeminiBackend implements TranscriptionBackend {
 				realtime_input: {
 					media_chunks: [
 						{
-							mime_type: `audio/pcm;rate=24000`, // Using 24kHz for now
+							mime_type: `audio/pcm;rate=${GEMINI_SAMPLE_RATE}`,
 							data: audioBase64,
 						},
 					],
@@ -153,7 +153,7 @@ export class GeminiBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
-		return { encoding: 'l16', sampleRate: 24000 };
+		return { encoding: 'l16', sampleRate: GEMINI_SAMPLE_RATE };
 	}
 
 	private sendSetupMessage(): void {

@@ -10,13 +10,12 @@ import { CascadedDecoder } from './CascadedDecoder';
 /**
  * Create an audio decoder appropriate for converting from inputFormat to outputFormat.
  *
- * Output is 'ogg'   → PassThroughDecoder (input must also be 'ogg')
- * Output is 'opus'  → PassThroughDecoder  (input 'opus')
- *                   → OggOpusDecapsulator (input 'ogg': strip container, emit raw frames)
- * Output is 'l16'   → L16Decoder          (input 'l16': resample or identity)
- *                   → OpusAudioDecoder     (input 'opus': decode to PCM)
- *                   → CascadedDecoder(OggOpusDecapsulator, OpusAudioDecoder)
- *                                          (input 'ogg': strip container then decode to PCM)
+ * - ogg  → ogg:  PassThroughDecoder (backend wants raw Ogg)
+ * - opus → opus: PassThroughDecoder (backend wants raw Opus)
+ * - ogg  → opus: OggOpusDecapsulator (strip container, emit raw Opus frames)
+ * - l16  → l16:  L16Decoder (resample or identity)
+ * - opus → l16:  OpusAudioDecoder (decode Opus to PCM)
+ * - ogg  → l16:  CascadedDecoder(OggOpusDecapsulator → OpusAudioDecoder)
  */
 export function createAudioDecoder(inputFormat: AudioFormat, outputFormat: AudioFormat): AudioDecoder {
 	if (outputFormat.encoding === 'ogg') {

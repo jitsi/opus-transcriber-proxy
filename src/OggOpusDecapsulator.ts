@@ -1,5 +1,6 @@
 import type { AudioDecoder, DecodedAudio } from './AudioDecoder';
 import { NO_CHUNK_INFO } from './AudioDecoder';
+import logger from './logger';
 
 const OGG_HEADER_MIN_SIZE = 27;
 /** 'OggS' as a little-endian uint32 */
@@ -76,7 +77,11 @@ function parseOggPage(data: Uint8Array): Uint8Array[] {
 		}
 	}
 	// Any remaining parts form a packet that continues on the next page.
-	// Since we treat each chunk as a complete page, drop it silently.
+	// Since we treat each chunk as a complete page, warn and drop it.
+	if (parts.length > 0) {
+		const droppedBytes = parts.reduce((acc, p) => acc + p.length, 0);
+		logger.warn(`OggOpusDecapsulator: dropping ${droppedBytes}-byte cross-page packet continuation; each WebSocket chunk must be a complete Ogg page`);
+	}
 
 	return packets;
 }

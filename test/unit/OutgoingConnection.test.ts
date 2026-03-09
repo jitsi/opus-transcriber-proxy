@@ -615,6 +615,25 @@ describe('OutgoingConnection', () => {
 	});
 
 	describe('updateInputFormat', () => {
+		it('should skip reinitializeDecoder when the format is unchanged', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const createBackendCallsBefore = vi.mocked(createBackend).mock.calls.length;
+
+			// Same encoding and no sampleRate — no-op
+			conn.updateInputFormat({ encoding: 'opus' });
+			await vi.runAllTimersAsync();
+
+			// No new backend was created (no reconnect, no reinit side-effects)
+			expect(vi.mocked(createBackend).mock.calls.length).toBe(createBackendCallsBefore);
+
+			// Decoder is still functional
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 2, timestamp: 0 } });
+			expect(mockBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+
 		it('should reinitialize decoder and process audio with the new format', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
 			await vi.runAllTimersAsync();

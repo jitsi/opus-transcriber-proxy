@@ -76,7 +76,18 @@ export class OutgoingConnection {
 		// Validate synchronously so callers get an immediate error rather than
 		// an async failure deep in reinitializeDecoder -> createAudioDecoder.
 		// validateAudioFormat also normalises 'ogg-opus' → 'ogg'.
-		this.inputAudioFormat = validateAudioFormat(inputFormat);
+		const newFormat = validateAudioFormat(inputFormat);
+
+		if (this.backend) {
+			// Skip reinitialisation when the validated format is identical to the
+			// current one — avoids flushing pending frames and potentially
+			// reconnecting the backend for repeated start events with unchanged format.
+			if (!audioFormatsDiffer(newFormat, this.inputAudioFormat)) {
+				return;
+			}
+		}
+
+		this.inputAudioFormat = newFormat;
 
 		// reinitializeDecoder swaps the audio decoder and, if the backend's desired
 		// format has changed (e.g. a Deepgram connection opened for Opus is now
@@ -281,6 +292,12 @@ export class OutgoingConnection {
 		try {
 			const connectStartTime = Date.now();
 			await newBackend.connect(backendConfig);
+
+			if (this.isClosed) {
+				// doClose() ran concurrently — it already closed newBackend (via
+				// this.backend) and decremented the metric if connected.
+				return false;
+			}
 
 			if (generation !== this.reinitGeneration) {
 				// A newer reinitializeDecoder has taken over, or close() was called.

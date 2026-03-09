@@ -240,6 +240,7 @@ export class TranscriberProxy extends EventEmitter {
 		// is the authoritative source for the container format.
 		if (mediaFormat.encoding === 'opus' && this.options.encoding === 'ogg-opus') {
 			mediaFormat = { ...mediaFormat, encoding: 'ogg' };
+			logger.debug(`Tag "${tag}": promoted encoding from 'opus' to 'ogg' (URL parameter encoding=ogg-opus)`);
 		}
 
 		const connection = this.getConnection(tag);

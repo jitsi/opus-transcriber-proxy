@@ -269,7 +269,7 @@ describe('GeminiBackend', () => {
 			const audioMessage = JSON.parse(sentMessages[0]);
 			expect(audioMessage.realtime_input).toBeDefined();
 			expect(audioMessage.realtime_input.media_chunks).toHaveLength(1);
-			expect(audioMessage.realtime_input.media_chunks[0].mime_type).toBe('audio/pcm;rate=24000');
+			expect(audioMessage.realtime_input.media_chunks[0].mime_type).toBe('audio/pcm;rate=16000');
 			expect(audioMessage.realtime_input.media_chunks[0].data).toBe(audioBase64);
 		});
 
