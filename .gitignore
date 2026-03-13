@@ -172,7 +172,7 @@ dist/
 # WebSocket and transcript dumps
 media.jsonl
 transcript.jsonl
-*.jsonl
+#*.jsonl
 
 tmp/
 
