@@ -10,6 +10,39 @@ opus-transcriber-proxy uses an abstract backend system that allows you to choose
 ### OpenAI (Default)
 Uses OpenAI's Realtime API for low-latency streaming transcription.
 
+### OpenAI Custom
+Re-uses the OpenAI Realtime API backend but connects to a custom WebSocket URL with per-request credentials. Useful for proxies, self-hosted compatible endpoints, or when different sessions need different API keys.
+
+**How it works:**
+- Identical to the `openai` backend in all respects (same protocol, same audio format, same session configuration)
+- The WebSocket URL and API key are supplied per-request rather than from environment variables
+- `isProviderAvailable('openai_custom')` always returns `true` — availability is checked per-request when the connection is established
+
+**Per-request configuration:**
+| Source | Parameter | Description |
+|--------|-----------|-------------|
+| URL query param | `openaiCustomUrl` | WebSocket URL to connect to (e.g. `wss://your-proxy/v1/realtime?intent=transcription`) |
+| HTTP header | `X-Custom-Openai-Api-Key` | API key for authentication |
+
+Both values are required; if either is missing the backend connection will fail.
+
+**Configuration:**
+```bash
+# Enable the openai_custom provider (required)
+ENABLE_OPENAI_CUSTOM_PROVIDER=true
+
+# Optionally set openai_custom as the default provider
+PROVIDERS_PRIORITY=openai_custom,openai,deepgram,gemini
+```
+
+**Usage (per-session via URL):**
+```
+ws://host/transcribe?sendBack=true&provider=openai_custom&openaiCustomUrl=wss://...
+# Also pass the X-Custom-Openai-Api-Key HTTP header on the WebSocket upgrade request
+```
+
+The global `OPENAI_MODEL` and `OPENAI_TRANSCRIPTION_PROMPT` environment variables are used as defaults for model and prompt, same as for the `openai` provider.
+
 **Features:**
 - WebSocket-based streaming
 - Interim and final transcriptions

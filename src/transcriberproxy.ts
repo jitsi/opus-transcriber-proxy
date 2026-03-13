@@ -28,6 +28,8 @@ export interface TranscriberProxyOptions {
 	sendBack?: boolean;
 	sendBackInterim?: boolean;
 	tags?: string[];
+	openaiCustomUrl?: string;
+	openaiCustomApiKey?: string;
 }
 
 export class TranscriberProxy extends EventEmitter {

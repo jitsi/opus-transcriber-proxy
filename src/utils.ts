@@ -11,6 +11,7 @@ export interface ISessionParameters {
 	provider?: string;
 	encoding: AudioEncoding;
 	tags: string[];
+	openaiCustomUrl?: string;
 }
 
 /**
@@ -56,6 +57,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	}
 	// Parse tags as multiple tag= parameters (like Deepgram API), filter empty strings
 	const tags = parsedUrl.searchParams.getAll('tag').filter((t) => t);
+	const openaiCustomUrl = parsedUrl.searchParams.get('openaiCustomUrl');
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -71,6 +73,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		provider: provider ?? undefined,
 		encoding,
 		tags,
+		openaiCustomUrl: openaiCustomUrl ?? undefined,
 	};
 }
 

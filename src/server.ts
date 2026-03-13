@@ -68,9 +68,12 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
+	// Extract per-request credentials for openai_custom provider
+	const openaiCustomApiKey = request.headers['x-custom-openai-api-key'] as string | undefined;
+
 	// Accept the WebSocket upgrade
 	wss.handleUpgrade(request, socket, head, (ws) => {
-		handleWebSocketConnection(ws, parameters);
+		handleWebSocketConnection(ws, parameters, openaiCustomApiKey);
 	});
 });
 
@@ -223,8 +226,8 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
-function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags } = parameters;
+function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -282,10 +285,27 @@ function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters
 			logger.info(`[WS-${connectionId}] Using default provider: ${provider}`);
 		}
 
+		// Validate openai_custom requirements early, before creating the session
+		if (provider === 'openai_custom') {
+			if (!openaiCustomApiKey) {
+				const errorMessage = 'X-Custom-Openai-Api-Key header is required for openai_custom provider';
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+			if (!openaiCustomUrl) {
+				const errorMessage = 'openaiCustomUrl query parameter is required for openai_custom provider';
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+			logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${openaiCustomUrl}`);
+		}
+
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);

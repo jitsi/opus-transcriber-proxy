@@ -48,10 +48,14 @@ const dumpFile = process.argv[2];
 const wsUrl = process.argv[3];
 const speed = process.argv[4] ? parseFloat(process.argv[4]) : 1.0;
 
+// Read openai_custom API key from environment variable
+const openaiCustomApiKey = process.env.OPENAI_CUSTOM_API_KEY || null;
+
 if (!dumpFile || !wsUrl) {
     console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed]');
     console.error('Example: node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"');
     console.error('         node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2');
+    console.error('         OPENAI_CUSTOM_API_KEY=sk-... node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."');
     process.exit(1);
 }
 
@@ -91,7 +95,8 @@ console.log('');
 
 // Connect to WebSocket
 console.log(`Connecting to: ${wsUrl}`);
-const ws = new WebSocket(wsUrl);
+const wsOptions = openaiCustomApiKey ? { headers: { 'x-custom-openai-api-key': openaiCustomApiKey } } : {};
+const ws = new WebSocket(wsUrl, wsOptions);
 
 ws.on('open', () => {
     console.log('Connected! Starting replay...');

@@ -6,7 +6,7 @@ import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
-import { createBackend, getBackendConfig } from './backends/BackendFactory';
+import { createBackend, getBackendConfig, type OpenAICustomOptions } from './backends/BackendFactory';
 import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
@@ -114,11 +114,19 @@ export class OutgoingConnection {
 		}
 	}
 
+	private getOpenAICustomOptions(): OpenAICustomOptions | undefined {
+		if (this.options.provider !== 'openai_custom') return undefined;
+		return {
+			openaiCustomUrl: this.options.openaiCustomUrl,
+			openaiCustomApiKey: this.options.openaiCustomApiKey,
+		};
+	}
+
 	private async initializeBackend(): Promise<void> {
 		try {
 			// Create backend using factory
 			// Use provider from options (URL param), or fall back to config default
-			this.backend = createBackend(this.localTag, this.participant, this.options.provider);
+			this.backend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
 
 			await this.reinitializeDecoder();
 
@@ -276,7 +284,7 @@ export class OutgoingConnection {
 
 		logger.info(`Reconnecting backend for tag ${this.localTag} (format changed to: ${this.activeDesiredFormat?.encoding})`);
 
-		const newBackend = createBackend(this.localTag, this.participant, this.options.provider);
+		const newBackend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
 		this.setupBackendHandlers(newBackend);
 		this.backend = newBackend;
 
@@ -585,7 +593,7 @@ export class OutgoingConnection {
 			const backendType = this.options.provider || getDefaultProvider();
 			let basePrompt = '';
 
-			if (backendType === 'openai') {
+			if (backendType === 'openai' || backendType === 'openai_custom') {
 				basePrompt = config.openai.transcriptionPrompt || '';
 			} else if (backendType === 'gemini') {
 				basePrompt = config.gemini.transcriptionPrompt || '';
