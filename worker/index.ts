@@ -36,6 +36,41 @@ interface TranscriptionMessage {
 }
 
 /**
+ * Build the container env vars from the worker env bindings.
+ * Shared between the class-level default and startAndWaitForPorts() override
+ * (which adds CONTAINER_INSTANCE_NAME — not available at class init time).
+ */
+function buildContainerEnvVars(env: Env): Record<string, string> {
+	return {
+		OPENAI_API_KEY: env.OPENAI_API_KEY,
+		OPENAI_MODEL: env.OPENAI_MODEL || 'gpt-4o-transcribe',
+		GEMINI_API_KEY: env.GEMINI_API_KEY || '',
+		DEEPGRAM_API_KEY: env.DEEPGRAM_API_KEY || '',
+		DEEPGRAM_MODEL: env.DEEPGRAM_MODEL || 'nova-3-general',
+		DEEPGRAM_DETECT_LANGUAGE: env.DEEPGRAM_DETECT_LANGUAGE || 'true',
+		DEEPGRAM_INCLUDE_LANGUAGE: env.DEEPGRAM_INCLUDE_LANGUAGE || 'false',
+		DEEPGRAM_PUNCTUATE: env.DEEPGRAM_PUNCTUATE || 'true',
+		DEEPGRAM_ENCODING: env.DEEPGRAM_ENCODING || 'opus',
+		DEEPGRAM_TAGS: env.DEEPGRAM_TAGS || '',
+		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',
+		FORCE_COMMIT_TIMEOUT: env.FORCE_COMMIT_TIMEOUT || '2',
+		DEBUG: env.DEBUG || 'true',
+		ROUTING_MODE: env.ROUTING_MODE || 'session',
+		CONTAINER_POOL_SIZE: env.CONTAINER_POOL_SIZE || '5',
+		MAX_CONNECTIONS_PER_CONTAINER: env.MAX_CONNECTIONS_PER_CONTAINER || '10',
+		MIN_CONTAINERS: env.MIN_CONTAINERS || '2',
+		SCALE_DOWN_IDLE_TIME: env.SCALE_DOWN_IDLE_TIME || '600000',
+		TRANSLATION_MIXING_MODE: env.TRANSLATION_MIXING_MODE || 'true',
+		OTLP_ENDPOINT: env.OTLP_ENDPOINT || '',
+		OTLP_ENV: env.OTLP_ENV || '',
+		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
+		OTLP_HEADERS: env.OTLP_HEADERS || '',
+		PORT: '8080',
+		HOST: '0.0.0.0',
+	};
+}
+
+/**
  * TranscriberContainer wraps the Node.js transcription server
  * and forwards WebSocket requests to it.
  */
@@ -52,35 +87,8 @@ export class TranscriberContainer extends Container<Env> {
 	// For session-based routing: Keep this shorter (containers are session-specific)
 	sleepAfter = this.env.SLEEP_AFTER || '1m';
 
-	// Pass environment variables to the container
-	envVars: Record<string, string> = {
-		// These will be available as process.env in the container
-		OPENAI_API_KEY: this.env.OPENAI_API_KEY,
-		OPENAI_MODEL: this.env.OPENAI_MODEL || 'gpt-4o-transcribe',
-		GEMINI_API_KEY: this.env.GEMINI_API_KEY || '',
-		DEEPGRAM_API_KEY: this.env.DEEPGRAM_API_KEY || '',
-		DEEPGRAM_MODEL: this.env.DEEPGRAM_MODEL || 'nova-3-general',
-		DEEPGRAM_DETECT_LANGUAGE: this.env.DEEPGRAM_DETECT_LANGUAGE || 'true',
-		DEEPGRAM_INCLUDE_LANGUAGE: this.env.DEEPGRAM_INCLUDE_LANGUAGE || 'false',
-		DEEPGRAM_PUNCTUATE: this.env.DEEPGRAM_PUNCTUATE || 'true',
-		DEEPGRAM_ENCODING: this.env.DEEPGRAM_ENCODING || 'opus',
-		DEEPGRAM_TAGS: this.env.DEEPGRAM_TAGS || '',
-		PROVIDERS_PRIORITY: this.env.PROVIDERS_PRIORITY || 'openai',
-		FORCE_COMMIT_TIMEOUT: this.env.FORCE_COMMIT_TIMEOUT || '2',
-		DEBUG: this.env.DEBUG || 'true',
-		ROUTING_MODE: this.env.ROUTING_MODE || 'session',
-		CONTAINER_POOL_SIZE: this.env.CONTAINER_POOL_SIZE || '5',
-		MAX_CONNECTIONS_PER_CONTAINER: this.env.MAX_CONNECTIONS_PER_CONTAINER || '10',
-		MIN_CONTAINERS: this.env.MIN_CONTAINERS || '2',
-		SCALE_DOWN_IDLE_TIME: this.env.SCALE_DOWN_IDLE_TIME || '600000',
-		TRANSLATION_MIXING_MODE: this.env.TRANSLATION_MIXING_MODE || 'true',
-		OTLP_ENDPOINT: this.env.OTLP_ENDPOINT || '',
-		OTLP_ENV: this.env.OTLP_ENV || '',
-		OTLP_RESOURCE_ATTRIBUTES: this.env.OTLP_RESOURCE_ATTRIBUTES || '',
-		OTLP_HEADERS: this.env.OTLP_HEADERS || '',
-		PORT: '8080',
-		HOST: '0.0.0.0',
-	};
+	// Pass environment variables to the container (default, without instance name)
+	envVars: Record<string, string> = buildContainerEnvVars(this.env);
 
 	override onStart() {
 		console.log('Transcriber container started');
@@ -513,6 +521,9 @@ export default {
 		// This is required for the fetch to work properly
 		try {
 			await container.startAndWaitForPorts({
+				startOptions: {
+					envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+				},
 				cancellationOptions: {
 					waitInterval: 100, // Poll every 100ms (default: 1000ms)
 				},
