@@ -30,19 +30,58 @@ let meter: Meter | null = null;
 /**
  * Create shared resource with common attributes for both metrics and logs.
  */
-function createResource(): Resource {
-	const resourceAttributes: Record<string, string> = {
+/**
+ * Build the base resource attributes shared by metrics and logs.
+ */
+function baseResourceAttributes(): Record<string, string> {
+	const attrs: Record<string, string> = {
 		[ATTR_SERVICE_NAME]: 'opus-transcriber-proxy',
 	};
 
 	if (config.otlp.env) {
-		resourceAttributes[ATTR_DEPLOYMENT_ENVIRONMENT] = config.otlp.env;
-		resourceAttributes['env'] = config.otlp.env;
+		attrs[ATTR_DEPLOYMENT_ENVIRONMENT] = config.otlp.env;
+		attrs['env'] = config.otlp.env;
 	}
 
-	Object.assign(resourceAttributes, config.otlp.resourceAttributes);
+	// Cloudflare container location context (injected automatically by CF runtime)
+	if (process.env.CLOUDFLARE_LOCATION) {
+		attrs['city'] = process.env.CLOUDFLARE_LOCATION;
+	}
+	if (process.env.CLOUDFLARE_COUNTRY_A2) {
+		attrs['country'] = process.env.CLOUDFLARE_COUNTRY_A2;
+	}
 
-	return new Resource(resourceAttributes);
+	Object.assign(attrs, config.otlp.resourceAttributes);
+
+	return attrs;
+}
+
+// Instance ID generated once per process — shared between metrics and logs resources.
+// CONTAINER_INSTANCE_NAME is the human-readable name passed to getContainer() by the worker
+// (equals the session/meeting ID in session routing mode). Falls back to DO hex hash or random UUID.
+const instanceId = process.env.CONTAINER_INSTANCE_NAME || process.env.CLOUDFLARE_DURABLE_OBJECT_ID || crypto.randomUUID();
+
+/**
+ * Resource for metrics (Mimir). Uses the standard 'service.instance.id' attribute
+ * so each container produces unique series for correct aggregation.
+ */
+function createMetricsResource(): Resource {
+	const attrs = baseResourceAttributes();
+	attrs['service.instance.id'] = instanceId;
+	return new Resource(attrs);
+}
+
+/**
+ * Resource for logs (Loki). Sets a static 'service.instance.id' to override the OTEL SDK's
+ * auto-detected value. This prevents Loki from creating a unique indexed stream per container
+ * (high-cardinality explosion). The per-container identity is stored in 'runId' instead — a
+ * name chosen to avoid Loki auto-indexing (unlike 'session_id' or 'container_id').
+ */
+function createLogsResource(): Resource {
+	const attrs = baseResourceAttributes();
+	attrs['service.instance.id'] = 'opus-transcriber-proxy';
+	attrs['runId'] = instanceId;
+	return new Resource(attrs);
 }
 
 /**
@@ -57,7 +96,7 @@ export function initTelemetry(): void {
 
 	logger.info(`Initializing OpenTelemetry metrics, endpoint=${config.otlp.endpoint}`);
 
-	const resource = createResource();
+	const resource = createMetricsResource();
 
 	// Create OTLP exporter
 	const exporterConfig: { url: string; headers?: Record<string, string> } = {
@@ -137,7 +176,7 @@ export function initTelemetryLogs(): void {
 	// Use console.log to avoid circular dependency with logger
 	console.log(`Initializing OpenTelemetry logs, endpoint=${config.otlp.endpoint}/v1/logs`);
 
-	const resource = createResource();
+	const resource = createLogsResource();
 
 	const logExporterConfig: { url: string; headers?: Record<string, string> } = {
 		url: `${config.otlp.endpoint}/v1/logs`,
