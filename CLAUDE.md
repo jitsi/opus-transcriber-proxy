@@ -210,6 +210,8 @@ See README.md for complete configuration reference.
 - Prometheus metrics exported to OTLP HTTP endpoint
 - Tracks: active sessions, audio bytes, transcription latency, backend errors
 - Only enabled when `OTLP_ENDPOINT` is set
+- Each container instance is differentiated via `CLOUDFLARE_DURABLE_OBJECT_ID` (falls back to random UUID for local dev). Metrics use `service.instance.id` (standard OTEL, Mimir-friendly). Logs use `runId` (custom name to avoid Loki auto-indexing it as a high-cardinality label).
+- Container location is tagged via `city` (from `CLOUDFLARE_LOCATION`) and `country` (from `CLOUDFLARE_COUNTRY_A2`)
 
 **Logging** (`src/logger.ts`)
 - Uses Winston with OTLP logs transport
