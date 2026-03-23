@@ -231,8 +231,10 @@ class SessionManager {
 		}
 		this.detachedSessions.clear();
 
-		// Record duration for active sessions before clearing
-		for (const [sessionId, proxy] of this.activeSessions) {
+		// Record duration for active sessions before clearing.
+		// proxy.close() is intentionally not called here — server.ts close handlers
+		// will fire when the HTTP server shuts down and handle connection teardown.
+		for (const proxy of this.activeSessions.values()) {
 			const durationSec = proxy.getSessionDurationSec();
 			if (durationSec > 0) {
 				instruments.sessionDurationSeconds.record(durationSec);
