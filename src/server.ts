@@ -144,6 +144,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 			const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 			logger.error(`[WS-${connectionId}] ${message}`);
 			sessionManager.unregisterSession(sessionId, session);
+			session.close();
 			ws.close(1011, message);
 		} catch (closeError) {
 			// Error handlers do not themselves catch errors, so log with logger
