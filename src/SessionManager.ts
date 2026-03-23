@@ -99,6 +99,12 @@ class SessionManager {
 			return;
 		}
 
+		if (!this.activeSessions.has(sessionId)) {
+			// Session was already unregistered (e.g. by a prior error handler) — don't detach
+			logger.debug(`Session ${sessionId} not in active sessions, skipping detach`);
+			return;
+		}
+
 		if (!config.sessionResumeEnabled) {
 			// Resume disabled - close immediately
 			logger.debug(`Session resumption disabled, closing session ${sessionId} immediately`);
