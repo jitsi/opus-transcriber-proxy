@@ -64,17 +64,25 @@ class SessionManager {
 	}
 
 	/**
-	 * Unregister a session from tracking (called on final cleanup)
+	 * Unregister a session from tracking (called on final cleanup).
+	 * Pass the proxy to record session duration before it is closed.
 	 */
-	unregisterSession(sessionId: string | undefined): void {
+	unregisterSession(sessionId: string | undefined, proxy?: TranscriberProxy): void {
 		if (!sessionId) return;
 		const wasActive = this.activeSessions.has(sessionId);
 		this.activeSessions.delete(sessionId);
 
-		// Metrics: decrement active if it was tracked
+		// Metrics: decrement active if it was tracked, record duration
 		if (wasActive) {
 			const instruments = getInstruments();
 			instruments.sessionsActive.add(-1);
+
+			if (proxy) {
+				const durationSec = proxy.getSessionDurationSec();
+				if (durationSec > 0) {
+					instruments.sessionDurationSeconds.record(durationSec);
+				}
+			}
 		}
 
 		logger.debug(`Session ${sessionId} unregistered from active sessions (total: ${this.activeSessions.size})`);
@@ -91,10 +99,16 @@ class SessionManager {
 			return;
 		}
 
+		if (!this.activeSessions.has(sessionId)) {
+			// Session was already unregistered (e.g. by a prior error handler) — don't detach
+			logger.debug(`Session ${sessionId} not in active sessions, skipping detach`);
+			return;
+		}
+
 		if (!config.sessionResumeEnabled) {
 			// Resume disabled - close immediately
 			logger.debug(`Session resumption disabled, closing session ${sessionId} immediately`);
-			this.unregisterSession(sessionId);
+			this.unregisterSession(sessionId, proxy);
 			proxy.close();
 			return;
 		}
@@ -204,6 +218,7 @@ class SessionManager {
 	shutdown(): void {
 		const detachedCount = this.detachedSessions.size;
 		const activeCount = this.activeSessions.size;
+		const instruments = getInstruments();
 
 		logger.info(`Shutting down SessionManager (detached: ${detachedCount}, active: ${activeCount})`);
 
@@ -211,12 +226,27 @@ class SessionManager {
 		for (const [sessionId, session] of this.detachedSessions) {
 			logger.info(`Cleaning up detached session ${sessionId} during shutdown`);
 			clearTimeout(session.gracePeriodTimer);
+
+			const durationSec = session.transcriberProxy.getSessionDurationSec();
+			if (durationSec > 0) {
+				instruments.sessionDurationSeconds.record(durationSec);
+			}
+			instruments.sessionsDetached.add(-1);
+
 			session.transcriberProxy.close();
 		}
 		this.detachedSessions.clear();
 
-		// Note: Active sessions will be cleaned up by server.ts through normal close handlers
-		// Just clear our tracking
+		// Record duration for active sessions before clearing.
+		// proxy.close() is intentionally not called here — server.ts close handlers
+		// will fire when the HTTP server shuts down and handle connection teardown.
+		for (const proxy of this.activeSessions.values()) {
+			const durationSec = proxy.getSessionDurationSec();
+			if (durationSec > 0) {
+				instruments.sessionDurationSeconds.record(durationSec);
+			}
+			instruments.sessionsActive.add(-1);
+		}
 		this.activeSessions.clear();
 
 		logger.info('SessionManager shutdown complete');
