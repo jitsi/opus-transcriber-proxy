@@ -28,9 +28,6 @@ let loggerProvider: LoggerProvider | null = null;
 let meter: Meter | null = null;
 
 /**
- * Create shared resource with common attributes for both metrics and logs.
- */
-/**
  * Build the base resource attributes shared by metrics and logs.
  */
 function baseResourceAttributes(): Record<string, string> {
