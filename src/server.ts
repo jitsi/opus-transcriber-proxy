@@ -95,7 +95,7 @@ function setupWebSocketEventListeners(ws: WebSocket, session: TranscriberProxy, 
 			sessionManager.detachSession(sessionId, session, connectionId);
 		} else {
 			// No sessionId or resumption disabled - close immediately
-			sessionManager.unregisterSession(sessionId);
+			sessionManager.unregisterSession(sessionId, session);
 			session.close();
 		}
 	});
@@ -104,7 +104,7 @@ function setupWebSocketEventListeners(ws: WebSocket, session: TranscriberProxy, 
 	ws.addEventListener('error', (event) => {
 		const errorMessage = 'WebSocket error';
 		logger.error(`[WS-${connectionId}] Client WebSocket error:`, errorMessage, event);
-		sessionManager.unregisterSession(sessionId);
+		sessionManager.unregisterSession(sessionId, session);
 		session.close();
 		ws.close(1011, errorMessage);
 	});
@@ -143,7 +143,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 		try {
 			const message = `Error in session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 			logger.error(`[WS-${connectionId}] ${message}`);
-			sessionManager.unregisterSession(sessionId);
+			sessionManager.unregisterSession(sessionId, session);
 			ws.close(1011, message);
 		} catch (closeError) {
 			// Error handlers do not themselves catch errors, so log with logger
