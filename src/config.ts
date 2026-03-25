@@ -39,6 +39,9 @@ export const config = {
 	// Enable openai_custom provider (credentials come per-request via URL param + header)
 	enableOpenAICustomProvider: process.env.ENABLE_OPENAI_CUSTOM_PROVIDER === 'true',
 
+	// Require wss:// for openai_custom provider URL (default true; set to false to allow ws://)
+	openaiCustomRequireWss: process.env.OPENAI_CUSTOM_REQUIRE_WSS !== 'false',
+
 	// OpenAI configuration
 	openai: {
 		apiKey: process.env.OPENAI_API_KEY || '',

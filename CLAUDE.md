@@ -371,6 +371,8 @@ See README.md for complete list. Key ones:
 
 - `PROVIDERS_PRIORITY` - Provider priority order (default: openai,deepgram,gemini)
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `GEMINI_API_KEY` - API keys
+- `ENABLE_OPENAI_CUSTOM_PROVIDER` - Enable the openai_custom provider (default: false)
+- `OPENAI_CUSTOM_REQUIRE_WSS` - Require wss:// for openaiCustomUrl (default: true; set false to allow ws://)
 - `PORT`, `HOST` - Server listen config
 - `FORCE_COMMIT_TIMEOUT` - Seconds before finalizing pending audio (default: 2)
 - `SESSION_RESUME_ENABLED` - Enable session resumption (default: true)

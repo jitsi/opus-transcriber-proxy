@@ -299,13 +299,22 @@ function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters
 				ws.close(1002, errorMessage);
 				return;
 			}
-			let urlHostname: string;
-		try {
-			urlHostname = new URL(openaiCustomUrl).hostname;
-		} catch {
-			urlHostname = '[invalid URL]';
-		}
-		logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${urlHostname}`);
+			let parsedCustomUrl: URL;
+			try {
+				parsedCustomUrl = new URL(openaiCustomUrl);
+			} catch {
+				const errorMessage = 'openaiCustomUrl is not a valid URL';
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+			if (config.openaiCustomRequireWss && parsedCustomUrl.protocol !== 'wss:') {
+				const errorMessage = 'openaiCustomUrl must use wss:// scheme (set OPENAI_CUSTOM_REQUIRE_WSS=false to allow ws://)';
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage);
+				return;
+			}
+			logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${parsedCustomUrl.hostname}`);
 		}
 
 		// Create transcription session

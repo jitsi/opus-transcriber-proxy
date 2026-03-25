@@ -30,6 +30,10 @@ Both values are required; if either is missing the backend connection will fail.
 # Enable the openai_custom provider (required)
 ENABLE_OPENAI_CUSTOM_PROVIDER=true
 
+# Require wss:// scheme for the openaiCustomUrl parameter (default: true)
+# Set to false to allow unencrypted ws:// connections (not recommended in production)
+OPENAI_CUSTOM_REQUIRE_WSS=false
+
 # Optionally set openai_custom as the default provider
 PROVIDERS_PRIORITY=openai_custom,openai,deepgram,gemini
 ```
