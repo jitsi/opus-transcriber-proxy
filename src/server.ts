@@ -226,7 +226,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
-function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
+export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
 	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl } = parameters;
 	const connectionId = ++wsConnectionId;
 
