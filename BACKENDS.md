@@ -16,7 +16,6 @@ Re-uses the OpenAI Realtime API backend but connects to a custom WebSocket URL w
 **How it works:**
 - Identical to the `openai` backend in all respects (same protocol, same audio format, same session configuration)
 - The WebSocket URL and API key are supplied per-request rather than from environment variables
-- `isProviderAvailable('openai_custom')` always returns `true` — availability is checked per-request when the connection is established
 
 **Per-request configuration:**
 | Source | Parameter | Description |
