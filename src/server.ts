@@ -299,7 +299,13 @@ function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters
 				ws.close(1002, errorMessage);
 				return;
 			}
-			logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${openaiCustomUrl}`);
+			let urlHostname: string;
+		try {
+			urlHostname = new URL(openaiCustomUrl).hostname;
+		} catch {
+			urlHostname = '[invalid URL]';
+		}
+		logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${urlHostname}`);
 		}
 
 		// Create transcription session
