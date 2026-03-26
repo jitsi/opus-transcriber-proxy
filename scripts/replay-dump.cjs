@@ -3,18 +3,21 @@
  * Replay WebSocket messages from a dump file
  *
  * Usage:
- *   node scripts/replay-dump.cjs <dump-file> <websocket-url> [speed]
+ *   node scripts/replay-dump.cjs <dump-file> <websocket-url> [speed] [-H "Name: Value"] ...
  *
  * Parameters:
- *   speed - Playback speed multiplier (default: 1.0)
- *           - speed=2 plays at 2x speed (half the delays)
- *           - speed=0.5 plays at half speed (double the delays)
- *           - speed=0 plays with no delay at all
+ *   speed        - Playback speed multiplier (default: 1.0)
+ *                  - speed=2 plays at 2x speed (half the delays)
+ *                  - speed=0.5 plays at half speed (double the delays)
+ *                  - speed=0 plays with no delay at all
+ *   -H / --header - Add a custom HTTP header (can be repeated)
  *
  * Example:
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 0
+ *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://..." -H "Authorization: Bearer token" -H "X-Tenant: foo"
+ *   OPENAI_CUSTOM_API_KEY=sk-... node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."
  */
 
 const fs = require('fs');
@@ -46,12 +49,44 @@ function updateStatusLine(current, total, remainingSec) {
 // Parse arguments
 const dumpFile = process.argv[2];
 const wsUrl = process.argv[3];
-const speed = process.argv[4] ? parseFloat(process.argv[4]) : 1.0;
+
+// Parse remaining args: optional speed (positional) and -H/--header flags
+const extraArgs = process.argv.slice(4);
+let speed = 1.0;
+const extraHeaders = {};
+
+for (let i = 0; i < extraArgs.length; i++) {
+    const arg = extraArgs[i];
+    if (arg === '-H' || arg === '--header') {
+        const header = extraArgs[++i];
+        if (!header) {
+            console.error(`Error: ${arg} requires a value`);
+            process.exit(1);
+        }
+        const colonIdx = header.indexOf(':');
+        if (colonIdx === -1) {
+            console.error(`Error: Invalid header format "${header}" — expected "Name: Value"`);
+            process.exit(1);
+        }
+        const name = header.slice(0, colonIdx).trim();
+        const value = header.slice(colonIdx + 1).trim();
+        extraHeaders[name] = value;
+    } else if (!isNaN(parseFloat(arg)) && i === 0) {
+        speed = parseFloat(arg);
+    } else {
+        console.error(`Error: Unknown argument "${arg}"`);
+        process.exit(1);
+    }
+}
+
+// Read openai_custom API key from environment variable
+const openaiCustomApiKey = process.env.OPENAI_CUSTOM_API_KEY || null;
 
 if (!dumpFile || !wsUrl) {
-    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed]');
+    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed] [-H "Name: Value"] ...');
     console.error('Example: node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"');
     console.error('         node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2');
+    console.error('         OPENAI_CUSTOM_API_KEY=sk-... node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."');
     process.exit(1);
 }
 
@@ -91,7 +126,13 @@ console.log('');
 
 // Connect to WebSocket
 console.log(`Connecting to: ${wsUrl}`);
-const ws = new WebSocket(wsUrl);
+const headers = { ...extraHeaders };
+if (openaiCustomApiKey) headers['x-custom-openai-api-key'] = openaiCustomApiKey;
+if (Object.keys(headers).length > 0) {
+    console.log('Custom headers:', Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join(', '));
+}
+const wsOptions = Object.keys(headers).length > 0 ? { headers } : {};
+const ws = new WebSocket(wsUrl, wsOptions);
 
 ws.on('open', () => {
     console.log('Connected! Starting replay...');

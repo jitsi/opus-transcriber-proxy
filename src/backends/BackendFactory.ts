@@ -10,7 +10,12 @@ import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
 import { DummyBackend } from './DummyBackend';
 
-export function createBackend(tag: string, participantInfo: any, provider?: Provider): TranscriptionBackend {
+export interface OpenAICustomOptions {
+	openaiCustomUrl?: string;
+	openaiCustomApiKey?: string;
+}
+
+export function createBackend(tag: string, participantInfo: any, provider?: Provider, customOptions?: OpenAICustomOptions): TranscriptionBackend {
 	const backendType = provider || getDefaultProvider();
 
 	logger.info(`Creating ${backendType} transcription backend for tag: ${tag}`);
@@ -18,6 +23,8 @@ export function createBackend(tag: string, participantInfo: any, provider?: Prov
 	switch (backendType) {
 		case 'openai':
 			return new OpenAIBackend(tag, participantInfo);
+		case 'openai_custom':
+			return new OpenAIBackend(tag, participantInfo, customOptions?.openaiCustomUrl, customOptions?.openaiCustomApiKey);
 		case 'gemini':
 			return new GeminiBackend(tag, participantInfo);
 		case 'deepgram':
@@ -34,6 +41,7 @@ export function getBackendConfig(provider?: Provider): BackendConfig {
 
 	switch (backendType) {
 		case 'openai':
+		case 'openai_custom':
 			return {
 				language: undefined, // Will be set per-connection based on options
 				prompt: config.openai.transcriptionPrompt,

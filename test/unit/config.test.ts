@@ -196,6 +196,20 @@ describe('config', () => {
 
 			expect(isProviderAvailable('dummy')).toBe(false);
 		});
+
+		it('should return true for openai_custom when explicitly enabled', async () => {
+			vi.stubEnv('ENABLE_OPENAI_CUSTOM_PROVIDER', 'true');
+
+			const { isProviderAvailable } = await import('../../src/config');
+
+			expect(isProviderAvailable('openai_custom')).toBe(true);
+		});
+
+		it('should return false for openai_custom when not enabled', async () => {
+			const { isProviderAvailable } = await import('../../src/config');
+
+			expect(isProviderAvailable('openai_custom')).toBe(false);
+		});
 	});
 
 	describe('getAvailableProviders', () => {
@@ -217,6 +231,15 @@ describe('config', () => {
 			const { getAvailableProviders } = await import('../../src/config');
 
 			expect(getAvailableProviders()).toEqual([]);
+		});
+
+		it('should include openai_custom when enabled', async () => {
+			vi.stubEnv('ENABLE_OPENAI_CUSTOM_PROVIDER', 'true');
+
+			const { getAvailableProviders } = await import('../../src/config');
+
+			const available = getAvailableProviders();
+			expect(available).toContain('openai_custom');
 		});
 
 		it('should include dummy when enabled', async () => {

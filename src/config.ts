@@ -26,7 +26,7 @@ function parseAndValidateTags(value: string | undefined): string[] {
 	return tags;
 }
 
-export type Provider = 'openai' | 'gemini' | 'deepgram' | 'dummy';
+export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'dummy';
 
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
@@ -35,6 +35,12 @@ export const config = {
 
 	// Enable dummy provider (for testing/statistics only)
 	enableDummyProvider: process.env.ENABLE_DUMMY_PROVIDER === 'true',
+
+	// Enable openai_custom provider (credentials come per-request via URL param + header)
+	enableOpenAICustomProvider: process.env.ENABLE_OPENAI_CUSTOM_PROVIDER === 'true',
+
+	// Require wss:// for openai_custom provider URL (default true; set to false to allow ws://)
+	openaiCustomRequireWss: process.env.OPENAI_CUSTOM_REQUIRE_WSS !== 'false',
 
 	// OpenAI configuration
 	openai: {
@@ -112,6 +118,8 @@ export function isProviderAvailable(provider: Provider): boolean {
 	switch (provider) {
 		case 'openai':
 			return !!config.openai.apiKey;
+		case 'openai_custom':
+			return config.enableOpenAICustomProvider;
 		case 'gemini':
 			return !!config.gemini.apiKey;
 		case 'deepgram':
@@ -127,7 +135,7 @@ export function isProviderAvailable(provider: Provider): boolean {
  * Get all available providers
  */
 export function getAvailableProviders(): Provider[] {
-	const allProviders: Provider[] = ['openai', 'gemini', 'deepgram', 'dummy'];
+	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'dummy'];
 	return allProviders.filter(isProviderAvailable);
 }
 
@@ -148,5 +156,5 @@ export function getDefaultProvider(): Provider | null {
  * Validate that a provider name is valid
  */
 export function isValidProvider(provider: string): provider is Provider {
-	return provider === 'openai' || provider === 'gemini' || provider === 'deepgram' || provider === 'dummy';
+	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'dummy';
 }

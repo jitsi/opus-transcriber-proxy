@@ -21,15 +21,19 @@ export class OpenAIBackend implements TranscriptionBackend {
 	private participantInfo: any;
 	private tag: string;
 	private lastTranscriptTime?: number;
+	private wsUrl: string;
+	private apiKey: string;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
 	onError?: (errorType: string, errorMessage: string) => void;
 	onClosed?: () => void;
 
-	constructor(tag: string, participantInfo: any) {
+	constructor(tag: string, participantInfo: any, wsUrl?: string, apiKey?: string) {
 		this.tag = tag;
 		this.participantInfo = participantInfo;
+		this.wsUrl = wsUrl ?? OPENAI_WS_URL;
+		this.apiKey = apiKey ?? config.openai.apiKey;
 	}
 
 	async connect(backendConfig: BackendConfig): Promise<void> {
@@ -37,9 +41,9 @@ export class OpenAIBackend implements TranscriptionBackend {
 
 		return new Promise((resolve, reject) => {
 			try {
-				const ws = new WebSocket(OPENAI_WS_URL, ['realtime', `openai-insecure-api-key.${config.openai.apiKey}`]);
+				const ws = new WebSocket(this.wsUrl, ['realtime', `openai-insecure-api-key.${this.apiKey}`]);
 
-				logger.debug(`Opening OpenAI WebSocket to ${OPENAI_WS_URL} for tag: ${this.tag}`);
+				logger.info(`Opening OpenAI WebSocket to ${new URL(this.wsUrl).hostname} for tag: ${this.tag}`);
 
 				this.ws = ws;
 
