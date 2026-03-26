@@ -43,7 +43,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 			try {
 				const ws = new WebSocket(this.wsUrl, ['realtime', `openai-insecure-api-key.${this.apiKey}`]);
 
-				logger.info(`Opening OpenAI WebSocket to ${this.wsUrl} for tag: ${this.tag}`);
+				logger.info(`Opening OpenAI WebSocket to ${new URL(this.wsUrl).hostname} for tag: ${this.tag}`);
 
 				this.ws = ws;
 
