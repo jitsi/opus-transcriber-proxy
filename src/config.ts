@@ -119,7 +119,7 @@ export function isProviderAvailable(provider: Provider): boolean {
 		case 'openai':
 			return !!config.openai.apiKey;
 		case 'openai_custom':
-			return config.enableOpenAICustomProvider || config.providersPriority.includes('openai_custom');
+			return config.enableOpenAICustomProvider;
 		case 'gemini':
 			return !!config.gemini.apiKey;
 		case 'deepgram':
