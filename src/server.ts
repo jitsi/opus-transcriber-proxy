@@ -265,7 +265,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		if (requestedProvider) {
 			// Provider specified in URL
 			if (!isValidProvider(requestedProvider)) {
-				const errorMessage = `Invalid provider: ${requestedProvider}. Valid providers are: openai, gemini, deepgram, dummy`;
+				const errorMessage = `Invalid provider: ${requestedProvider}. Valid providers are: openai, openai_custom, gemini, deepgram, dummy`;
 				logger.error(`[WS-${connectionId}] ${errorMessage}`);
 				ws.close(1002, errorMessage);
 				return;
