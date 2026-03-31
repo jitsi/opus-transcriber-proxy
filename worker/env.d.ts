@@ -40,6 +40,8 @@ export interface Env {
 	MIN_CONTAINERS?: string;
 	SCALE_DOWN_IDLE_TIME?: string;
 	TRANSLATION_MIXING_MODE?: string;
+	ENABLE_OPENAI_CUSTOM_PROVIDER?: string;
+	OPENAI_CUSTOM_REQUIRE_WSS?: string;
 	USE_DISPATCHER?: string;
 	SLEEP_AFTER?: string;
 	OTLP_ENDPOINT?: string;
