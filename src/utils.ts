@@ -45,7 +45,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const sendBack = parsedUrl.searchParams.get('sendBack');
 	const sendBackInterim = parsedUrl.searchParams.get('sendBackInterim');
 	const lang = parsedUrl.searchParams.get('lang');
-	const provider = parsedUrl.searchParams.get('provider');
+	const provider = parsedUrl.searchParams.get('provider')?.toLowerCase();
 	const encodingParam = parsedUrl.searchParams.get('encoding');
 	let encoding: AudioEncoding;
 	if (encodingParam === null || encodingParam === 'opus') {
