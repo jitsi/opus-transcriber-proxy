@@ -51,6 +51,24 @@ describe('extractSessionParameters', () => {
 			expect(params.tags).toEqual(['production', 'region-us']);
 		});
 
+		it('should normalize provider to lowercase', () => {
+			const url = 'ws://localhost:8080/transcribe?provider=Deepgram';
+			const params = extractSessionParameters(url);
+			expect(params.provider).toBe('deepgram');
+		});
+
+		it('should map custom_openai alias to openai_custom', () => {
+			const url = 'ws://localhost:8080/transcribe?provider=custom_openai';
+			const params = extractSessionParameters(url);
+			expect(params.provider).toBe('openai_custom');
+		});
+
+		it('should map CUSTOM_OPENAI alias case-insensitively to openai_custom', () => {
+			const url = 'ws://localhost:8080/transcribe?provider=CUSTOM_OPENAI';
+			const params = extractSessionParameters(url);
+			expect(params.provider).toBe('openai_custom');
+		});
+
 		it('should filter out empty tag values', () => {
 			const url = 'ws://localhost:8080/transcribe?sessionId=test&tag=&tag=valid';
 			const params = extractSessionParameters(url);
