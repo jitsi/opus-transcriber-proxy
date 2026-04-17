@@ -236,9 +236,10 @@ async function handleWebSocketWithDispatcher(
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
 
-			const upgradeRequest = new Request('http://dispatcher/websocket', {
-				headers: { 'Upgrade': 'websocket' },
-			});
+			const upgradeRequest = new Request(
+				`http://dispatcher/websocket?sessionId=${encodeURIComponent(sessionId)}`,
+				{ headers: { 'Upgrade': 'websocket' } },
+			);
 			const doResponse = await stub.fetch(upgradeRequest);
 
 			if (doResponse.webSocket) {
@@ -295,9 +296,10 @@ async function handleWebSocketWithDispatcher(
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
 
-			const upgradeRequest = new Request('http://dispatcher/websocket', {
-				headers: { 'Upgrade': 'websocket' },
-			});
+			const upgradeRequest = new Request(
+				`http://dispatcher/websocket?sessionId=${encodeURIComponent(sessionId)}`,
+				{ headers: { 'Upgrade': 'websocket' } },
+			);
 			const doResponse = await stub.fetch(upgradeRequest);
 
 			if (doResponse.webSocket) {
