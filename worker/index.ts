@@ -229,10 +229,11 @@ async function handleWebSocketWithDispatcher(
 	containerWs.accept();
 
 	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
+	// Each session gets its own DO instance for isolation and geographic locality.
 	let dispatcherWs: WebSocket | null = null;
 	if (env.DISPATCHER_DO) {
 		try {
-			const doId = env.DISPATCHER_DO.idFromName('global');
+			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
 
 			const upgradeRequest = new Request('http://dispatcher/websocket', {
@@ -291,7 +292,7 @@ async function handleWebSocketWithDispatcher(
 		if (!env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
 
 		try {
-			const doId = env.DISPATCHER_DO.idFromName('global');
+			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
 
 			const upgradeRequest = new Request('http://dispatcher/websocket', {
