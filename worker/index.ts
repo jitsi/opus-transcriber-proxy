@@ -229,7 +229,7 @@ async function handleWebSocketWithDispatcher(
 	containerWs.accept();
 
 	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
-	// Each session gets its own DO instance for isolation and geographic locality.
+	// Each session gets its own DO instance for isolation.
 	let dispatcherWs: WebSocket | null = null;
 	if (env.DISPATCHER_DO) {
 		try {
@@ -512,7 +512,7 @@ export default {
 		const useDispatcher = useDispatcherParam !== null
 			? useDispatcherParam === 'true'
 			: env.USE_DISPATCHER === 'true';
-		const sessionId = url.searchParams.get('sessionId') || 'unknown';
+		const sessionId = url.searchParams.get('sessionId') || crypto.randomUUID();
 
 		// Select which container instance to use based on routing strategy
 		const containerInstanceId = await selectContainerInstance(request, env);
