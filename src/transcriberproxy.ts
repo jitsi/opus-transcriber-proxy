@@ -45,7 +45,7 @@ export class TranscriberProxy extends EventEmitter {
 	private audioPacketCount = 0;
 	private interimTranscriptionCount = 0;
 	private finalTranscriptionCount = 0;
-	private firstFrameLogged = false;
+	private firstFrameLoggedTags: Set<string> = new Set();
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -283,14 +283,14 @@ export class TranscriberProxy extends EventEmitter {
 			const hasAudio = typeof payloadB64 === 'string' && payloadB64.length > 0;
 			if (hasAudio) {
 				this.audioPacketCount++;
-				if (!this.firstFrameLogged) {
+				if (!this.firstFrameLoggedTags.has(tag)) {
 					const head = Buffer.from(payloadB64.slice(0, 64), 'base64');
 					const headHex = head.subarray(0, Math.min(16, head.length)).toString('hex');
-					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, head ${head.length} bytes=${headHex}>` };
+					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, first ${headHex.length / 2} decoded bytes=${headHex}>` };
 					logger.info(
 						`First client frame sniff: sessionId=${this.sessionId} tag=${tag} provider=${this.options.provider ?? 'default'} urlEncoding=${this.options.encoding ?? 'opus'} startFormat=${JSON.stringify(connection.getInputFormat())} media=${JSON.stringify(mediaSnapshot)}`,
 					);
-					this.firstFrameLogged = true;
+					this.firstFrameLoggedTags.add(tag);
 				}
 			}
 			connection.handleMediaEvent(parsedMessage);
