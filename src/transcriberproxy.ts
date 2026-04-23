@@ -45,7 +45,7 @@ export class TranscriberProxy extends EventEmitter {
 	private audioPacketCount = 0;
 	private interimTranscriptionCount = 0;
 	private finalTranscriptionCount = 0;
-	private firstFrameLoggedTags: Set<string> = new Set();
+	private firstFrameLoggedTags = new Set<string>();
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -284,11 +284,15 @@ export class TranscriberProxy extends EventEmitter {
 			if (hasAudio) {
 				this.audioPacketCount++;
 				if (!this.firstFrameLoggedTags.has(tag)) {
+					// 64 base64 chars decode to at most 48 bytes; we only emit the first 16.
 					const head = Buffer.from(payloadB64.slice(0, 64), 'base64');
-					const headHex = head.subarray(0, Math.min(16, head.length)).toString('hex');
-					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, first ${headHex.length / 2} decoded bytes=${headHex}>` };
+					const headByteCount = Math.min(16, head.length);
+					const headHex = head.subarray(0, headByteCount).toString('hex');
+					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, first ${headByteCount} decoded bytes=${headHex}>` };
+					// JSON-valued fields are quoted so that downstream logfmt-style parsers
+					// don't misinterpret spaces inside the JSON payload (e.g. inside `tag`).
 					logger.info(
-						`First client frame sniff: sessionId=${this.sessionId} tag=${tag} provider=${this.options.provider ?? 'default'} urlEncoding=${this.options.encoding ?? 'opus'} startFormat=${JSON.stringify(connection.getInputFormat())} media=${JSON.stringify(mediaSnapshot)}`,
+						`First client frame sniff: sessionId=${this.sessionId} tag=${tag} provider=${this.options.provider ?? 'default'} urlEncoding=${this.options.encoding ?? 'opus'} startFormat='${JSON.stringify(connection.getInputFormat())}' media='${JSON.stringify(mediaSnapshot)}'`,
 					);
 					this.firstFrameLoggedTags.add(tag);
 				}
@@ -367,6 +371,11 @@ export class TranscriberProxy extends EventEmitter {
 
 		// Re-setup listeners on new WebSocket
 		this.setupWebSocketListeners();
+
+		// Treat a reattach as a new connection for diagnostic purposes: the client
+		// may negotiate a different audio format on reconnect, so fire the
+		// first-frame sniff again on the first real audio packet per tag.
+		this.firstFrameLoggedTags.clear();
 
 		// Reset chunk tracking on all connections so frames from the new client
 		// aren't discarded as "reordered" (chunk numbers restart from 0)

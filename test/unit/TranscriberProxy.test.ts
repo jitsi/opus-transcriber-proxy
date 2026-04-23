@@ -53,6 +53,7 @@ vi.mock('../../src/OutgoingConnection', () => ({
 		this.addTranscriptContext = vi.fn();
 		this.updateInputFormat = vi.fn();
 		this.getInputFormat = vi.fn(() => inputFormat ?? { encoding: 'opus' });
+		this.resetChunkTracking = vi.fn();
 		this.close = vi.fn();
 		this.onInterimTranscription = undefined;
 		this.onCompleteTranscription = undefined;
@@ -599,7 +600,7 @@ describe('TranscriberProxy', () => {
 			const msg = sniffCalls[0][0] as string;
 			expect(msg).toContain('tag=tag1');
 			expect(msg).toContain('urlEncoding=opus');
-			expect(msg).toContain('startFormat={"encoding":"opus"}');
+			expect(msg).toContain(`startFormat='{"encoding":"opus"}'`);
 			expect(msg).toContain('4f676753'); // 'OggS' in hex
 			expect(msg).toContain(`<b64:${OGG_PAYLOAD.length} chars, first 4 decoded bytes=4f676753>`);
 		});
@@ -645,6 +646,21 @@ describe('TranscriberProxy', () => {
 			proxy.close();
 			const endCall = vi.mocked(logger.info).mock.calls.find(([msg]) => typeof msg === 'string' && msg.startsWith('Session ended:'));
 			expect(endCall?.[0]).toContain('audioPackets=1');
+		});
+
+		it('fires the first-frame sniff again after a WebSocket reattach', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 1, timestamp: 0 } });
+
+			vi.mocked(logger.info).mockClear();
+			proxy.reattachWebSocket({ addEventListener: vi.fn(), send: vi.fn(), close: vi.fn() } as any);
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			const sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(1);
 		});
 
 		it('emits a session-end summary with audioPackets, interims, finals, and provider', () => {
