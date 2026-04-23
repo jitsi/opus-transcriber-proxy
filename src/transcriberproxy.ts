@@ -42,6 +42,10 @@ export class TranscriberProxy extends EventEmitter {
 	private sessionId?: string;
 	private dispatcherConnection?: DispatcherConnection;
 	private createdAt: number;
+	private audioPacketCount = 0;
+	private interimTranscriptionCount = 0;
+	private finalTranscriptionCount = 0;
+	private firstFrameLogged = false;
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -158,9 +162,11 @@ export class TranscriberProxy extends EventEmitter {
 		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 
 		newConnection.onInterimTranscription = (message) => {
+			this.interimTranscriptionCount++;
 			this.emit('interim_transcription', message);
 		};
 		newConnection.onCompleteTranscription = (message) => {
+			this.finalTranscriptionCount++;
 			// Dump transcript if enabled
 			if (this.transcriptDumpStream) {
 				try {
@@ -273,6 +279,20 @@ export class TranscriberProxy extends EventEmitter {
 				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
 				connection = this.createConnection(tag, mediaFormat);
 			}
+			const payloadB64 = parsedMessage.media?.payload;
+			const hasAudio = typeof payloadB64 === 'string' && payloadB64.length > 0;
+			if (hasAudio) {
+				this.audioPacketCount++;
+				if (!this.firstFrameLogged) {
+					const head = Buffer.from(payloadB64.slice(0, 64), 'base64');
+					const headHex = head.subarray(0, Math.min(16, head.length)).toString('hex');
+					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, head ${head.length} bytes=${headHex}>` };
+					logger.info(
+						`First client frame sniff: sessionId=${this.sessionId} tag=${tag} provider=${this.options.provider ?? 'default'} urlEncoding=${this.options.encoding ?? 'opus'} startFormat=${JSON.stringify(connection.getInputFormat())} media=${JSON.stringify(mediaSnapshot)}`,
+					);
+					this.firstFrameLogged = true;
+				}
+			}
 			connection.handleMediaEvent(parsedMessage);
 		}
 	}
@@ -360,6 +380,9 @@ export class TranscriberProxy extends EventEmitter {
 	}
 
 	close(): void {
+		logger.info(
+			`Session ended: sessionId=${this.sessionId} provider=${this.options.provider ?? 'default'} audioPackets=${this.audioPacketCount} interims=${this.interimTranscriptionCount} finals=${this.finalTranscriptionCount} durationSec=${this.getSessionDurationSec().toFixed(1)}`,
+		);
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
 		});

@@ -72,6 +72,10 @@ export class OutgoingConnection {
 		this.initializeBackend();
 	}
 
+	getInputFormat(): AudioFormat {
+		return this.inputAudioFormat;
+	}
+
 	updateInputFormat(inputFormat: AudioFormat): void {
 		// Validate synchronously so callers get an immediate error rather than
 		// an async failure deep in reinitializeDecoder -> createAudioDecoder.

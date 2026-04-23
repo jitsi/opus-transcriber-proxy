@@ -46,12 +46,13 @@ vi.mock('../../src/config', () => ({
 // to `this` in the implementation do not persist on the created instance. Passing the
 // implementation directly to vi.fn() avoids this issue.
 vi.mock('../../src/OutgoingConnection', () => ({
-	OutgoingConnection: vi.fn(function (this: any, tag: string) {
+	OutgoingConnection: vi.fn(function (this: any, tag: string, inputFormat: unknown) {
 		this.localTag = tag;
 		this.participantId = tag.split('-')[0]; // Extract participant ID from tag like "participant1-ssrc123"
 		this.handleMediaEvent = vi.fn();
 		this.addTranscriptContext = vi.fn();
 		this.updateInputFormat = vi.fn();
+		this.getInputFormat = vi.fn(() => inputFormat ?? { encoding: 'opus' });
 		this.close = vi.fn();
 		this.onInterimTranscription = undefined;
 		this.onCompleteTranscription = undefined;
