@@ -57,6 +57,7 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		OPENAI_CUSTOM_REQUIRE_WSS: env.OPENAI_CUSTOM_REQUIRE_WSS || 'true',
 		FORCE_COMMIT_TIMEOUT: env.FORCE_COMMIT_TIMEOUT || '2',
 		DEBUG: env.DEBUG || 'true',
+		LOG_LEVEL: env.LOG_LEVEL || (env.DEBUG === 'true' ? 'debug' : 'info'),
 		ROUTING_MODE: env.ROUTING_MODE || 'session',
 		CONTAINER_POOL_SIZE: env.CONTAINER_POOL_SIZE || '5',
 		MAX_CONNECTIONS_PER_CONTAINER: env.MAX_CONNECTIONS_PER_CONTAINER || '10',

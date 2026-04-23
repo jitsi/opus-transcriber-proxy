@@ -34,6 +34,7 @@ export interface Env {
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;
+	LOG_LEVEL?: string;
 	ROUTING_MODE?: string;
 	CONTAINER_POOL_SIZE?: string;
 	MAX_CONNECTIONS_PER_CONTAINER?: string;
