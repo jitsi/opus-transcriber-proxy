@@ -23,6 +23,7 @@ vi.mock('../../src/logger', () => ({
 		error: vi.fn(),
 		warn: vi.fn(),
 		debug: vi.fn(),
+		isLevelEnabled: vi.fn(() => true),
 	},
 }));
 

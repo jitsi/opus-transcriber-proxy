@@ -73,7 +73,8 @@ export class OutgoingConnection {
 	}
 
 	getInputFormat(): AudioFormat {
-		return this.inputAudioFormat;
+		// Return a shallow copy so callers can't mutate the decoder's format state.
+		return { ...this.inputAudioFormat };
 	}
 
 	updateInputFormat(inputFormat: AudioFormat): void {
@@ -212,6 +213,9 @@ export class OutgoingConnection {
 		// DEBUG-only: summarises each transcription arriving from the backend so we
 		// can tell apart empty end-of-utterance finals from real speech without
 		// logging full PII.  Controlled by LOG_LEVEL=debug.
+		// Early-exit when debug isn't enabled so we don't allocate join/slice strings
+		// on every transcription in production.
+		if (!logger.isLevelEnabled('debug')) return;
 		const segments = message.transcript ?? [];
 		const text = segments.map((s) => s.text ?? '').join(' ').trim();
 		const preview = text.length > 40 ? text.slice(0, 40) + '…' : text;
