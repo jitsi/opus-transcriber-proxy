@@ -46,12 +46,14 @@ vi.mock('../../src/config', () => ({
 // to `this` in the implementation do not persist on the created instance. Passing the
 // implementation directly to vi.fn() avoids this issue.
 vi.mock('../../src/OutgoingConnection', () => ({
-	OutgoingConnection: vi.fn(function (this: any, tag: string) {
+	OutgoingConnection: vi.fn(function (this: any, tag: string, inputFormat: unknown) {
 		this.localTag = tag;
 		this.participantId = tag.split('-')[0]; // Extract participant ID from tag like "participant1-ssrc123"
 		this.handleMediaEvent = vi.fn();
 		this.addTranscriptContext = vi.fn();
 		this.updateInputFormat = vi.fn();
+		this.getInputFormat = vi.fn(() => inputFormat ?? { encoding: 'opus' });
+		this.resetChunkTracking = vi.fn();
 		this.close = vi.fn();
 		this.onInterimTranscription = undefined;
 		this.onCompleteTranscription = undefined;
@@ -576,6 +578,117 @@ describe('TranscriberProxy', () => {
 
 			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
 			expect(conn.handleMediaEvent).toHaveBeenCalledWith(mediaEvent);
+		});
+	});
+
+	describe('diagnostic logging', () => {
+		// 'T2dnUw==' is base64 for 'OggS' — the Ogg page capture pattern.
+		const OGG_PAYLOAD = 'T2dnUw==';
+
+		it('logs the first client frame sniff exactly once per tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			vi.mocked(logger.info).mockClear();
+
+			const media1 = { event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } };
+			proxy.handleMediaEvent(media1);
+			proxy.handleMediaEvent(media1);
+			proxy.handleMediaEvent(media1);
+
+			const sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(1);
+			const msg = sniffCalls[0][0] as string;
+			expect(msg).toContain('tag=tag1');
+			expect(msg).toContain('urlEncoding=opus');
+			expect(msg).toContain(`startFormat='{"encoding":"opus"}'`);
+			expect(msg).toContain('4f676753'); // 'OggS' in hex
+			expect(msg).toContain(`<b64:${OGG_PAYLOAD.length} chars, first 4 decoded bytes=4f676753>`);
+		});
+
+		it('logs the first client frame sniff once per participant tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag2', mediaFormat: { encoding: 'opus' } } });
+			vi.mocked(logger.info).mockClear();
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag2', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 1, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag2', payload: OGG_PAYLOAD, chunk: 1, timestamp: 0 } });
+
+			const sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(2);
+			expect(sniffCalls[0][0]).toContain('tag=tag1');
+			expect(sniffCalls[1][0]).toContain('tag=tag2');
+		});
+
+		it('does not sniff or count empty-payload frames, and retries the sniff on the next real frame', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			vi.mocked(logger.info).mockClear();
+
+			// Missing payload → should not log, should not flip the flag
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', chunk: 0, timestamp: 0 } });
+			// Empty-string payload → same
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: '', chunk: 1, timestamp: 0 } });
+
+			let sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(0);
+
+			// Real audio frame → sniff now fires (not short-circuited by prior empty frames)
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 2, timestamp: 0 } });
+
+			sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(1);
+
+			// Session-end summary reflects that only the real frame was counted as audio
+			vi.mocked(logger.info).mockClear();
+			proxy.close();
+			const endCall = vi.mocked(logger.info).mock.calls.find(([msg]) => typeof msg === 'string' && msg.startsWith('Session ended:'));
+			expect(endCall?.[0]).toContain('audioPackets=1');
+		});
+
+		it('fires the first-frame sniff again after a WebSocket reattach', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 1, timestamp: 0 } });
+
+			vi.mocked(logger.info).mockClear();
+			proxy.reattachWebSocket({ addEventListener: vi.fn(), send: vi.fn(), close: vi.fn() } as any);
+
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			const sniffCalls = vi.mocked(logger.info).mock.calls.filter(([msg]) => typeof msg === 'string' && msg.startsWith('First client frame sniff:'));
+			expect(sniffCalls).toHaveLength(1);
+		});
+
+		it('emits a session-end summary with audioPackets, interims, finals, and provider', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, { ...options, provider: 'deepgram' });
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' } } });
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0] as any;
+
+			// 3 audio packets
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 0, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 1, timestamp: 0 } });
+			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 2, timestamp: 0 } });
+
+			// 2 interims + 1 final via the connection callbacks
+			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'a', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
+			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'b', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
+			conn.onCompleteTranscription({ transcript: [{ text: 'hi' }], is_interim: false, message_id: 'c', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
+
+			vi.mocked(logger.info).mockClear();
+			proxy.close();
+
+			const endCall = vi.mocked(logger.info).mock.calls.find(([msg]) => typeof msg === 'string' && msg.startsWith('Session ended:'));
+			expect(endCall).toBeDefined();
+			const endMsg = endCall![0] as string;
+			expect(endMsg).toContain('provider=deepgram');
+			expect(endMsg).toContain('audioPackets=3');
+			expect(endMsg).toContain('interims=2');
+			expect(endMsg).toContain('finals=1');
+			expect(endMsg).toMatch(/durationSec=\d+\.\d/);
 		});
 	});
 });

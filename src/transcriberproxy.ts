@@ -42,6 +42,10 @@ export class TranscriberProxy extends EventEmitter {
 	private sessionId?: string;
 	private dispatcherConnection?: DispatcherConnection;
 	private createdAt: number;
+	private audioPacketCount = 0;
+	private interimTranscriptionCount = 0;
+	private finalTranscriptionCount = 0;
+	private firstFrameLoggedTags = new Set<string>();
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -158,9 +162,11 @@ export class TranscriberProxy extends EventEmitter {
 		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
 
 		newConnection.onInterimTranscription = (message) => {
+			this.interimTranscriptionCount++;
 			this.emit('interim_transcription', message);
 		};
 		newConnection.onCompleteTranscription = (message) => {
+			this.finalTranscriptionCount++;
 			// Dump transcript if enabled
 			if (this.transcriptDumpStream) {
 				try {
@@ -273,6 +279,24 @@ export class TranscriberProxy extends EventEmitter {
 				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
 				connection = this.createConnection(tag, mediaFormat);
 			}
+			const payloadB64 = parsedMessage.media?.payload;
+			const hasAudio = typeof payloadB64 === 'string' && payloadB64.length > 0;
+			if (hasAudio) {
+				this.audioPacketCount++;
+				if (!this.firstFrameLoggedTags.has(tag)) {
+					// 64 base64 chars decode to at most 48 bytes; we only emit the first 16.
+					const head = Buffer.from(payloadB64.slice(0, 64), 'base64');
+					const headByteCount = Math.min(16, head.length);
+					const headHex = head.subarray(0, headByteCount).toString('hex');
+					const mediaSnapshot = { ...parsedMessage.media, payload: `<b64:${payloadB64.length} chars, first ${headByteCount} decoded bytes=${headHex}>` };
+					// JSON-valued fields are quoted so that downstream logfmt-style parsers
+					// don't misinterpret spaces inside the JSON payload (e.g. inside `tag`).
+					logger.info(
+						`First client frame sniff: sessionId=${this.sessionId} tag=${tag} provider=${this.options.provider ?? 'default'} urlEncoding=${this.options.encoding ?? 'opus'} startFormat='${JSON.stringify(connection.getInputFormat())}' media='${JSON.stringify(mediaSnapshot)}'`,
+					);
+					this.firstFrameLoggedTags.add(tag);
+				}
+			}
 			connection.handleMediaEvent(parsedMessage);
 		}
 	}
@@ -348,6 +372,11 @@ export class TranscriberProxy extends EventEmitter {
 		// Re-setup listeners on new WebSocket
 		this.setupWebSocketListeners();
 
+		// Treat a reattach as a new connection for diagnostic purposes: the client
+		// may negotiate a different audio format on reconnect, so fire the
+		// first-frame sniff again on the first real audio packet per tag.
+		this.firstFrameLoggedTags.clear();
+
 		// Reset chunk tracking on all connections so frames from the new client
 		// aren't discarded as "reordered" (chunk numbers restart from 0)
 		this.outgoingConnections.forEach((connection, tag) => {
@@ -360,6 +389,9 @@ export class TranscriberProxy extends EventEmitter {
 	}
 
 	close(): void {
+		logger.info(
+			`Session ended: sessionId=${this.sessionId} provider=${this.options.provider ?? 'default'} audioPackets=${this.audioPacketCount} interims=${this.interimTranscriptionCount} finals=${this.finalTranscriptionCount} durationSec=${this.getSessionDurationSec().toFixed(1)}`,
+		);
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
 		});
