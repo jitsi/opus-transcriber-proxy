@@ -204,10 +204,11 @@ ws.on('message', (data) => {
             if (!parsed.is_interim) {
                 const text = parsed.transcript?.map(t => t.text).join(' ') || '';
                 const participantId = parsed.participant?.id || 'unknown';
+                const speakerPrefix = parsed.speaker !== undefined ? `[Speaker ${parsed.speaker}] ` : '';
 
                 // Clear status line, print transcript, redraw status
                 process.stdout.write('\r' + ' '.repeat(120) + '\r');
-                console.log(`[${participantId}] ${text}`);
+                console.log(`[${participantId}] ${speakerPrefix}${text}`);
             }
         }
     } catch (error) {

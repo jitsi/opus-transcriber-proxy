@@ -18,6 +18,7 @@ export interface TranscriptionMessage {
 	event: 'transcription-result';
 	participant: { id: string; ssrc?: string };
 	timestamp: number;
+	speaker?: number;
 }
 
 export interface TranscriberProxyOptions {
