@@ -189,7 +189,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
 - When `DEEPGRAM_DIARIZE=true` and word-level `speaker` indices are present, results are split per speaker segment; each message carries a `speaker: number` field
-- When `DEEPGRAM_INCLUDE_LANGUAGE=true`, the detected language (e.g. `[en]`) is appended to the transcript text in both the standard and diarized paths; `alternative.languages` is passed through to `handleDiarizedResult` for this purpose
+- When Deepgram provides `alternative.languages`, the first entry is always set as the `language` property on the `TranscriptionMessage` (both standard and diarized paths), unconditionally. `DEEPGRAM_INCLUDE_LANGUAGE=true` additionally appends the language as a text suffix (e.g. `[en]`) — these are independent behaviours
 
 **Gemini**
 - Multimodal model (primarily used for audio here)

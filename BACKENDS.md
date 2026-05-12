@@ -148,7 +148,8 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
   - Defaults to `language=multi` for automatic multilingual code-switching (31+ languages with Nova-3)
   - Can specify single language (e.g., `en`, `es`, `fr`, `de`, `pt`, etc.)
   - Automatically adds `endpointing=100` for multilingual mode (recommended for code-switching)
-  - Optional: Include detected language in transcript (e.g., `"Hello [en]"`) via `DEEPGRAM_INCLUDE_LANGUAGE=true`; applies to both the standard and diarized paths (language suffix is appended to each speaker segment)
+  - The detected language is always set as the `language` property on the transcription event when provided by Deepgram (applies to both standard and diarized paths), regardless of `DEEPGRAM_INCLUDE_LANGUAGE`
+  - Optional: Also append language as a text suffix (e.g., `"Hello [en]"`) via `DEEPGRAM_INCLUDE_LANGUAGE=true`
   - **Note**: `detect_language` parameter is NOT supported for streaming (only for pre-recorded audio)
 - Generates unique UUID for each transcription message
 - **Tagging support**:

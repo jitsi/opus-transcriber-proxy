@@ -443,6 +443,50 @@ describe('DeepgramBackend', () => {
 			expect(transcription.is_interim).toBe(false);
 		});
 
+		it('should set language property when backend provides languages', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const onCompleteSpy = vi.fn();
+			backend.onCompleteTranscription = onCompleteSpy;
+
+			const connectPromise = backend.connect({ model: 'nova-2', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({
+				type: 'Results',
+				is_final: true,
+				channel: {
+					alternatives: [{ transcript: 'Hello', confidence: 0.98, languages: ['es'] }],
+				},
+			}));
+
+			const msg: TranscriptionMessage = onCompleteSpy.mock.calls[0][0];
+			expect(msg.language).toBe('es');
+			// text should NOT have suffix when includeLanguage=false (default)
+			expect(msg.transcript[0].text).toBe('Hello');
+		});
+
+		it('should not set language property when backend provides no languages', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const onCompleteSpy = vi.fn();
+			backend.onCompleteTranscription = onCompleteSpy;
+
+			const connectPromise = backend.connect({ model: 'nova-2', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({
+				type: 'Results',
+				is_final: true,
+				channel: {
+					alternatives: [{ transcript: 'Hello', confidence: 0.98 }],
+				},
+			}));
+
+			const msg: TranscriptionMessage = onCompleteSpy.mock.calls[0][0];
+			expect(msg.language).toBeUndefined();
+		});
+
 		it('should skip empty transcripts', async () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const onInterimSpy = vi.fn();
@@ -908,8 +952,10 @@ describe('DeepgramBackend', () => {
 			const msg1: TranscriptionMessage = onCompleteSpy.mock.calls[1][0];
 			expect(msg0.transcript[0].text).toBe('Hello world, [en]');
 			expect(msg0.speaker).toBe(0);
+			expect(msg0.language).toBe('en');
 			expect(msg1.transcript[0].text).toBe('yes indeed. [en]');
 			expect(msg1.speaker).toBe(1);
+			expect(msg1.language).toBe('en');
 
 			(config.deepgram as any).includeLanguage = false;
 		});
@@ -939,7 +985,9 @@ describe('DeepgramBackend', () => {
 
 			expect(onCompleteSpy).toHaveBeenCalledTimes(2);
 			expect(onCompleteSpy.mock.calls[0][0].transcript[0].text).toBe('Hello');
+			expect(onCompleteSpy.mock.calls[0][0].language).toBe('fr');
 			expect(onCompleteSpy.mock.calls[1][0].transcript[0].text).toBe('yes.');
+			expect(onCompleteSpy.mock.calls[1][0].language).toBe('fr');
 		});
 
 		it('should not set speaker field when diarize=false even if words are present', async () => {
