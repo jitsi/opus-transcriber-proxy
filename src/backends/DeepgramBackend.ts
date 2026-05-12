@@ -339,7 +339,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 			alternative.words.length > 0 &&
 			alternative.words[0].speaker !== undefined
 		) {
-			this.handleDiarizedResult(alternative.words, isFinal);
+			this.handleDiarizedResult(alternative.words, isFinal, alternative.languages);
 			return;
 		}
 
@@ -369,7 +369,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 		}
 	}
 
-	private handleDiarizedResult(words: any[], isFinal: boolean): void {
+	private handleDiarizedResult(words: any[], isFinal: boolean, languages?: string[]): void {
 		// Group consecutive words by speaker index
 		const segments: Array<{ speaker: number; words: any[] }> = [];
 		for (const word of words) {
@@ -382,14 +382,23 @@ export class DeepgramBackend implements TranscriptionBackend {
 			}
 		}
 
+		const languageSuffix =
+			config.deepgram.includeLanguage && languages && languages.length > 0
+				? ` [${languages[0]}]`
+				: '';
+
 		const now = Date.now();
 		for (const segment of segments) {
-			const text = segment.words
+			let text = segment.words
 				.map((w: any) => w.punctuated_word ?? w.word)
 				.join(' ')
 				.trim();
 
 			if (!text) continue;
+
+			if (languageSuffix) {
+				text += languageSuffix;
+			}
 
 			const wordConfidences = segment.words
 				.map((w: any) => w.confidence)

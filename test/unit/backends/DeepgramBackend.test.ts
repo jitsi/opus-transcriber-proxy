@@ -877,6 +877,71 @@ describe('DeepgramBackend', () => {
 			expect(msg.speaker).toBeUndefined();
 		});
 
+		it('should append language suffix to each speaker segment when diarize=true and includeLanguage=true', async () => {
+			(config.deepgram as any).includeLanguage = true;
+			const { onCompleteSpy } = await connectBackend(true);
+
+			const resultsMessage = {
+				type: 'Results',
+				is_final: true,
+				channel: {
+					alternatives: [
+						{
+							transcript: 'Hello world yes indeed',
+							confidence: 0.97,
+							languages: ['en'],
+							words: [
+								{ word: 'Hello', punctuated_word: 'Hello', confidence: 0.99, speaker: 0 },
+								{ word: 'world', punctuated_word: 'world,', confidence: 0.98, speaker: 0 },
+								{ word: 'yes', punctuated_word: 'yes', confidence: 0.95, speaker: 1 },
+								{ word: 'indeed', punctuated_word: 'indeed.', confidence: 0.96, speaker: 1 },
+							],
+						},
+					],
+				},
+			};
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify(resultsMessage));
+
+			expect(onCompleteSpy).toHaveBeenCalledTimes(2);
+			const msg0: TranscriptionMessage = onCompleteSpy.mock.calls[0][0];
+			const msg1: TranscriptionMessage = onCompleteSpy.mock.calls[1][0];
+			expect(msg0.transcript[0].text).toBe('Hello world, [en]');
+			expect(msg0.speaker).toBe(0);
+			expect(msg1.transcript[0].text).toBe('yes indeed. [en]');
+			expect(msg1.speaker).toBe(1);
+
+			(config.deepgram as any).includeLanguage = false;
+		});
+
+		it('should not append language suffix when diarize=true and includeLanguage=false', async () => {
+			const { onCompleteSpy } = await connectBackend(true);
+
+			const resultsMessage = {
+				type: 'Results',
+				is_final: true,
+				channel: {
+					alternatives: [
+						{
+							transcript: 'Hello yes',
+							confidence: 0.97,
+							languages: ['fr'],
+							words: [
+								{ word: 'Hello', punctuated_word: 'Hello', confidence: 0.99, speaker: 0 },
+								{ word: 'yes', punctuated_word: 'yes.', confidence: 0.95, speaker: 1 },
+							],
+						},
+					],
+				},
+			};
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify(resultsMessage));
+
+			expect(onCompleteSpy).toHaveBeenCalledTimes(2);
+			expect(onCompleteSpy.mock.calls[0][0].transcript[0].text).toBe('Hello');
+			expect(onCompleteSpy.mock.calls[1][0].transcript[0].text).toBe('yes.');
+		});
+
 		it('should not set speaker field when diarize=false even if words are present', async () => {
 			const { onCompleteSpy } = await connectBackend(false);
 
