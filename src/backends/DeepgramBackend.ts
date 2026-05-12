@@ -324,49 +324,101 @@ export class DeepgramBackend implements TranscriptionBackend {
 	}
 
 	private handleTranscriptResult(result: any): void {
-		// Extract transcript from results
 		const channel = result.channel;
 		if (!channel || !channel.alternatives || channel.alternatives.length === 0) {
 			return;
 		}
 
 		const alternative = channel.alternatives[0];
-		let transcript = alternative.transcript;
+		const isFinal = result.is_final === true;
 
-		// Skip empty transcripts
+		// When diarization is enabled and word-level speaker data is present, split by speaker.
+		if (
+			config.deepgram.diarize &&
+			Array.isArray(alternative.words) &&
+			alternative.words.length > 0 &&
+			alternative.words[0].speaker !== undefined
+		) {
+			this.handleDiarizedResult(alternative.words, isFinal, alternative.languages);
+			return;
+		}
+
+		// Standard (non-diarized) path
+		let transcript = alternative.transcript;
 		if (!transcript || transcript.trim() === '') {
 			return;
 		}
 
 		const confidence = alternative.confidence;
-		const isFinal = result.is_final === true;
+		const language: string | undefined =
+			alternative.languages && alternative.languages.length > 0 ? alternative.languages[0] : undefined;
 
-		// Append detected language if configured
-		if (config.deepgram.includeLanguage && alternative.languages && alternative.languages.length > 0) {
-			// Use the first (dominant) language
-			const detectedLanguage = alternative.languages[0];
-			transcript = `${transcript} [${detectedLanguage}]`;
+		if (config.deepgram.includeLanguage && language) {
+			transcript = `${transcript} [${language}]`;
 		}
 
 		logger.debug(
 			`Received ${isFinal ? 'final' : 'interim'} transcription from Deepgram for ${this.tag}: ${transcript} (confidence: ${confidence})`,
 		);
 
-		// Create transcription message
 		// Note: Deepgram's request_id is per-session, not per-message, so we generate unique UUIDs
-		const transcriptionMessage = this.createTranscriptionMessage(
-			transcript,
-			confidence,
-			Date.now(),
-			randomUUID(),
-			!isFinal,
-		);
+		const transcriptionMessage = this.createTranscriptionMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language);
 
-		// Call appropriate callback
 		if (isFinal) {
 			this.onCompleteTranscription?.(transcriptionMessage);
 		} else {
 			this.onInterimTranscription?.(transcriptionMessage);
+		}
+	}
+
+	private handleDiarizedResult(words: any[], isFinal: boolean, languages?: string[]): void {
+		// Group consecutive words by speaker index
+		const segments: Array<{ speaker: number; words: any[] }> = [];
+		for (const word of words) {
+			const speaker = word.speaker as number;
+			const last = segments[segments.length - 1];
+			if (last && last.speaker === speaker) {
+				last.words.push(word);
+			} else {
+				segments.push({ speaker, words: [word] });
+			}
+		}
+
+		const language: string | undefined = languages && languages.length > 0 ? languages[0] : undefined;
+		const languageSuffix = config.deepgram.includeLanguage && language ? ` [${language}]` : '';
+
+		const now = Date.now();
+		for (const segment of segments) {
+			let text = segment.words
+				.map((w: any) => w.punctuated_word ?? w.word)
+				.join(' ')
+				.trim();
+
+			if (!text) continue;
+
+			if (languageSuffix) {
+				text += languageSuffix;
+			}
+
+			const wordConfidences = segment.words
+				.map((w: any) => w.confidence)
+				.filter((c: any) => typeof c === 'number');
+			const confidence =
+				wordConfidences.length > 0
+					? wordConfidences.reduce((a: number, b: number) => a + b, 0) / wordConfidences.length
+					: undefined;
+
+			logger.debug(
+				`Received ${isFinal ? 'final' : 'interim'} transcription from Deepgram for ${this.tag} speaker ${segment.speaker}: ${text} (confidence: ${confidence})`,
+			);
+
+			const message = this.createTranscriptionMessage(text, confidence, now, randomUUID(), !isFinal, segment.speaker, language);
+
+			if (isFinal) {
+				this.onCompleteTranscription?.(message);
+			} else {
+				this.onInterimTranscription?.(message);
+			}
 		}
 	}
 
@@ -376,6 +428,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 		timestamp: number,
 		message_id: string,
 		isInterim: boolean,
+		speaker?: number,
+		language?: string,
 	): TranscriptionMessage {
 		const message: TranscriptionMessage = {
 			transcript: [
@@ -390,6 +444,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 			event: 'transcription-result',
 			participant: this.participantInfo,
 			timestamp,
+			...(speaker !== undefined && { speaker }),
+			...(language !== undefined && { language }),
 		};
 		return message;
 	}
