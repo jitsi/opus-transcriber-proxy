@@ -2,6 +2,7 @@
 default: dist
 
 OPUS_DECODER_SRC=src/OpusDecoder
+OPUS_ENCODER_SRC=src/OpusEncoder
 OPUS_DECODER_BUILD=./build
 OPUS_DECODER_DIST=./dist
 
@@ -11,6 +12,13 @@ OPUS_DECODER_EMSCRIPTEN_WASM_MAP=$(OPUS_DECODER_BUILD)/EmscriptenWasm.tmp.wasm.m
 OPUS_DECODER_MODULE=$(OPUS_DECODER_DIST)/opus-decoder.js
 OPUS_DECODER_WASM=$(OPUS_DECODER_DIST)/opus-decoder.wasm
 OPUS_DECODER_WASM_MAP=$(OPUS_DECODER_DIST)/opus-decoder.wasm.map
+
+OPUS_ENCODER_EMSCRIPTEN_BUILD=$(OPUS_DECODER_BUILD)/EmscriptenWasmEncoder.tmp.js
+OPUS_ENCODER_EMSCRIPTEN_WASM=$(OPUS_DECODER_BUILD)/EmscriptenWasmEncoder.tmp.wasm
+OPUS_ENCODER_EMSCRIPTEN_WASM_MAP=$(OPUS_DECODER_BUILD)/EmscriptenWasmEncoder.tmp.wasm.map
+OPUS_ENCODER_MODULE=$(OPUS_DECODER_DIST)/opus-encoder.js
+OPUS_ENCODER_WASM=$(OPUS_DECODER_DIST)/opus-encoder.wasm
+OPUS_ENCODER_WASM_MAP=$(OPUS_DECODER_DIST)/opus-encoder.wasm.map
 
 LIBOPUS_SRC=$(OPUS_DECODER_SRC)/opus
 LIBOPUS_BUILD=$(OPUS_DECODER_BUILD)/build-opus-wasm
@@ -22,7 +30,7 @@ clean:
 
 configure: libopus-configure
 
-dist: opus-decoder
+dist: opus-decoder opus-encoder
 distclean: clean
 	rm -rf $(OPUS_DECODER_BUILD) $(OPUS_DECODER_DIST)
 
@@ -121,3 +129,51 @@ libopus-configure: $(LIBOPUS_BUILD)/Makefile
 
 $(LIBOPUS_SRC)/configure: $(LIBOPUS_SRC)/configure.ac
 	cd $(LIBOPUS_SRC); ./autogen.sh
+
+# ------------------
+# opus-encoder
+# ------------------
+opus-encoder: opus-wasmlib $(OPUS_ENCODER_EMSCRIPTEN_BUILD)
+	mkdir -p $(OPUS_DECODER_DIST)
+	cp $(OPUS_ENCODER_EMSCRIPTEN_BUILD) $(OPUS_ENCODER_MODULE)
+	@if [ -f "$(OPUS_ENCODER_EMSCRIPTEN_WASM)" ]; then \
+		cp $(OPUS_ENCODER_EMSCRIPTEN_WASM) $(OPUS_ENCODER_WASM); \
+		echo "Copied encoder WASM file to $(OPUS_ENCODER_WASM)"; \
+	else \
+		echo "Warning: encoder WASM file not found"; \
+	fi
+	@if [ -f "$(OPUS_ENCODER_EMSCRIPTEN_WASM_MAP)" ]; then \
+		cp $(OPUS_ENCODER_EMSCRIPTEN_WASM_MAP) $(OPUS_ENCODER_WASM_MAP); \
+		echo "Copied encoder WASM source map to $(OPUS_ENCODER_WASM_MAP)"; \
+	fi
+
+define OPUS_ENCODER_EMCC_OPTS
+-s INITIAL_MEMORY=28MB \
+-s EXPORTED_FUNCTIONS="[ \
+    '_free', '_malloc' \
+  , '_opus_frame_encoder_create' \
+  , '_opus_frame_encoder_get_frame_size' \
+  , '_opus_frame_encode' \
+  , '_opus_frame_encoder_destroy' \
+  , '_opus_frame_encoder_set_bitrate' \
+  , '_opus_frame_encoder_set_complexity' \
+]" \
+-s EXPORTED_RUNTIME_METHODS="['wasmMemory', 'HEAPU8']" \
+-I "$(LIBOPUS_SRC)/include" \
+$(OPUS_ENCODER_SRC)/opus_frame_encoder.c
+endef
+
+$(OPUS_ENCODER_EMSCRIPTEN_BUILD): $(LIBOPUS_WASM_LIB) $(OPUS_ENCODER_SRC)/opus_frame_encoder.c $(OPUS_ENCODER_SRC)/opus_frame_encoder.h
+	mkdir -p $(OPUS_DECODER_BUILD)
+	@ echo "Building Emscripten WebAssembly encoder module $(OPUS_ENCODER_EMSCRIPTEN_BUILD)..."
+	emcc \
+		-o "$(OPUS_ENCODER_EMSCRIPTEN_BUILD)" \
+	  ${EMCC_OPTS} \
+	  -s EXPORT_NAME="OpusEncoderModule" \
+	  $(OPUS_ENCODER_EMCC_OPTS) \
+	  $(LIBOPUS_WASM_LIB)
+	@ echo "+-------------------------------------------------------------------------------"
+	@ echo "|"
+	@ echo "|  Successfully built JS Module: $(OPUS_ENCODER_EMSCRIPTEN_BUILD)"
+	@ echo "|"
+	@ echo "+-------------------------------------------------------------------------------"
