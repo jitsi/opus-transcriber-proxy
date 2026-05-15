@@ -28,6 +28,7 @@ export interface Env {
 	DEEPGRAM_MODEL?: string;
 	DEEPGRAM_DETECT_LANGUAGE?: string;
 	DEEPGRAM_INCLUDE_LANGUAGE?: string;
+	DEEPGRAM_DIARIZE?: string;
 	DEEPGRAM_PUNCTUATE?: string;
 	DEEPGRAM_ENCODING?: string;
 	DEEPGRAM_TAGS?: string;
