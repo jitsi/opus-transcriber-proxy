@@ -3,6 +3,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
 import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
+import { TranslatorProxy } from './translatorproxy';
+import { normalizeTargetLanguage } from './TranslatorConnection';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -55,9 +57,17 @@ server.on('upgrade', (request, socket, head) => {
 	logger.debug('Session parameters:', JSON.stringify(parameters));
 
 	// Validate path
-	if (!parameters.url.pathname.endsWith('/transcribe')) {
+	if (!parameters.url.pathname.endsWith('/transcribe') && !parameters.url.pathname.endsWith('/translate')) {
 		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nBad URL');
 		socket.destroy();
+		return;
+	}
+
+	// Handle /translate endpoint separately
+	if (parameters.url.pathname.endsWith('/translate')) {
+		wss.handleUpgrade(request, socket, head, (ws) => {
+			handleTranslatorConnection(ws, parameters);
+		});
 		return;
 	}
 
@@ -224,6 +234,101 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
+	});
+}
+
+function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
+	const { url } = parameters;
+	const sendBack = parameters.sendBack;
+
+	// Seed the initially-active target languages from the URL, if present. JVB
+	// connects without a `lang` param and drives languages dynamically via
+	// start-translation / stop-translation control frames; simple/dev clients
+	// (e.g. the replay tool) can opt in up front with `?lang=en` or `?lang=en,de`.
+	// gpt-realtime-translate accepts a 2-letter ISO code under
+	// session.audio.output.language; we accept ISO codes ("en") and English full
+	// names ("english"), normalising to ISO before passing to the proxy.
+	let initialLanguages: string[] = [];
+	const langParam = url.searchParams.get('lang');
+	if (langParam) {
+		try {
+			initialLanguages = langParam
+				.split(',')
+				.map((l) => l.trim())
+				.filter((l) => l.length > 0)
+				.map((l) => normalizeTargetLanguage(l));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			logger.error(`Rejecting /translate connection: ${msg}`);
+			ws.close(1002, msg);
+			return;
+		}
+	}
+
+	const translateSession = new TranslatorProxy(ws, {
+		initialLanguages,
+		provider: parameters.provider,
+	});
+
+	translateSession.on('closed', () => {
+		if (ws.readyState === ws.OPEN) {
+			ws.close();
+		}
+	});
+
+	translateSession.on('error', (tag: string, error: any) => {
+		const message = `Error in translation session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+		logger.error(message);
+		try {
+			ws.close(1011, message);
+		} catch {
+			// ignore
+		}
+	});
+
+	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
+		if (sendBack) {
+			const msg: TranscriptionMessage = {
+				transcript: [{ text: data.transcript }],
+				is_interim: false,
+				language: data.targetLanguage,
+				message_id: `translation-${data.tag}-${Date.now()}`,
+				type: 'transcription-result',
+				event: 'transcription-result',
+				participant: { id: data.tag },
+				timestamp: Date.now(),
+			};
+			try {
+				ws.send(JSON.stringify(msg));
+			} catch {
+				// ignore
+			}
+		}
+	});
+
+	translateSession.on('audioFrame', (data: { tag: string; language: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
+		if (sendBack) {
+			// The bridge's mediajson `Media` model carries no `language` field, so
+			// the target language is encoded as a "~{lang}" suffix on the tag. This
+			// lets the bridge attribute each translated frame to the correct
+			// per-(speaker, language) source when multiple languages are active over
+			// this one socket. The speaker tag itself never contains "~".
+			const audioMessage = {
+				event: 'media',
+				sequenceNumber: data.sequenceNumber.toString(),
+				media: {
+					tag: `${data.tag}~${data.language}`,
+					chunk: data.chunk.toString(),
+					timestamp: data.timestamp.toString(),
+					payload: data.payload,
+				},
+			};
+			try {
+				ws.send(JSON.stringify(audioMessage));
+			} catch {
+				// ignore
+			}
+		}
 	});
 }
 

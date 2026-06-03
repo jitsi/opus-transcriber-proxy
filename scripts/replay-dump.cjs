@@ -50,10 +50,16 @@ function updateStatusLine(current, total, remainingSec) {
 const dumpFile = process.argv[2];
 const wsUrl = process.argv[3];
 
-// Parse remaining args: optional speed (positional) and -H/--header flags
+// Parse remaining args: optional speed (positional), -H/--header, --capture-translated
 const extraArgs = process.argv.slice(4);
 let speed = 1.0;
 const extraHeaders = {};
+let captureTranslatedPath = null;
+// Hold the WebSocket open after the last replay message before closing, so the
+// server has time to deliver any in-flight responses (e.g. tail-end translated
+// audio from a simultaneous interpreter). Default 5 s — enough for gpt-realtime-translate
+// to finish a typical ~30-word utterance.
+let lingerMs = 5000;
 
 for (let i = 0; i < extraArgs.length; i++) {
     const arg = extraArgs[i];
@@ -71,6 +77,18 @@ for (let i = 0; i < extraArgs.length; i++) {
         const name = header.slice(0, colonIdx).trim();
         const value = header.slice(colonIdx + 1).trim();
         extraHeaders[name] = value;
+    } else if (arg === '--capture-translated') {
+        captureTranslatedPath = extraArgs[++i];
+        if (!captureTranslatedPath) {
+            console.error(`Error: --capture-translated requires a WAV output path`);
+            process.exit(1);
+        }
+    } else if (arg === '--linger-ms') {
+        lingerMs = parseInt(extraArgs[++i], 10);
+        if (!Number.isFinite(lingerMs) || lingerMs < 0) {
+            console.error(`Error: --linger-ms must be a non-negative integer`);
+            process.exit(1);
+        }
     } else if (!isNaN(parseFloat(arg)) && i === 0) {
         speed = parseFloat(arg);
     } else {
@@ -166,7 +184,14 @@ ws.on('open', () => {
             clearInterval(statusInterval);
             process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
             console.log('\nReplay complete!');
-            ws.close();
+            if (lingerMs > 0) {
+                console.log(`Lingering ${lingerMs}ms for tail-end response audio…`);
+                setTimeout(() => {
+                    ws.close();
+                }, lingerMs);
+            } else {
+                ws.close();
+            }
             return;
         }
 
@@ -194,6 +219,97 @@ ws.on('open', () => {
     sendNextMessage();
 });
 
+// Lazy WASM decoder for --capture-translated. Initialised on the first
+// translated audio event so plain replays don't pay the load cost.
+// The /translate endpoint emits "event":"media" with opus payloads at 24 kHz mono.
+let translatedCapture = null;
+
+const CAPTURE_SAMPLE_RATE = 24000;
+
+async function initTranslatedCapture(wavPath) {
+    const OpusDecoderModule = require('../dist/opus-decoder.cjs');
+    const path = require('path');
+    const wasmBuffer = fs.readFileSync(path.join(__dirname, '../dist/opus-decoder.wasm'));
+    const wasmModule = new WebAssembly.Module(wasmBuffer);
+
+    const wasm = await new Promise((resolve, reject) => {
+        OpusDecoderModule({
+            instantiateWasm(info, receive) {
+                try {
+                    const instance = new WebAssembly.Instance(wasmModule, info);
+                    receive(instance);
+                    return instance.exports;
+                } catch (e) {
+                    reject(e);
+                    throw e;
+                }
+            },
+        }).then(m => resolve({
+            decoder: m._opus_frame_decoder_create(CAPTURE_SAMPLE_RATE, 1),
+            decode: m._opus_frame_decode,
+            destroy: m._opus_frame_decoder_destroy,
+            malloc: m._malloc,
+            free: m._free,
+            HEAP: m.wasmMemory.buffer,
+        })).catch(reject);
+    });
+
+    if (wasm.decoder < 0) {
+        throw new Error(`opus_decoder_create failed: ${wasm.decoder}`);
+    }
+
+    // 120 ms at the capture rate.
+    const MAX_FRAME_SAMPLES = (CAPTURE_SAMPLE_RATE * 120) / 1000;
+    const inputPtr = wasm.malloc(4000);
+    const outputPtr = wasm.malloc(MAX_FRAME_SAMPLES * 2);
+    const inputView = new Uint8Array(wasm.HEAP, inputPtr, 4000);
+
+    return {
+        wavPath,
+        pcmChunks: [],
+        decodePacket(base64) {
+            const bytes = Buffer.from(base64, 'base64');
+            inputView.set(bytes);
+            const samples = wasm.decode(wasm.decoder, inputPtr, bytes.length, outputPtr, MAX_FRAME_SAMPLES, 0);
+            if (samples <= 0) return;
+            // Copy out before the next call clobbers the heap region.
+            const view = new Int16Array(wasm.HEAP, outputPtr, samples);
+            this.pcmChunks.push(new Int16Array(view));
+        },
+        cleanup() {
+            try { wasm.destroy(wasm.decoder); } catch (_) {}
+            try { wasm.free(inputPtr); wasm.free(outputPtr); } catch (_) {}
+        },
+    };
+}
+
+function writeWavFile(filename, pcmChunks, sampleRate) {
+    const totalSamples = pcmChunks.reduce((n, c) => n + c.length, 0);
+    const dataSize = totalSamples * 2;
+    const buffer = Buffer.alloc(44 + dataSize);
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(1, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(sampleRate * 2, 28);
+    buffer.writeUInt16LE(2, 32);
+    buffer.writeUInt16LE(16, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    let offset = 44;
+    for (const chunk of pcmChunks) {
+        for (let i = 0; i < chunk.length; i++) {
+            buffer.writeInt16LE(chunk[i], offset);
+            offset += 2;
+        }
+    }
+    fs.writeFileSync(filename, buffer);
+}
+
 ws.on('message', (data) => {
     try {
         const parsed = JSON.parse(data.toString());
@@ -211,6 +327,30 @@ ws.on('message', (data) => {
                 console.log(`[${participantId}] ${speakerPrefix}${text}`);
             }
         }
+
+        // Capture translated audio if requested. The /translate endpoint emits
+        // "event":"media" for translated audio frames.
+        const isTranslatedMedia = parsed.media?.payload && parsed.event === 'media';
+        if (captureTranslatedPath && isTranslatedMedia) {
+            if (!translatedCapture) {
+                // Initialise on first frame. Drop frames that arrive before init completes.
+                translatedCapture = { pending: [] };
+                initTranslatedCapture(captureTranslatedPath).then(cap => {
+                    const pending = translatedCapture.pending || [];
+                    translatedCapture = cap;
+                    for (const payload of pending) cap.decodePacket(payload);
+                    process.stdout.write('\r' + ' '.repeat(120) + '\r');
+                    console.log(`[capture] decoder ready; ${pending.length} buffered packet(s) drained`);
+                }).catch(err => {
+                    console.error('Failed to init translated capture:', err);
+                });
+                translatedCapture.pending.push(parsed.media.payload);
+            } else if (translatedCapture.pending) {
+                translatedCapture.pending.push(parsed.media.payload);
+            } else {
+                translatedCapture.decodePacket(parsed.media.payload);
+            }
+        }
     } catch (error) {
         // Not JSON or different format, ignore
     }
@@ -218,10 +358,28 @@ ws.on('message', (data) => {
 
 ws.on('error', (error) => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
-    console.error('WebSocket error:', error.message);
+    // Several WebSocket failure modes produce empty error.message (TCP RST,
+    // upgrade abort). Dump the whole error so we can see what's actually wrong.
+    const msg = error.message || `(empty) — full error: ${error.toString()} ${error.code ? `code=${error.code}` : ''}`;
+    console.error('WebSocket error:', msg);
+    if (error.stack) console.error(error.stack);
 });
 
 ws.on('close', () => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
     console.log('Connection closed');
+
+    if (captureTranslatedPath && translatedCapture && translatedCapture.pcmChunks) {
+        const totalSamples = translatedCapture.pcmChunks.reduce((n, c) => n + c.length, 0);
+        if (totalSamples === 0) {
+            console.log(`[capture] no translated audio received; not writing ${captureTranslatedPath}`);
+        } else {
+            writeWavFile(captureTranslatedPath, translatedCapture.pcmChunks, CAPTURE_SAMPLE_RATE);
+            const durationSec = totalSamples / CAPTURE_SAMPLE_RATE;
+            console.log(`[capture] wrote ${captureTranslatedPath} (${totalSamples} samples, ${durationSec.toFixed(2)}s)`);
+        }
+        translatedCapture.cleanup();
+    } else if (captureTranslatedPath) {
+        console.log(`[capture] decoder did not initialise; no WAV written`);
+    }
 });

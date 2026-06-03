@@ -7,7 +7,7 @@
 	"scripts": {
 		"format": "prettier --write '**/*.{js,ts,css,json,md}'",
 		"configure": "make configure -j$(node -e 'console.log(require(\"os\").cpus().length)')",
-		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')  && mv dist/opus-decoder.js dist/opus-decoder.cjs",
+		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')  && mv dist/opus-decoder.js dist/opus-decoder.cjs && mv dist/opus-encoder.js dist/opus-encoder.cjs",
 		"build:ts": "tsc",
 		"build:bundle": "node build.mjs",
 		"build": "npm run build:wasm && npm run build:bundle",
