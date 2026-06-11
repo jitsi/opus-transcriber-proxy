@@ -3,6 +3,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
 import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
+import { TranslatorProxy } from './translatorproxy';
+import { normalizeTargetLanguage } from './TranslatorConnection';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -55,9 +57,17 @@ server.on('upgrade', (request, socket, head) => {
 	logger.debug('Session parameters:', JSON.stringify(parameters));
 
 	// Validate path
-	if (!parameters.url.pathname.endsWith('/transcribe')) {
+	if (!parameters.url.pathname.endsWith('/transcribe') && !parameters.url.pathname.endsWith('/translate')) {
 		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nBad URL');
 		socket.destroy();
+		return;
+	}
+
+	// Handle the /translate endpoint separately (speech-to-speech translation).
+	if (parameters.url.pathname.endsWith('/translate')) {
+		wss.handleUpgrade(request, socket, head, (ws) => {
+			handleTranslatorConnection(ws, parameters);
+		});
 		return;
 	}
 
@@ -225,6 +235,99 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
 	});
+}
+
+function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
+	const { url } = parameters;
+	const sendBack = parameters.sendBack;
+
+	// Seed the initially-active target languages from `?lang=` for the dev/replay path only.
+	// The JVB connects without `lang` and drives synthetic sources via `sources` control events.
+	let initialLanguages: string[] = [];
+	const langParam = url.searchParams.get('lang');
+	if (langParam) {
+		try {
+			initialLanguages = langParam
+				.split(',')
+				.map((l) => l.trim())
+				.filter((l) => l.length > 0)
+				.map((l) => normalizeTargetLanguage(l));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			logger.error(`Rejecting /translate connection: ${msg}`);
+			ws.close(1002, msg);
+			return;
+		}
+	}
+
+	const translateSession = new TranslatorProxy(ws, {
+		initialLanguages,
+		provider: parameters.provider,
+	});
+
+	translateSession.on('closed', () => {
+		if (ws.readyState === ws.OPEN) {
+			ws.close();
+		}
+	});
+
+	translateSession.on('error', (tag: string, error: any) => {
+		const message = `Error in translation session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+		logger.error(message);
+		try {
+			ws.close(1011, message);
+		} catch {
+			// ignore
+		}
+	});
+
+	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
+		if (!sendBack) {
+			return;
+		}
+		// participant.id is the input (export) source name the translation was produced from.
+		const msg: TranscriptionMessage = {
+			transcript: [{ text: data.transcript }],
+			is_interim: false,
+			language: data.targetLanguage,
+			message_id: `translation-${data.tag}-${Date.now()}`,
+			type: 'transcription-result',
+			event: 'transcription-result',
+			participant: { id: data.tag },
+			timestamp: Date.now(),
+		};
+		try {
+			ws.send(JSON.stringify(msg));
+		} catch {
+			// ignore
+		}
+	});
+
+	translateSession.on(
+		'audioFrame',
+		(data: { tag: string; language: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
+			if (!sendBack) {
+				return;
+			}
+			// Tag the returned media with the synthetic source name verbatim (e.g. "523834112-a0.en") so the
+			// bridge's findSyntheticAudioSource(tag) matches the colibri2-signaled synthetic source.
+			const audioMessage = {
+				event: 'media',
+				sequenceNumber: data.sequenceNumber.toString(),
+				media: {
+					tag: data.tag,
+					chunk: data.chunk.toString(),
+					timestamp: data.timestamp.toString(),
+					payload: data.payload,
+				},
+			};
+			try {
+				ws.send(JSON.stringify(audioMessage));
+			} catch {
+				// ignore
+			}
+		},
+	);
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
