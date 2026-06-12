@@ -82,7 +82,7 @@ export const TEST_TRANSCRIPTION_MESSAGES = {
 		message_id: 'msg-123',
 		type: 'transcription-result',
 		event: 'transcription-result',
-		participant: { id: 'participant-1' },
+		participant: { id: 'participant-1', tag: 'participant-1-a0' },
 		timestamp: Date.now(),
 	} as TranscriptionMessage,
 	final_result: {
@@ -91,7 +91,7 @@ export const TEST_TRANSCRIPTION_MESSAGES = {
 		message_id: 'msg-124',
 		type: 'transcription-result',
 		event: 'transcription-result',
-		participant: { id: 'participant-1' },
+		participant: { id: 'participant-1', tag: 'participant-1-a0' },
 		timestamp: Date.now(),
 	} as TranscriptionMessage,
 	result_with_language: {
@@ -101,7 +101,7 @@ export const TEST_TRANSCRIPTION_MESSAGES = {
 		message_id: 'msg-125',
 		type: 'transcription-result',
 		event: 'transcription-result',
-		participant: { id: 'participant-2' },
+		participant: { id: 'participant-2', tag: 'participant-2-a0' },
 		timestamp: Date.now(),
 	} as TranscriptionMessage,
 };
@@ -277,17 +277,17 @@ export const TEST_CONFIGS = {
 export const TEST_PARTICIPANTS = {
 	participant1: {
 		id: 'abc123',
-		ssrc: '456',
+		tag: 'abc123-a0',
 	},
 	participant2: {
 		id: 'def789',
-		ssrc: '012',
+		tag: 'def789-v0',
 	},
 };
 
-// Tag fixtures (endpoint-ssrc format)
+// Tag fixtures (endpoint-source format)
 export const TEST_TAGS = {
-	valid_tag: 'abc123-456',
+	valid_tag: 'abc123-a0',
 	simple_tag: 'test-tag',
-	another_tag: 'def789-012',
+	another_tag: 'def789-v0',
 };

@@ -417,7 +417,7 @@ describe('OutgoingConnection', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
@@ -837,7 +837,7 @@ describe('OutgoingConnection', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
@@ -858,7 +858,7 @@ describe('OutgoingConnection', () => {
 				message_id: '456',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
