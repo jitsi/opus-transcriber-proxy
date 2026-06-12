@@ -31,6 +31,7 @@ export interface TranscriberProxyOptions {
 	tags?: string[];
 	openaiCustomUrl?: string;
 	openaiCustomApiKey?: string;
+	deepgramMipOptOut?: boolean;
 }
 
 export class TranscriberProxy extends EventEmitter {

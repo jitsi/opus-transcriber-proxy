@@ -71,6 +71,7 @@ export const config = {
 		punctuate: process.env.DEEPGRAM_PUNCTUATE === 'true',
 		diarize: process.env.DEEPGRAM_DIARIZE === 'true',
 		includeLanguage: process.env.DEEPGRAM_INCLUDE_LANGUAGE === 'true', // Default false
+		mipOptOut: process.env.DEEPGRAM_MIP_OPT_OUT === 'true', // Default false; opt out of Model Improvement Program
 		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 

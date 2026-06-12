@@ -23,6 +23,11 @@ export interface BackendConfig {
 	model?: string;
 	/** Tags to be sent to the backend (e.g., for Deepgram) */
 	tags?: string[];
+	/**
+	 * Per-connection override for Deepgram's Model Improvement Program opt-out.
+	 * undefined = use global config (DEEPGRAM_MIP_OPT_OUT); true/false overrides it.
+	 */
+	deepgramMipOptOut?: boolean;
 }
 
 export interface TranscriptionBackend {

@@ -35,6 +35,7 @@ vi.mock('../../../src/config', () => ({
 			punctuate: true,
 			diarize: false,
 			includeLanguage: false,
+			mipOptOut: false,
 			tags: ['test-tag-1', 'test-tag-2'],
 		},
 	},
@@ -178,6 +179,60 @@ describe('DeepgramBackend', () => {
 
 			expect(mockWsManager.mockWs.url).toContain('tag=test-tag-1');
 			expect(mockWsManager.mockWs.url).toContain('tag=test-tag-2');
+		});
+
+		it('should not include mip_opt_out by default', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+
+			const connectPromise = backend.connect(backendConfig);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).not.toContain('mip_opt_out');
+		});
+
+		it('should include mip_opt_out=true when config.deepgram.mipOptOut is true', async () => {
+			(config.deepgram as any).mipOptOut = true;
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+
+				const connectPromise = backend.connect(backendConfig);
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).toContain('mip_opt_out=true');
+			} finally {
+				(config.deepgram as any).mipOptOut = false;
+			}
+		});
+
+		it('should let per-connection deepgramMipOptOut=true override config false', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const backendConfig: BackendConfig = { model: 'nova-2', deepgramMipOptOut: true };
+
+			const connectPromise = backend.connect(backendConfig);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).toContain('mip_opt_out=true');
+		});
+
+		it('should let per-connection deepgramMipOptOut=false override config true', async () => {
+			(config.deepgram as any).mipOptOut = true;
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const backendConfig: BackendConfig = { model: 'nova-2', deepgramMipOptOut: false };
+
+				const connectPromise = backend.connect(backendConfig);
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).not.toContain('mip_opt_out');
+			} finally {
+				(config.deepgram as any).mipOptOut = false;
+			}
 		});
 
 		it('should start KeepAlive timer on connection', async () => {
