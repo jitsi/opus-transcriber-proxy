@@ -229,7 +229,8 @@ interface TranscriptionBackend {
   sendAudio(audioBase64: string): Promise<void>;
   forceCommit(): void;
 
-  // Format negotiation — called on every reinitializeDecoder (initial setup and on updateInputFormat)
+  // Format negotiation — called on every reinitializeDecoder (initial setup, on updateInputFormat,
+  //   and again on any new backend instance created by reconnectBackend)
   getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat;
 
   // Configuration
