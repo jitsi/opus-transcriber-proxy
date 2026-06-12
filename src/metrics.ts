@@ -34,7 +34,8 @@ export type MetricName =
 	| 'backend_audio_sent'
 	| 'openai_api_error'
 	| 'gemini_api_error'
-	| 'deepgram_api_error';
+	| 'deepgram_api_error'
+	| 'xai_api_error';
 
 export interface MetricEvent {
 	name: MetricName;

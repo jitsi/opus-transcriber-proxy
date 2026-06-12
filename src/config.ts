@@ -26,7 +26,7 @@ function parseAndValidateTags(value: string | undefined): string[] {
 	return tags;
 }
 
-export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'dummy';
+export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'dummy';
 
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
@@ -62,6 +62,17 @@ export const config = {
 		transcriptionPrompt: process.env.GEMINI_TRANSCRIPTION_PROMPT || undefined,
 	},
 
+	// xAI configuration
+	xai: {
+		apiKey: process.env.XAI_API_KEY || '',
+		sttUrl: process.env.XAI_STT_URL || 'wss://api.x.ai/v1/stt',
+		language: process.env.XAI_LANGUAGE || undefined,
+		diarize: process.env.XAI_DIARIZE === 'true',
+		includeLanguage: process.env.XAI_INCLUDE_LANGUAGE === 'true',
+		smartTurn: process.env.XAI_SMART_TURN !== undefined ? parseFloat(process.env.XAI_SMART_TURN) : 0.5,
+		smartTurnTimeout: parseIntOrDefault(process.env.XAI_SMART_TURN_TIMEOUT, 500),
+	},
+
 	// Deepgram configuration
 	deepgram: {
 		apiKey: process.env.DEEPGRAM_API_KEY || '',
@@ -79,7 +90,7 @@ export const config = {
 		port: parseIntOrDefault(process.env.PORT, 8080),
 		host: process.env.HOST || '0.0.0.0',
 	},
-	forceCommitTimeout: parseIntOrDefault(process.env.FORCE_COMMIT_TIMEOUT, 2),
+	forceCommitTimeout: parseIntOrDefault(process.env.FORCE_COMMIT_TIMEOUT, 1),
 	broadcastTranscripts: process.env.BROADCAST_TRANSCRIPTS === 'true',
 	broadcastTranscriptsMaxSize: parseIntOrDefault(process.env.BROADCAST_TRANSCRIPTS_MAX_SIZE, 5 * 1024), // Default 5 KB
 	dumpWebSocketMessages: process.env.DUMP_WEBSOCKET_MESSAGES === 'true',
@@ -125,6 +136,8 @@ export function isProviderAvailable(provider: Provider): boolean {
 			return !!config.gemini.apiKey;
 		case 'deepgram':
 			return !!config.deepgram.apiKey;
+		case 'xai':
+			return !!config.xai.apiKey;
 		case 'dummy':
 			return config.enableDummyProvider; // Dummy only available if explicitly enabled
 		default:
@@ -136,7 +149,7 @@ export function isProviderAvailable(provider: Provider): boolean {
  * Get all available providers
  */
 export function getAvailableProviders(): Provider[] {
-	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'dummy'];
+	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'xai', 'dummy'];
 	return allProviders.filter(isProviderAvailable);
 }
 
@@ -157,5 +170,5 @@ export function getDefaultProvider(): Provider | null {
  * Validate that a provider name is valid
  */
 export function isValidProvider(provider: string): provider is Provider {
-	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'dummy';
+	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'xai' || provider === 'dummy';
 }

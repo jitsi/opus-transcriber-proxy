@@ -161,6 +161,45 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
   - Invalid tags will cause the WebSocket connection to be rejected with a descriptive error
   - Example: `ws://host/transcribe?sessionId=test&tag=production&tag=region-us&tag=customer-service`
 
+### xAI
+Uses xAI's WebSocket STT streaming API for real-time transcription.
+
+**Features:**
+- WebSocket-based streaming
+- Interim and final transcriptions
+- Smart turn detection (configurable confidence threshold + timeout)
+- Confidence scores (word-level, averaged per segment)
+- Diarization (speaker identification)
+- Language auto-detection (reported on final transcription)
+- One WebSocket connection per participant
+
+**Configuration:**
+```bash
+XAI_API_KEY=your-key-here
+XAI_LANGUAGE=                     # Language code (e.g. en, fr, de); omit for auto-detect
+XAI_INCLUDE_LANGUAGE=true         # Append language to transcript (e.g., "Hello [en]")
+XAI_DIARIZE=false                 # Enable speaker diarization
+XAI_SMART_TURN=0.5                # Turn-end confidence threshold (0.0–1.0); default 0.5
+XAI_SMART_TURN_TIMEOUT=500        # Max silence ms before forced turn end; default 500
+XAI_STT_URL=wss://api.x.ai/v1/stt  # Override STT endpoint (optional)
+
+# Make xAI the default provider
+PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
+```
+
+**Supported languages:** `en`, `fr`, `de`, `ja`, `zh`, `hi`, `ko`, `ru`, `ar-EG`, `ar-SA`, `ar-AE`, `bn`, `id`, `it`, `pt-BR`, `pt-PT`, `es-MX`, `es-ES`, `tr`, `vi`
+
+**Technical Details:**
+- Uses WebSocket API: `wss://api.x.ai/v1/stt`; all config via URL query parameters
+- Authentication via `Authorization: Bearer` header (passed using Node.js/CF Workers-specific third constructor argument)
+- Always receives signed 16-bit LE PCM at 24kHz (raw binary frames, not base64)
+- `transcript.partial` events → interim transcriptions; optionally split by speaker when `XAI_DIARIZE=true`
+- `transcript.done` event → final transcription; includes detected `language` field
+- Detected language is always set as the `language` property on final transcription events; `XAI_INCLUDE_LANGUAGE=true` additionally appends it as text suffix (e.g. `[en]`) — these are independent behaviours (same as Deepgram)
+- Diarization splits messages by consecutive speaker segments; each message carries a `speaker: number` field (same as Deepgram)
+- `forceCommit()` sends `{"type": "audio.done"}` — signals end of audio stream; server emits final `transcript.done` then closes connection
+- No model selection for the STT endpoint (model is inherent to the service)
+
 ## Architecture
 
 ### Backend Interface
