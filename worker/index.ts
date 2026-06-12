@@ -54,6 +54,16 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		DEEPGRAM_ENCODING: env.DEEPGRAM_ENCODING || 'opus',
 		DEEPGRAM_MIP_OPT_OUT: env.DEEPGRAM_MIP_OPT_OUT || 'false',
 		DEEPGRAM_TAGS: env.DEEPGRAM_TAGS || '',
+		// XAI_API_KEY is forwarded as '' when unset so the container treats xAI as
+		// unconfigured (provider disabled). The remaining XAI_* knobs are only
+		// forwarded when explicitly set, otherwise the container's code defaults apply.
+		XAI_API_KEY: env.XAI_API_KEY || '',
+		...(env.XAI_STT_URL && { XAI_STT_URL: env.XAI_STT_URL }),
+		...(env.XAI_LANGUAGE && { XAI_LANGUAGE: env.XAI_LANGUAGE }),
+		...(env.XAI_DIARIZE && { XAI_DIARIZE: env.XAI_DIARIZE }),
+		...(env.XAI_INCLUDE_LANGUAGE && { XAI_INCLUDE_LANGUAGE: env.XAI_INCLUDE_LANGUAGE }),
+		...(env.XAI_SMART_TURN && { XAI_SMART_TURN: env.XAI_SMART_TURN }),
+		...(env.XAI_SMART_TURN_TIMEOUT && { XAI_SMART_TURN_TIMEOUT: env.XAI_SMART_TURN_TIMEOUT }),
 		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',
 		ENABLE_OPENAI_CUSTOM_PROVIDER: env.ENABLE_OPENAI_CUSTOM_PROVIDER || 'false',
 		OPENAI_CUSTOM_REQUIRE_WSS: env.OPENAI_CUSTOM_REQUIRE_WSS || 'true',

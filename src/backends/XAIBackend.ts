@@ -14,7 +14,8 @@ import type { TranscriptionBackend, BackendConfig, AudioFormat } from './Transcr
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 
-const XAI_STT_WS_BASE = 'wss://api.x.ai/v1/stt';
+// Reused across messages; TextDecoder is stateless for our usage (one full frame per call).
+const textDecoder = new TextDecoder();
 
 export class XAIBackend implements TranscriptionBackend {
 	private ws?: WsWebSocket;
@@ -61,13 +62,10 @@ export class XAIBackend implements TranscriptionBackend {
 					params.set('diarize', 'true');
 				}
 
-				if (config.xai.smartTurn !== undefined) {
-					params.set('smart_turn', config.xai.smartTurn.toString());
-				}
-
-				if (config.xai.smartTurnTimeout !== undefined) {
-					params.set('smart_turn_timeout', config.xai.smartTurnTimeout.toString());
-				}
+				// smartTurn / smartTurnTimeout always have config defaults (0.5 / 500), so
+				// they are always sent.
+				params.set('smart_turn', config.xai.smartTurn.toString());
+				params.set('smart_turn_timeout', config.xai.smartTurnTimeout.toString());
 
 				const url = `${this.wsUrl}?${params.toString()}`;
 
@@ -109,9 +107,9 @@ export class XAIBackend implements TranscriptionBackend {
 					logger.info(
 						`xAI WebSocket closed for tag ${this.tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 					);
-					this.status = 'closed';
+					// close() fires onClosed exactly once and is idempotent, so the
+					// error → close() → 'close' event → close() sequence cannot double-fire.
 					this.close();
-					this.onClosed?.();
 				});
 			} catch (error) {
 				logger.error(`Failed to create xAI WebSocket connection for tag ${this.tag}:`, error);
@@ -159,9 +157,15 @@ export class XAIBackend implements TranscriptionBackend {
 
 	close(): void {
 		logger.debug(`Closing xAI backend for tag: ${this.tag}`);
+		// Null callbacks before tearing down the socket so events fired during/after
+		// ws.close() (and any re-entrant close() call) are dropped; onClosed fires once.
+		const onClosed = this.onClosed;
+		this.onClosed = undefined;
+		this.onError = undefined;
 		this.ws?.close();
 		this.ws = undefined;
 		this.status = 'closed';
+		onClosed?.();
 	}
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
@@ -179,7 +183,7 @@ export class XAIBackend implements TranscriptionBackend {
 			if (typeof data === 'string') {
 				messageText = data;
 			} else if (data instanceof ArrayBuffer) {
-				messageText = new TextDecoder().decode(data);
+				messageText = textDecoder.decode(data);
 			} else if (Buffer.isBuffer(data)) {
 				messageText = data.toString('utf-8');
 			} else if (data instanceof Blob) {

@@ -203,10 +203,11 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Sends raw binary PCM frames (signed 16-bit LE, 24kHz); always requests `{ encoding: 'l16', sampleRate: 24000 }` from `getDesiredAudioFormat()`
 - `forceCommit()` sends `{"type": "audio.done"}` to signal end of audio; no multiplexing — one WS per stream
 - `transcript.partial` with `speech_final=false` → interim; `transcript.partial` with `speech_final=true` → final (true utterance end); multiple `is_final=true` partials may arrive for a single utterance with accumulating text — only `speech_final=true` is the definitive end; `transcript.done` fires at stream end with empty text and is ignored
-- Detected `language` is a full language name (e.g. `"English"`, not BCP-47 `"en"`) and is present on `transcript.partial` events
+- Detected `language` is a BCP-47 code (e.g. `"en"`) and is present on `transcript.partial` events. It is passed through verbatim from xAI (no transformation)
 - When `XAI_DIARIZE=true` and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram)
-- `XAI_INCLUDE_LANGUAGE=true` appends language suffix (e.g. `[English]`) to final transcript text; `language` field is always set on final messages when detected
-- Smart turn detection configurable via `XAI_SMART_TURN` (0.0–1.0 confidence threshold, default 0.5) and `XAI_SMART_TURN_TIMEOUT` (ms, default 500)
+- `XAI_INCLUDE_LANGUAGE=true` appends language suffix (e.g. `[en]`) to final transcript text; `language` field is always set on final messages when detected
+- Smart turn detection via `XAI_SMART_TURN` (0.0–1.0 confidence threshold, default 0.5) and `XAI_SMART_TURN_TIMEOUT` (ms, default 500). Both always have defaults, so the `smart_turn`/`smart_turn_timeout` query params are always sent
+- The CF Worker forwards `XAI_API_KEY` (as `''` when unset → provider disabled) plus any set `XAI_STT_URL`/`XAI_LANGUAGE`/`XAI_DIARIZE`/`XAI_INCLUDE_LANGUAGE`/`XAI_SMART_TURN`/`XAI_SMART_TURN_TIMEOUT` to the container via `buildContainerEnvVars`
 
 ### Configuration System (`src/config.ts`)
 
@@ -276,7 +277,7 @@ When `SESSION_RESUME_ENABLED=true` (default):
 
 ### Force Commit Timeout
 
-When audio stops flowing, `OutgoingConnection` waits `FORCE_COMMIT_TIMEOUT` seconds (default 1) then calls `backend.forceCommit()` to finalize pending audio and generate transcription.
+When audio stops flowing, `OutgoingConnection` waits `FORCE_COMMIT_TIMEOUT` seconds (default 2) then calls `backend.forceCommit()` to finalize pending audio and generate transcription.
 
 ## File Organization
 
@@ -391,7 +392,7 @@ See README.md for complete list. Key ones:
 - `ENABLE_OPENAI_CUSTOM_PROVIDER` - Enable the openai_custom provider (default: false)
 - `OPENAI_CUSTOM_REQUIRE_WSS` - Require wss:// for openaiCustomUrl (default: true; set false to allow ws://)
 - `PORT`, `HOST` - Server listen config
-- `FORCE_COMMIT_TIMEOUT` - Seconds before finalizing pending audio (default: 1)
+- `FORCE_COMMIT_TIMEOUT` - Seconds before finalizing pending audio (default: 2)
 - `SESSION_RESUME_ENABLED` - Enable session resumption (default: true)
 - `SESSION_RESUME_GRACE_PERIOD` - Resume grace period in seconds (default: 15)
 - `DUMP_WEBSOCKET_MESSAGES` - Enable message dumping for debugging

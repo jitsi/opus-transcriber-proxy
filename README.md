@@ -106,7 +106,7 @@ Set environment variables or use a `.env` file:
 | `PORT` | `8080` | Listen port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `DEBUG` | `false` | Enable debug logging |
-| `FORCE_COMMIT_TIMEOUT` | `1` | Seconds before finalizing pending audio |
+| `FORCE_COMMIT_TIMEOUT` | `2` | Seconds before finalizing pending audio |
 
 ### Dispatcher (Optional)
 

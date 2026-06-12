@@ -84,8 +84,8 @@ vi.mock('../../../src/config', () => ({
 			language: undefined,
 			diarize: false,
 			includeLanguage: false,
-			smartTurn: undefined,
-			smartTurnTimeout: undefined,
+			smartTurn: 0.5,
+			smartTurnTimeout: 500,
 		},
 	},
 }));
@@ -164,7 +164,17 @@ describe('XAIBackend', () => {
 			}
 		});
 
-		it('should include smart_turn params when configured', async () => {
+		it('should always include smart_turn params (defaults applied)', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			expect(getMockWs().url).toContain('smart_turn=0.5');
+			expect(getMockWs().url).toContain('smart_turn_timeout=500');
+		});
+
+		it('should reflect configured smart_turn params', async () => {
 			(config.xai as any).smartTurn = 0.7;
 			(config.xai as any).smartTurnTimeout = 3000;
 			try {
@@ -176,8 +186,8 @@ describe('XAIBackend', () => {
 				expect(getMockWs().url).toContain('smart_turn=0.7');
 				expect(getMockWs().url).toContain('smart_turn_timeout=3000');
 			} finally {
-				(config.xai as any).smartTurn = undefined;
-				(config.xai as any).smartTurnTimeout = undefined;
+				(config.xai as any).smartTurn = 0.5;
+				(config.xai as any).smartTurnTimeout = 500;
 			}
 		});
 
@@ -490,6 +500,20 @@ describe('XAIBackend', () => {
 
 			getMockWs().simulateClose();
 			expect(closedSpy).toHaveBeenCalled();
+		});
+
+		it('should fire onClosed exactly once across close() and the close event', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const closedSpy = vi.fn();
+			backend.onClosed = closedSpy;
+
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			backend.close();
+			getMockWs().simulateClose();
+			expect(closedSpy).toHaveBeenCalledTimes(1);
 		});
 	});
 });
