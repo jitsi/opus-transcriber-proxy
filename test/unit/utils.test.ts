@@ -215,6 +215,27 @@ describe('extractSessionParameters', () => {
 			expect(params.useDispatcher).toBe(true);
 		});
 
+		it('should extract deepgram_mip_opt_out=true as boolean', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&deepgram_mip_opt_out=true';
+			const params = extractSessionParameters(url);
+
+			expect(params.deepgramMipOptOut).toBe(true);
+		});
+
+		it('should extract deepgram_mip_opt_out=false as boolean', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&deepgram_mip_opt_out=false';
+			const params = extractSessionParameters(url);
+
+			expect(params.deepgramMipOptOut).toBe(false);
+		});
+
+		it('should leave deepgramMipOptOut undefined when not provided', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.deepgramMipOptOut).toBeUndefined();
+		});
+
 		it('should preserve URL object', () => {
 			const url = 'ws://localhost:8080/transcribe?sessionId=test';
 			const params = extractSessionParameters(url);

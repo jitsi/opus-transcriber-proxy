@@ -228,7 +228,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -321,7 +321,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);

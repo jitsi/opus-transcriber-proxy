@@ -189,6 +189,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
 - When `DEEPGRAM_DIARIZE=true` and word-level `speaker` indices are present, results are split per speaker segment; each message carries a `speaker: number` field
+- `DEEPGRAM_MIP_OPT_OUT=true` adds `mip_opt_out=true` to the WS URL (opts out of Deepgram's Model Improvement Program; default false). Overridable per-connection via the `deepgram_mip_opt_out` URL query param, which flows `ISessionParameters` → `TranscriberProxyOptions` → `BackendConfig.deepgramMipOptOut`; `DeepgramBackend` resolves `backendConfig.deepgramMipOptOut ?? config.deepgram.mipOptOut`. The CF Worker forwards `DEEPGRAM_MIP_OPT_OUT` to the container via `buildContainerEnvVars`
 - When Deepgram provides `alternative.languages`, the first entry is always set as the `language` property on the `TranscriptionMessage` (both standard and diarized paths), unconditionally. `DEEPGRAM_INCLUDE_LANGUAGE=true` additionally appends the language as a text suffix (e.g. `[en]`) — these are independent behaviours
 
 **Gemini**

@@ -144,6 +144,7 @@ export class OutgoingConnection {
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
 			backendConfig.tags = this.options.tags;
+			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -318,6 +319,7 @@ export class OutgoingConnection {
 		const backendConfig = getBackendConfig(this.options.provider);
 		backendConfig.language = this.options.language;
 		backendConfig.tags = this.options.tags;
+		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
 
 		try {
 			const connectStartTime = Date.now();

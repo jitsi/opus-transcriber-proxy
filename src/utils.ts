@@ -12,6 +12,7 @@ export interface ISessionParameters {
 	encoding: AudioEncoding;
 	tags: string[];
 	openaiCustomUrl?: string;
+	deepgramMipOptOut?: boolean;
 }
 
 /**
@@ -59,6 +60,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	// Parse tags as multiple tag= parameters (like Deepgram API), filter empty strings
 	const tags = parsedUrl.searchParams.getAll('tag').filter((t) => t);
 	const openaiCustomUrl = parsedUrl.searchParams.get('openaiCustomUrl');
+	// Per-connection override for Deepgram MIP opt-out. Absent = undefined (use config).
+	const mipOptOutParam = parsedUrl.searchParams.get('deepgram_mip_opt_out');
+	const deepgramMipOptOut = mipOptOutParam === null ? undefined : mipOptOutParam === 'true';
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -75,6 +79,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		encoding,
 		tags,
 		openaiCustomUrl: openaiCustomUrl ?? undefined,
+		deepgramMipOptOut,
 	};
 }
 

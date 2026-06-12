@@ -89,6 +89,7 @@ Set environment variables or use a `.env` file:
 | `DEEPGRAM_MODEL` | `nova-2` | Deepgram model |
 | `DEEPGRAM_LANGUAGE` | `multi` | Language code or `multi` for auto |
 | `DEEPGRAM_ENCODING` | `opus` | `opus` (pass raw Opus/Ogg through) or `linear16` (decode to PCM) |
+| `DEEPGRAM_MIP_OPT_OUT` | `false` | `true` opts out of Deepgram's Model Improvement Program (adds `mip_opt_out=true`). Overridable per-connection via the `deepgram_mip_opt_out` URL query param. See https://dpgr.am/deepgram-mip |
 | `GEMINI_MODEL` | `gemini-2.0-flash-exp` | Gemini model |
 
 ### Server
