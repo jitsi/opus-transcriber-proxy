@@ -40,7 +40,7 @@ All files are written in **JSONL** (JSON Lines) format - one JSON object per lin
 ### Transcripts (`transcript.jsonl`)
 
 ```json
-{"timestamp":1768341932350,"message":{"transcript":[{"confidence":0.98,"text":"hello world"}],"is_interim":false,"message_id":"item_123","type":"transcription-result","event":"transcription-result","participant":{"id":"10a52c3f","ssrc":"2614982672"},"timestamp":1768341932350}}
+{"timestamp":1768341932350,"message":{"transcript":[{"confidence":0.98,"text":"hello world"}],"is_interim":false,"message_id":"item_123","type":"transcription-result","event":"transcription-result","participant":{"id":"10a52c3f","tag":"10a52c3f-a0"},"timestamp":1768341932350}}
 ```
 
 **Fields:**

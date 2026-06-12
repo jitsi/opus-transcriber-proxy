@@ -48,7 +48,7 @@ vi.mock('../../src/config', () => ({
 vi.mock('../../src/OutgoingConnection', () => ({
 	OutgoingConnection: vi.fn(function (this: any, tag: string, inputFormat: unknown) {
 		this.localTag = tag;
-		this.participantId = tag.split('-')[0]; // Extract participant ID from tag like "participant1-ssrc123"
+		this.participantId = tag.split('-')[0]; // Extract participant ID from sourceId tag like "abc123-a0"
 		this.handleMediaEvent = vi.fn();
 		this.addTranscriptContext = vi.fn();
 		this.updateInputFormat = vi.fn();

@@ -125,7 +125,14 @@ describe('OutgoingConnection', () => {
 			expect(conn.participantId).toBe('test-tag-123');
 		});
 
-		it('should parse tag with ssrc format', () => {
+		it('should parse tag with sourceId format', () => {
+			const conn = new OutgoingConnection('abc123-a0', { encoding: 'opus' }, options);
+
+			expect(conn.tag).toBe('abc123-a0');
+			expect(conn.participantId).toBe('abc123');
+		});
+
+		it('should parse tag with numeric SSRC format (legacy)', () => {
 			const conn = new OutgoingConnection('abc123-456789', { encoding: 'opus' }, options);
 
 			expect(conn.tag).toBe('abc123-456789');
