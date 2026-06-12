@@ -255,7 +255,7 @@ export class TranslatorConnection {
 			});
 
 			openaiWs.addEventListener('error', (event) => {
-				const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+				const errorMessage = (event as ErrorEvent)?.message || 'WebSocket error';
 				this.logError(`OpenAI WebSocket error for tag ${this.localTag}: ${errorMessage}`);
 				writeMetric(undefined, {
 					name: 'openai_api_error',

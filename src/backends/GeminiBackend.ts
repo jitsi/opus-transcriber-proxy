@@ -66,7 +66,7 @@ export class GeminiBackend implements TranscriptionBackend {
 				});
 
 				ws.addEventListener('error', (event) => {
-					const errorMessage = event instanceof ErrorEvent ? event.message || 'WebSocket error' : 'WebSocket error';
+					const errorMessage = (event as ErrorEvent)?.message || 'WebSocket error';
 					logger.error(`Gemini WebSocket error for tag ${this.tag}: ${errorMessage}`);
 					writeMetric(undefined, {
 						name: 'gemini_api_error',
