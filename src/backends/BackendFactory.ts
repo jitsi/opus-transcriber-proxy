@@ -9,6 +9,7 @@ import { OpenAIBackend } from './OpenAIBackend';
 import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
 import { DummyBackend } from './DummyBackend';
+import { XAIBackend } from './XAIBackend';
 
 export interface OpenAICustomOptions {
 	openaiCustomUrl?: string;
@@ -29,6 +30,8 @@ export function createBackend(tag: string, participantInfo: any, provider?: Prov
 			return new GeminiBackend(tag, participantInfo);
 		case 'deepgram':
 			return new DeepgramBackend(tag, participantInfo);
+		case 'xai':
+			return new XAIBackend(tag, participantInfo);
 		case 'dummy':
 			return new DummyBackend(tag, participantInfo);
 		default:
@@ -55,9 +58,15 @@ export function getBackendConfig(provider?: Provider): BackendConfig {
 			};
 		case 'deepgram':
 			return {
-				language: undefined, // Will be set per-connection based on options
-				prompt: undefined, // Deepgram doesn't support prompts
+				language: undefined,
+				prompt: undefined,
 				model: config.deepgram.model,
+			};
+		case 'xai':
+			return {
+				language: undefined,
+				prompt: undefined,
+				model: undefined,
 			};
 		case 'dummy':
 			return {

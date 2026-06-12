@@ -1,10 +1,10 @@
 # opus-transcriber-proxy
 
-Real-time WebSocket transcription proxy supporting multiple speech-to-text backends. Routes audio to OpenAI, Deepgram, or Google Gemini and streams transcription results back to clients.
+Real-time WebSocket transcription proxy supporting multiple speech-to-text backends. Routes audio to OpenAI, Deepgram, Google Gemini, or xAI and streams transcription results back to clients.
 
 ## Features
 
-- **Multi-provider support** - OpenAI Realtime, Deepgram Nova, Google Gemini
+- **Multi-provider support** - OpenAI Realtime, Deepgram Nova, Google Gemini, xAI Grok
 - **Provider fallback** - Configurable priority order with automatic failover
 - **Multi-participant sessions** - Single WebSocket handles multiple audio streams
 - **Real-time streaming** - Interim and final transcription results
@@ -80,6 +80,7 @@ Set environment variables or use a `.env` file:
 | `OPENAI_API_KEY` | OpenAI API key |
 | `DEEPGRAM_API_KEY` | Deepgram API key |
 | `GEMINI_API_KEY` | Google Gemini API key |
+| `XAI_API_KEY` | xAI API key |
 
 ### Provider Options
 
@@ -91,6 +92,12 @@ Set environment variables or use a `.env` file:
 | `DEEPGRAM_ENCODING` | `opus` | `opus` (pass raw Opus/Ogg through) or `linear16` (decode to PCM) |
 | `DEEPGRAM_MIP_OPT_OUT` | `false` | `true` opts out of Deepgram's Model Improvement Program (adds `mip_opt_out=true`). Overridable per-connection via the `deepgram_mip_opt_out` URL query param. See https://dpgr.am/deepgram-mip |
 | `GEMINI_MODEL` | `gemini-2.0-flash-exp` | Gemini model |
+| `XAI_LANGUAGE` | (auto) | Language code (e.g. `en`, `fr`); omit for auto-detect |
+| `XAI_DIARIZE` | `false` | Enable speaker diarization |
+| `XAI_INCLUDE_LANGUAGE` | `false` | Append detected language to transcript text (e.g. `Hello [English]`) |
+| `XAI_SMART_TURN` | `0.5` | Turn-end confidence threshold (0.0–1.0) |
+| `XAI_SMART_TURN_TIMEOUT` | `500` | Max silence ms before forced turn end |
+| `XAI_STT_URL` | `wss://api.x.ai/v1/stt` | Override STT endpoint |
 
 ### Server
 
@@ -188,6 +195,7 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
 | **OpenAI** | Server VAD, confidence scores, streaming |
 | **Deepgram** | Punctuation, diarization, code-switching, streaming |
 | **Gemini** | Multimodal, multilingual |
+| **xAI** | Smart turn detection, diarization, language auto-detect, streaming |
 
 See [BACKENDS.md](BACKENDS.md) for detailed comparison and configuration.
 

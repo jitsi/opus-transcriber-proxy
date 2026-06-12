@@ -33,6 +33,13 @@ export interface Env {
 	DEEPGRAM_ENCODING?: string;
 	DEEPGRAM_MIP_OPT_OUT?: string;
 	DEEPGRAM_TAGS?: string;
+	XAI_API_KEY?: string;
+	XAI_STT_URL?: string;
+	XAI_LANGUAGE?: string;
+	XAI_DIARIZE?: string;
+	XAI_INCLUDE_LANGUAGE?: string;
+	XAI_SMART_TURN?: string;
+	XAI_SMART_TURN_TIMEOUT?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;

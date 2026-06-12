@@ -165,8 +165,10 @@ ws.on('open', () => {
             isComplete = true;
             clearInterval(statusInterval);
             process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
-            console.log('\nReplay complete!');
-            ws.close();
+            console.log('\nReplay complete! Draining trailing transcripts...');
+            // Keep the socket open briefly so trailing finals (emitted after the
+            // force-commit timeout once audio stops) are received before closing.
+            setTimeout(() => ws.close(), 5000);
             return;
         }
 

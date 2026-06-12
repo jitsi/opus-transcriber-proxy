@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
+This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini, xAI). It supports:
 - Multi-participant sessions (one WebSocket handles multiple audio streams)
 - Provider fallback with configurable priority
 - Two deployment modes: Node.js standalone or Cloudflare Workers with Containers
@@ -197,6 +197,18 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Real-time API with WebSocket
 - Sends PCM audio
 
+**xAI**
+- Uses xAI's WebSocket STT API (`wss://api.x.ai/v1/stt`); config entirely via URL query params (no session message)
+- Auth via `Authorization: Bearer` header — passed using Node.js/CF Workers-specific third argument to `WebSocket` constructor (cast via `as any`)
+- Sends raw binary PCM frames (signed 16-bit LE, 24kHz); always requests `{ encoding: 'l16', sampleRate: 24000 }` from `getDesiredAudioFormat()`
+- `forceCommit()` sends `{"type": "audio.done"}` to signal end of audio; no multiplexing — one WS per stream
+- `transcript.partial` with `speech_final=false` → interim; `transcript.partial` with `speech_final=true` → final (true utterance end); multiple `is_final=true` partials may arrive for a single utterance with accumulating text — only `speech_final=true` is the definitive end; `transcript.done` fires at stream end with empty text and is ignored
+- Detected `language` is a BCP-47 code (e.g. `"en"`) and is present on `transcript.partial` events. It is passed through verbatim from xAI (no transformation)
+- When `XAI_DIARIZE=true` and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram)
+- `XAI_INCLUDE_LANGUAGE=true` appends language suffix (e.g. `[en]`) to final transcript text; `language` field is always set on final messages when detected
+- Smart turn detection via `XAI_SMART_TURN` (0.0–1.0 confidence threshold, default 0.5) and `XAI_SMART_TURN_TIMEOUT` (ms, default 500). Both always have defaults, so the `smart_turn`/`smart_turn_timeout` query params are always sent
+- The CF Worker forwards `XAI_API_KEY` (as `''` when unset → provider disabled) plus any set `XAI_STT_URL`/`XAI_LANGUAGE`/`XAI_DIARIZE`/`XAI_INCLUDE_LANGUAGE`/`XAI_SMART_TURN`/`XAI_SMART_TURN_TIMEOUT` to the container via `buildContainerEnvVars`
+
 ### Configuration System (`src/config.ts`)
 
 All configuration is loaded from environment variables or `.env` file using dotenv.
@@ -293,6 +305,7 @@ src/
 │   ├── OpenAIBackend.ts          # OpenAI implementation
 │   ├── DeepgramBackend.ts        # Deepgram implementation
 │   ├── GeminiBackend.ts          # Gemini implementation
+│   ├── XAIBackend.ts             # xAI implementation
 │   └── DummyBackend.ts           # Test/stats backend
 └── OpusDecoder/
     ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
