@@ -1,318 +1,198 @@
 /**
- * Tests for OpusDecoder module
+ * Tests for the OpusDecoder wrapper.
  *
- * Note: We mock the WASM module and focus on testing the wrapper logic,
- * not the actual Opus decoding implementation.
+ * The wrapper now binds to the native libopus addon. We mock the native module
+ * (src/OpusDecoder/nativeOpus) so these tests exercise the wrapper logic —
+ * sample-rate/channel selection, result shaping, FEC vs PLC dispatch, frame-size
+ * capping and error handling — without compiling or loading the real addon.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
-import type { OpusDecodedAudio } from '../../src/OpusDecoder/OpusDecoder';
 
 // Mock logger
 vi.mock('../../src/logger', () => ({
-	default: {
-		info: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		debug: vi.fn(),
-	},
+	default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
-// Mock fs and path for WASM loading
-// Create a minimal valid WASM module: magic number + version
-vi.mock('fs', () => ({
-	default: {
-		readFileSync: vi.fn(() => {
-			// WASM magic number: 0x00 0x61 0x73 0x6d (asm)
-			// Version: 0x01 0x00 0x00 0x00
-			return new Uint8Array([
-				0x00, 0x61, 0x73, 0x6d, // magic number "\0asm"
-				0x01, 0x00, 0x00, 0x00, // version 1
-			]);
-		}),
-	},
-}));
+// Controllable fake native module. vi.hoisted so the refs exist when vi.mock runs.
+const h = vi.hoisted(() => {
+	const decode = vi.fn();
+	const reset = vi.fn();
+	const destroy = vi.fn();
+	const ctorCalls: Array<{ sampleRate: number; channels: number }> = [];
+	let throwOnConstruct: Error | null = null;
 
-vi.mock('path', () => ({
-	default: {
-		dirname: vi.fn(() => '/mock/dir'),
-		join: vi.fn(() => '/mock/opus-decoder.wasm'),
-	},
-}));
-
-// Mock the opus decoder module
-vi.mock('../../dist/opus-decoder.cjs', () => ({
-	default: vi.fn((options: any) => {
-		// Call instantiateWasm if provided
-		if (options.instantiateWasm) {
-			const mockExports = {
-				_opus_frame_decoder_create: () => 1,
-				_opus_frame_decoder_destroy: () => {},
-				_opus_frame_decoder_reset: () => {},
-				_opus_frame_decode: () => 960,
-				_malloc: () => 1000,
-				_free: () => {},
-				wasmMemory: { buffer: new ArrayBuffer(1024) },
-			};
-
-			const mockInstance = { exports: mockExports };
-			options.instantiateWasm({}, (instance: any) => {});
-			return Promise.resolve(mockExports);
+	class FakeNativeDecoder {
+		decode = decode;
+		reset = reset;
+		destroy = destroy;
+		constructor(sampleRate: number, channels: number) {
+			if (throwOnConstruct) throw throwOnConstruct;
+			ctorCalls.push({ sampleRate, channels });
 		}
-		return Promise.resolve({});
-	}),
-}));
-
-// Create a mock WASM instance
-const createMockWasmInstance = (options: {
-	createReturns?: number;
-	decodeReturns?: number;
-	decodeCallback?: (decoder: number, inputPtr: number, inputLength: number, outputPtr: number, frameSize: number, enableFec: number) => number;
-} = {}) => {
-	const heap = new ArrayBuffer(1024 * 1024); // 1MB mock heap
-	const allocations = new Map<number, number>();
-	let nextPtr = 1000;
+	}
 
 	return {
-		opus_frame_decoder_create: vi.fn((sampleRate: number, channels: number) => {
-			return options.createReturns !== undefined ? options.createReturns : 1; // Success: return pointer
-		}),
-		opus_frame_decoder_destroy: vi.fn(),
-		opus_frame_decoder_reset: vi.fn(),
-		opus_frame_decode: vi.fn((decoder: number, inputPtr: number, inputLength: number, outputPtr: number, frameSize: number, enableFec: number) => {
-			if (options.decodeCallback) {
-				return options.decodeCallback(decoder, inputPtr, inputLength, outputPtr, frameSize, enableFec);
-			}
-			// Default: return number of samples decoded (simulate 20ms at 48kHz = 960 samples)
-			return options.decodeReturns !== undefined ? options.decodeReturns : 960;
-		}),
-		malloc: vi.fn((size: number) => {
-			const ptr = nextPtr;
-			nextPtr += size;
-			allocations.set(ptr, size);
-			return ptr;
-		}),
-		free: vi.fn((ptr: number) => {
-			allocations.delete(ptr);
-		}),
-		HEAP: heap,
-		module: {},
+		decode,
+		reset,
+		destroy,
+		ctorCalls,
+		FakeNativeDecoder,
+		setThrowOnConstruct: (e: Error | null) => {
+			throwOnConstruct = e;
+		},
 	};
-};
+});
 
-describe('OpusDecoder', () => {
-	let mockWasmInstance: ReturnType<typeof createMockWasmInstance>;
+vi.mock('../../src/OpusDecoder/nativeOpus', () => ({
+	nativeOpus: { OpusDecoder: h.FakeNativeDecoder, OpusEncoder: class {} },
+	OPUS_APPLICATION: { voip: 2048, audio: 2049, restricted_lowdelay: 2051 },
+}));
 
+import { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
+
+/** Build a PCM Buffer representing `samples` mono int16 samples. */
+function pcmBuffer(samples: number, channels = 1): Buffer {
+	return Buffer.alloc(samples * channels * 2);
+}
+
+describe('OpusDecoder (native wrapper)', () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
-
-		// Create default mock WASM instance
-		mockWasmInstance = createMockWasmInstance();
-
-		// Mock the static opusModule promise
-		(OpusDecoder as any).opusModule = Promise.resolve(mockWasmInstance);
+		h.ctorCalls.length = 0;
+		h.setThrowOnConstruct(null);
+		// mockReset (vitest config) clears implementations; restore a sane default.
+		h.decode.mockReturnValue(pcmBuffer(960, 1)); // 960 mono samples by default
+		h.reset.mockReturnValue(undefined);
+		h.destroy.mockReturnValue(undefined);
 	});
 
 	describe('Constructor and initialization', () => {
-		it('should initialize with default values', async () => {
+		it('defaults to 48kHz / 2 channels', () => {
+			new OpusDecoder();
+			expect(h.ctorCalls[0]).toEqual({ sampleRate: 48000, channels: 2 });
+		});
+
+		it('honors a custom sample rate', () => {
+			new OpusDecoder({ sampleRate: 24000 });
+			expect(h.ctorCalls[0]).toEqual({ sampleRate: 24000, channels: 2 });
+		});
+
+		it('honors custom channels', () => {
+			new OpusDecoder({ channels: 1 });
+			expect(h.ctorCalls[0]).toEqual({ sampleRate: 48000, channels: 1 });
+		});
+
+		it('honors both sample rate and channels', () => {
+			new OpusDecoder({ sampleRate: 16000, channels: 1 });
+			expect(h.ctorCalls[0]).toEqual({ sampleRate: 16000, channels: 1 });
+		});
+
+		it('falls back to 48kHz for an invalid sample rate', () => {
+			new OpusDecoder({ sampleRate: 99999 as any });
+			expect(h.ctorCalls[0]).toEqual({ sampleRate: 48000, channels: 2 });
+		});
+
+		it('throws if native decoder creation fails', () => {
+			h.setThrowOnConstruct(new Error('OPUS_BAD_ARG'));
+			expect(() => new OpusDecoder()).toThrow('OPUS_BAD_ARG');
+		});
+
+		it('exposes a resolved ready promise', async () => {
 			const decoder = new OpusDecoder();
-
-			await decoder.ready;
-
-			// Default: 48kHz, 2 channels
-			expect(mockWasmInstance.opus_frame_decoder_create).toHaveBeenCalledWith(48000, 2);
-		});
-
-		it('should initialize with custom sample rate', async () => {
-			const decoder = new OpusDecoder({ sampleRate: 24000 });
-
-			await decoder.ready;
-
-			expect(mockWasmInstance.opus_frame_decoder_create).toHaveBeenCalledWith(24000, 2);
-		});
-
-		it('should initialize with custom channels', async () => {
-			const decoder = new OpusDecoder({ channels: 1 });
-
-			await decoder.ready;
-
-			expect(mockWasmInstance.opus_frame_decoder_create).toHaveBeenCalledWith(48000, 1);
-		});
-
-		it('should initialize with both custom sample rate and channels', async () => {
-			const decoder = new OpusDecoder({ sampleRate: 16000, channels: 1 });
-
-			await decoder.ready;
-
-			expect(mockWasmInstance.opus_frame_decoder_create).toHaveBeenCalledWith(16000, 1);
-		});
-
-		it('should default to 48kHz for invalid sample rate', async () => {
-			const decoder = new OpusDecoder({ sampleRate: 99999 as any });
-
-			await decoder.ready;
-
-			expect(mockWasmInstance.opus_frame_decoder_create).toHaveBeenCalledWith(48000, 2);
-		});
-
-		it('should throw error if decoder creation fails', async () => {
-			// Mock decoder creation to return error code
-			mockWasmInstance = createMockWasmInstance({ createReturns: -1 }); // OPUS_BAD_ARG
-			(OpusDecoder as any).opusModule = Promise.resolve(mockWasmInstance);
-
-			const decoder = new OpusDecoder();
-
-			await expect(decoder.ready).rejects.toThrow('libopus opus_decoder_create failed');
-		});
-
-		it('should allocate memory for input and output buffers', async () => {
-			const decoder = new OpusDecoder();
-
-			await decoder.ready;
-
-			// Should call malloc at least twice (input and output buffers)
-			expect(mockWasmInstance.malloc.mock.calls.length).toBeGreaterThanOrEqual(2);
+			await expect(decoder.ready).resolves.toBeUndefined();
 		});
 	});
 
 	describe('decodeFrame', () => {
-		it('should decode valid Opus frame', async () => {
+		it('decodes a valid Opus frame', () => {
+			h.decode.mockReturnValue(pcmBuffer(960, 1));
 			const decoder = new OpusDecoder({ sampleRate: 24000, channels: 1 });
-			await decoder.ready;
 
-			const opusFrame = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
-			const result = decoder.decodeFrame(opusFrame);
+			const result = decoder.decodeFrame(new Uint8Array([1, 2, 3, 4]));
 
-			expect(mockWasmInstance.opus_frame_decode).toHaveBeenCalled();
+			expect(h.decode).toHaveBeenCalledWith(expect.any(Buffer), expect.any(Number), false);
 			expect(result.samplesDecoded).toBe(960);
 			expect(result.sampleRate).toBe(24000);
 			expect(result.channels).toBe(1);
 			expect(result.errors).toHaveLength(0);
 			expect(result.audioData).toBeInstanceOf(Uint8Array);
+			expect(result.audioData.length).toBe(960 * 2);
 		});
 
-		it('should handle decode errors', async () => {
-			// Mock decoder to return error
-			mockWasmInstance = createMockWasmInstance({ decodeReturns: -4 }); // OPUS_INVALID_PACKET
-			(OpusDecoder as any).opusModule = Promise.resolve(mockWasmInstance);
+		it('reports samplesDecoded scaled by channels', () => {
+			h.decode.mockReturnValue(pcmBuffer(480, 2)); // 480 samples * 2ch
+			const decoder = new OpusDecoder({ channels: 2 });
 
+			const result = decoder.decodeFrame(new Uint8Array([1, 2]));
+
+			expect(result.samplesDecoded).toBe(480);
+			expect(result.audioData.length).toBe(480 * 2 * 2);
+		});
+
+		it('captures decode errors thrown by the native layer', () => {
+			h.decode.mockImplementation(() => {
+				throw new Error('OPUS_INVALID_PACKET: corrupted');
+			});
 			const decoder = new OpusDecoder();
-			await decoder.ready;
 
-			const opusFrame = new Uint8Array([0xFF, 0xFF]);
-			const result = decoder.decodeFrame(opusFrame);
+			const result = decoder.decodeFrame(new Uint8Array([0xff, 0xff]));
 
 			expect(result.errors).toHaveLength(1);
 			expect(result.errors[0].message).toContain('OPUS_INVALID_PACKET');
 			expect(result.samplesDecoded).toBe(0);
+			expect(result.audioData.length).toBe(0);
 		});
 
-		it('should return error if decoder not initialized', async () => {
+		it('returns an error if the decoder was freed', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
-			// Free the decoder
 			decoder.free();
 
-			const opusFrame = new Uint8Array([0x01, 0x02]);
-			const result = decoder.decodeFrame(opusFrame);
+			const result = decoder.decodeFrame(new Uint8Array([1, 2]));
 
 			expect(result.errors).toHaveLength(1);
 			expect(result.errors[0].message).toBe('Decoder freed or not initialized');
 			expect(result.samplesDecoded).toBe(0);
 		});
-
-		it('should track frame statistics', async () => {
-			const decoder = new OpusDecoder();
-			await decoder.ready;
-
-			// Decode multiple frames
-			const frame1 = new Uint8Array([0x01, 0x02]);
-			const frame2 = new Uint8Array([0x03, 0x04, 0x05]);
-
-			decoder.decodeFrame(frame1);
-			decoder.decodeFrame(frame2);
-
-			// Frame numbers should increment
-			expect(mockWasmInstance.opus_frame_decode).toHaveBeenCalledTimes(2);
-		});
-
-		it('should return PCM data with correct length', async () => {
-			// Mock to return specific sample count
-			mockWasmInstance = createMockWasmInstance({ decodeReturns: 480 }); // 10ms at 48kHz
-			(OpusDecoder as any).opusModule = Promise.resolve(mockWasmInstance);
-
-			const decoder = new OpusDecoder({ channels: 2 });
-			await decoder.ready;
-
-			const opusFrame = new Uint8Array([0x01, 0x02]);
-			const result = decoder.decodeFrame(opusFrame);
-
-			// audioData length should be samplesDecoded * channels * 2 (bytes per Int16 sample)
-			expect(result.audioData.length).toBe(480 * 2 * 2);
-		});
 	});
 
 	describe('conceal', () => {
-		it('should perform FEC with next packet', async () => {
-			const decoder = new OpusDecoder();
-			await decoder.ready;
+		it('performs FEC decode when given the next packet', () => {
+			h.decode.mockReturnValue(pcmBuffer(960, 1));
+			const decoder = new OpusDecoder({ sampleRate: 48000, channels: 1 });
 
-			const nextPacket = new Uint8Array([0x01, 0x02, 0x03]);
-			const result = decoder.conceal(nextPacket, 960);
+			const result = decoder.conceal(new Uint8Array([1, 2, 3]), 960);
 
-			// Should call decode with FEC enabled (last parameter = 1)
-			expect(mockWasmInstance.opus_frame_decode).toHaveBeenCalledWith(
-				expect.any(Number), // decoder pointer
-				expect.any(Number), // input ptr
-				3, // input length
-				expect.any(Number), // output ptr
-				960, // frame size
-				1, // enableFec = 1 for FEC
-			);
-
+			// FEC: packet present, fec flag = true.
+			expect(h.decode).toHaveBeenCalledWith(expect.any(Buffer), 960, true);
 			expect(result.samplesDecoded).toBe(960);
 			expect(result.errors).toHaveLength(0);
 		});
 
-		it('should perform PLC without next packet', async () => {
-			const decoder = new OpusDecoder();
-			await decoder.ready;
+		it('performs PLC decode without a packet', () => {
+			h.decode.mockReturnValue(pcmBuffer(960, 1));
+			const decoder = new OpusDecoder({ sampleRate: 48000, channels: 1 });
 
-			const result = decoder.conceal(undefined, 960);
+			decoder.conceal(undefined, 960);
 
-			// Should call decode with null input for PLC
-			expect(mockWasmInstance.opus_frame_decode).toHaveBeenCalledWith(
-				expect.any(Number), // decoder pointer
-				0, // input ptr = 0 for PLC
-				0, // input length = 0
-				expect.any(Number), // output ptr
-				960, // frame size
-				0, // enableFec = 0 for PLC
-			);
-
-			expect(result.samplesDecoded).toBe(960);
+			// PLC: null packet, fec flag = false.
+			expect(h.decode).toHaveBeenCalledWith(null, 960, false);
 		});
 
-		it('should limit samples to conceal to output buffer size', async () => {
-			const decoder = new OpusDecoder();
-			await decoder.ready;
+		it('caps the concealment frame size to 120ms at the output rate', () => {
+			h.decode.mockReturnValue(pcmBuffer(5760, 1));
+			const decoder = new OpusDecoder({ sampleRate: 48000, channels: 1 });
 
-			// Request more samples than buffer can hold
-			const result = decoder.conceal(undefined, 999999);
+			decoder.conceal(undefined, 999999);
 
-			// Should be capped to _outputChannelSize (120 * 48 = 5760)
-			const callArgs = mockWasmInstance.opus_frame_decode.mock.calls[0];
-			expect(callArgs[4]).toBeLessThanOrEqual(5760);
+			const frameSizeArg = h.decode.mock.calls[0][1] as number;
+			expect(frameSizeArg).toBeLessThanOrEqual(0.12 * 48000); // 5760
 		});
 
-		it('should handle conceal errors', async () => {
-			mockWasmInstance = createMockWasmInstance({ decodeReturns: -3 }); // OPUS_INTERNAL_ERROR
-			(OpusDecoder as any).opusModule = Promise.resolve(mockWasmInstance);
-
+		it('captures conceal errors thrown by the native layer', () => {
+			h.decode.mockImplementation(() => {
+				throw new Error('OPUS_INTERNAL_ERROR');
+			});
 			const decoder = new OpusDecoder();
-			await decoder.ready;
 
 			const result = decoder.conceal(undefined, 960);
 
@@ -321,10 +201,8 @@ describe('OpusDecoder', () => {
 			expect(result.samplesDecoded).toBe(0);
 		});
 
-		it('should return error if decoder not initialized', async () => {
+		it('returns an error if the decoder was freed', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
 			decoder.free();
 
 			const result = decoder.conceal(undefined, 960);
@@ -335,73 +213,32 @@ describe('OpusDecoder', () => {
 	});
 
 	describe('reset', () => {
-		it('should reset decoder state', async () => {
+		it('resets the native decoder state', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
 			decoder.reset();
-
-			expect(mockWasmInstance.opus_frame_decoder_reset).toHaveBeenCalled();
+			expect(h.reset).toHaveBeenCalled();
 		});
 
-		it('should throw error if decoder not initialized', async () => {
+		it('throws if the decoder was freed', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
 			decoder.free();
-
 			expect(() => decoder.reset()).toThrow('Decoder freed or not initialized');
 		});
 	});
 
 	describe('free', () => {
-		it('should free all allocated memory', async () => {
+		it('destroys the native decoder', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
-			const mallocCallCount = mockWasmInstance.malloc.mock.calls.length;
-
 			decoder.free();
-
-			// Should free all allocated pointers
-			expect(mockWasmInstance.free.mock.calls.length).toBeGreaterThanOrEqual(mallocCallCount);
+			expect(h.destroy).toHaveBeenCalledTimes(1);
 		});
 
-		it('should destroy decoder instance', async () => {
+		it('is safe to call multiple times', () => {
 			const decoder = new OpusDecoder();
-			await decoder.ready;
-
-			decoder.free();
-
-			expect(mockWasmInstance.opus_frame_decoder_destroy).toHaveBeenCalled();
-		});
-
-		it('should be safe to call multiple times', async () => {
-			const decoder = new OpusDecoder();
-			await decoder.ready;
-
 			decoder.free();
 			decoder.free();
 			decoder.free();
-
-			// Should not throw
-		});
-	});
-
-	describe('ready promise', () => {
-		it('should resolve when initialization completes', async () => {
-			const decoder = new OpusDecoder();
-
-			await expect(decoder.ready).resolves.toBeUndefined();
-		});
-
-		it('should reject if WASM module fails to load', async () => {
-			// Mock WASM module to reject
-			(OpusDecoder as any).opusModule = Promise.reject(new Error('WASM load failed'));
-
-			const decoder = new OpusDecoder();
-
-			await expect(decoder.ready).rejects.toThrow('WASM load failed');
+			expect(h.destroy).toHaveBeenCalledTimes(1);
 		});
 	});
 });

@@ -9,7 +9,9 @@ await esbuild.build({
 	outfile: 'dist/bundle/server.js',
 	sourcemap: true,
 	packages: 'external', // Keep all node_modules external
-	external: ['./dist/opus-decoder.cjs', './dist/opus-encoder.cjs'], // Keep WASM modules external
+	// The native Opus addon (build/Release/opus_native.node) is loaded at runtime
+	// via a dynamic require in src/OpusDecoder/nativeOpus.ts, so esbuild leaves it
+	// alone — nothing extra to mark external here.
 });
 
 console.log('✅ Bundle created successfully');

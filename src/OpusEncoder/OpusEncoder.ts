@@ -1,13 +1,10 @@
-import OpusEncoderModuleFactory from '../../dist/opus-encoder.cjs';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+// Low-level Opus encoder. Wraps the native libopus addon (opus_native.node).
+//
+// Historically this was an Emscripten/WASM wrapper; it now binds directly to
+// native libopus via N-API. The public surface (constructor config, `ready`,
+// `encodeFrame`, `getFrameSize`, `getFrameSizeBytes`, `free`) is unchanged.
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const wasmPath = path.join(__dirname, '../../dist/opus-encoder.wasm');
-const wasmBuffer = fs.readFileSync(wasmPath);
-const wasm = new WebAssembly.Module(wasmBuffer);
+import { nativeOpus, OPUS_APPLICATION, type NativeOpusEncoder } from '../OpusDecoder/nativeOpus';
 
 type SampleRate = 8000 | 12000 | 16000 | 24000 | 48000;
 
@@ -19,31 +16,10 @@ export interface OpusEncoderConfig {
 	complexity?: number; // 0-10
 }
 
-interface OpusEncoderModule {
-	_opus_frame_encoder_create: (sampleRate: number, channels: number, application: number) => number;
-	_opus_frame_encoder_get_frame_size: (ctx: number) => number;
-	_opus_frame_encode: (ctx: number, pcmData: number, pcmLength: number, outputBuffer: number, outputBufferSize: number) => number;
-	_opus_frame_encoder_destroy: (ctx: number) => void;
-	_opus_frame_encoder_set_bitrate: (ctx: number, bitrate: number) => number;
-	_opus_frame_encoder_set_complexity: (ctx: number, complexity: number) => number;
-	_malloc: (size: number) => number;
-	_free: (ptr: number) => void;
-	HEAPU8: Uint8Array;
-}
-
-const APPLICATION_TYPES = {
-	voip: 2048, // OPUS_APPLICATION_VOIP
-	audio: 2049, // OPUS_APPLICATION_AUDIO
-	restricted_lowdelay: 2051, // OPUS_APPLICATION_RESTRICTED_LOWDELAY
-};
-
 export class OpusEncoder<SR extends SampleRate> {
-	private module: OpusEncoderModule | null = null;
-	private ctx: number = 0;
+	private encoder: NativeOpusEncoder | null = null;
 	private config: Required<OpusEncoderConfig>;
 	private frameSize: number = 0;
-	private pcmBuffer: Uint8Array | null = null;
-	private outputBuffer: Uint8Array | null = null;
 	private isReady: boolean = false;
 	private inputBuffer: Uint8Array = new Uint8Array(0);
 
@@ -62,42 +38,21 @@ export class OpusEncoder<SR extends SampleRate> {
 	}
 
 	private async init(): Promise<void> {
-		this.module = (await OpusEncoderModuleFactory({
-			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				try {
-					const instance = new WebAssembly.Instance(wasm, info);
-					receive(instance);
-					return instance.exports;
-				} catch (error) {
-					throw error;
-				}
-			},
-		})) as OpusEncoderModule;
+		const application = OPUS_APPLICATION[this.config.application];
 
-		const application = APPLICATION_TYPES[this.config.application];
+		this.encoder = new nativeOpus.OpusEncoder(this.config.sampleRate, this.config.channels, application);
 
-		this.ctx = this.module._opus_frame_encoder_create(this.config.sampleRate, this.config.channels, application);
+		// 20ms frames at the configured sample rate.
+		this.frameSize = this.config.sampleRate / 50;
 
-		if (this.ctx === 0) {
-			throw new Error('Failed to create Opus encoder');
-		}
-
-		this.frameSize = this.module._opus_frame_encoder_get_frame_size(this.ctx);
-
-		this.module._opus_frame_encoder_set_bitrate(this.ctx, this.config.bitrate);
-		this.module._opus_frame_encoder_set_complexity(this.ctx, this.config.complexity);
-
-		const maxPcmBytes = this.frameSize * this.config.channels * 2; // 16-bit samples
-		this.pcmBuffer = new Uint8Array(this.module.HEAPU8.buffer, this.module._malloc(maxPcmBytes), maxPcmBytes);
-
-		const maxOpusBytes = 4000;
-		this.outputBuffer = new Uint8Array(this.module.HEAPU8.buffer, this.module._malloc(maxOpusBytes), maxOpusBytes);
+		this.encoder.setBitrate(this.config.bitrate);
+		this.encoder.setComplexity(this.config.complexity);
 
 		this.isReady = true;
 	}
 
 	encodeFrame(pcmData: Uint8Array): Uint8Array[] {
-		if (!this.isReady || !this.module || !this.pcmBuffer || !this.outputBuffer) {
+		if (!this.isReady || !this.encoder) {
 			throw new Error('Encoder not ready');
 		}
 
@@ -113,27 +68,8 @@ export class OpusEncoder<SR extends SampleRate> {
 		while (this.inputBuffer.length >= frameSizeBytes) {
 			const frameData = this.inputBuffer.subarray(0, frameSizeBytes);
 
-			this.pcmBuffer.set(frameData);
-
-			const encodedBytes = this.module._opus_frame_encode(
-				this.ctx,
-				this.pcmBuffer.byteOffset,
-				frameSizeBytes,
-				this.outputBuffer.byteOffset,
-				this.outputBuffer.length,
-			);
-
-			if (encodedBytes < 0) {
-				const errorMessages: Record<string, string> = {
-					'-1': 'OPUS_BAD_ARG: One or more invalid/out of range arguments',
-					'-2': 'OPUS_BUFFER_TOO_SMALL: Not enough bytes allocated in the buffer',
-					'-3': 'OPUS_INTERNAL_ERROR: An internal error was detected',
-				};
-				const errorMsg = errorMessages[encodedBytes.toString()] || `Unknown error code: ${encodedBytes}`;
-				throw new Error(`Opus encoding failed: ${errorMsg}`);
-			}
-
-			encodedFrames.push(new Uint8Array(this.outputBuffer.subarray(0, encodedBytes)));
+			const encoded = this.encoder.encode(Buffer.from(frameData), this.frameSize);
+			encodedFrames.push(new Uint8Array(encoded));
 
 			this.inputBuffer = this.inputBuffer.subarray(frameSizeBytes);
 		}
@@ -142,15 +78,9 @@ export class OpusEncoder<SR extends SampleRate> {
 	}
 
 	free(): void {
-		if (this.module && this.ctx) {
-			if (this.pcmBuffer) {
-				this.module._free(this.pcmBuffer.byteOffset);
-			}
-			if (this.outputBuffer) {
-				this.module._free(this.outputBuffer.byteOffset);
-			}
-			this.module._opus_frame_encoder_destroy(this.ctx);
-			this.ctx = 0;
+		if (this.encoder) {
+			this.encoder.destroy();
+			this.encoder = null;
 			this.isReady = false;
 		}
 	}

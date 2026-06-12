@@ -1,7 +1,7 @@
 /**
  * End-to-end integration test for the opus encoder ↔ decoder round trip.
  *
- * Loads the real WASM artefacts (both opus-decoder.cjs and opus-encoder.cjs)
+ * Loads the real native Opus addon (build/Release/opus_native.node)
  * and validates that a sine wave round-trips through encode → decode with
  * matching-energy PCM output. Phase-aligned SNR is too sensitive to opus's
  * ~6.5 ms algorithmic delay for a build-time check, so we measure RMS
@@ -9,9 +9,9 @@
  * (silent encoder, garbage decoder, wrong sample-rate path) without
  * depending on cross-correlation tuning.
  *
- * Requires `npm run build:wasm` to have produced both dist artefacts.
- * Skipped if either is missing so unit-test runs in environments that
- * haven't built WASM stay green.
+ * Requires `npm run build:native` to have produced the addon.
+ * Skipped if it is missing so unit-test runs in environments that
+ * haven't compiled the native module stay green.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -31,13 +31,11 @@ const TOTAL_SAMPLES = SAMPLE_RATE * TOTAL_DURATION_SEC;
 const MIN_ENERGY_RATIO = 0.25;
 const MAX_ENERGY_RATIO = 4.0;
 
-const wasmDistExists =
-	fs.existsSync(path.join(__dirname, '../../dist/opus-decoder.wasm'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-decoder.cjs'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-encoder.wasm'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-encoder.cjs'));
+const nativeAddonExists = fs.existsSync(
+	path.join(__dirname, '../../build/Release/opus_native.node'),
+);
 
-const describeIfWasm = wasmDistExists ? describe : describe.skip;
+const describeIfWasm = nativeAddonExists ? describe : describe.skip;
 
 function generateSineWavePcm16(samples: number, sampleRate: number, freq: number, amplitude: number): Uint8Array {
 	const out = new Uint8Array(samples * 2);

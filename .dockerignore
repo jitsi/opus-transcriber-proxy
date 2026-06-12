@@ -2,10 +2,12 @@
 node_modules/
 worker/node_modules/
 
-# Source files (we only need the compiled output in dist/)
-src/
-
-# Other build artifacts
+# Build artifacts (the native addon + bundle are produced inside the image).
+# NOTE: src/ is intentionally NOT ignored — the builder stage compiles the
+# native Opus addon (libopus + N-API) from src/OpusDecoder/opus inside the
+# container, since a host-built .node cannot run on the Linux container.
+build/
+dist/
 dist-node/
 
 # Development files

@@ -12,17 +12,27 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
-// Import OpusDecoder - we need to load it dynamically since it's TypeScript
-import('../dist/opus-decoder.cjs').then(async (OpusDecoderModule) => {
-	await main(OpusDecoderModule.default);
-}).catch(error => {
-	console.error('Failed to load OpusDecoder module:', error);
-	console.error('\nMake sure to build the WASM module first:');
-	console.error('  npm run build:wasm');
+// Load the native Opus addon (compiled by `npm run build:native`). The actual
+// run is deferred to a microtask so the top-level consts below are initialized
+// before main() executes.
+let nativeOpus;
+try {
+	nativeOpus = require(path.join(__dirname, '../build/Release/opus_native.node'));
+} catch (error) {
+	console.error('Failed to load the native Opus addon:', error);
+	console.error('\nBuild it first:');
+	console.error('  npm run build:native');
+	process.exit(1);
+}
+
+Promise.resolve().then(() => main(nativeOpus)).catch((error) => {
+	console.error('mix-audio failed:', error);
 	process.exit(1);
 });
 
@@ -32,7 +42,7 @@ const BYTES_PER_SAMPLE = 2; // 16-bit PCM
 const MS_PER_PACKET = 20;
 const SAMPLES_PER_PACKET = (SAMPLE_RATE * MS_PER_PACKET) / 1000; // 480 samples at 24kHz
 
-async function main(OpusDecoderModule) {
+async function main(nativeOpus) {
 	const inputFile = process.argv[2] || 'media.jsonl';
 	const outputFile = process.argv[3] || 'output.wav';
 
@@ -99,9 +109,9 @@ async function main(OpusDecoderModule) {
 		stream.packets.sort((a, b) => a.timestamp - b.timestamp);
 	}
 
-	// Create opus decoder using the WASM module directly
+	// Create opus decoder using the native addon
 	console.log('Initializing Opus decoder...');
-	const decoder = await createOpusDecoder(OpusDecoderModule, SAMPLE_RATE, CHANNELS);
+	const decoder = createOpusDecoder(nativeOpus, SAMPLE_RATE, CHANNELS);
 
 	// Decode all packets
 	console.log('Decoding audio packets...');
@@ -204,95 +214,23 @@ async function main(OpusDecoderModule) {
 	console.log(`Done! Output file size: ${fileSizeMB} MB`);
 }
 
-async function createOpusDecoder(OpusDecoderModule, sampleRate, channels) {
-	// Load WASM module
-	const wasmPath = path.join(__dirname, '../dist/opus-decoder.wasm');
-	const wasmBuffer = fs.readFileSync(wasmPath);
-	const wasm = new WebAssembly.Module(wasmBuffer);
-
-	const wasmInstance = await new Promise((resolve, reject) => {
-		OpusDecoderModule({
-			instantiateWasm(info, receive) {
-				try {
-					const instance = new WebAssembly.Instance(wasm, info);
-					receive(instance);
-					return instance.exports;
-				} catch (error) {
-					reject(error);
-					throw error;
-				}
-			},
-		})
-			.then((module) => {
-				resolve({
-					opus_frame_decoder_create: module._opus_frame_decoder_create,
-					opus_frame_decode: module._opus_frame_decode,
-					opus_frame_decoder_destroy: module._opus_frame_decoder_destroy,
-					malloc: module._malloc,
-					free: module._free,
-					HEAP: module.wasmMemory.buffer,
-				});
-			})
-			.catch(reject);
-	});
-
-	// Create decoder
-	const decoderPtr = wasmInstance.opus_frame_decoder_create(sampleRate, channels);
-
-	if (decoderPtr < 0) {
-		throw new Error(`Failed to create opus decoder: error code ${decoderPtr}`);
-	}
-
-	// Allocate input/output buffers
-	const inputSize = 32000 * 0.12 * channels; // 256kbps per channel
-	const outputChannelSize = 120 * 48; // 120 ms at 48 kHz
-	const outputSize = channels * outputChannelSize;
-
-	const inputPtr = wasmInstance.malloc(inputSize);
-	const outputPtr = wasmInstance.malloc(outputSize * 2); // 16-bit samples
-
-	return {
-		wasm: wasmInstance,
-		decoderPtr,
-		inputPtr,
-		inputSize,
-		outputPtr,
-		outputSize,
-		channels,
-		sampleRate,
-	};
+function createOpusDecoder(nativeOpus, sampleRate, channels) {
+	const native = new nativeOpus.OpusDecoder(sampleRate, channels);
+	// Max output samples per channel for a single packet: 120 ms at the output rate.
+	const maxFrameSize = Math.round(0.12 * sampleRate);
+	return { native, channels, sampleRate, maxFrameSize };
 }
 
 function decodeOpusFrame(decoder, opusData) {
-	const { wasm, decoderPtr, inputPtr, outputPtr, outputSize } = decoder;
-
-	// Copy input data to WASM heap
-	const inputView = new Uint8Array(wasm.HEAP, inputPtr, opusData.length);
-	inputView.set(opusData);
-
-	// Decode
-	const samplesDecoded = wasm.opus_frame_decode(
-		decoderPtr,
-		inputPtr,
-		opusData.length,
-		outputPtr,
-		outputSize,
-		0 // FEC disabled
-	);
-
-	if (samplesDecoded < 0) {
-		throw new Error(`Opus decode error: code ${samplesDecoded}`);
-	}
-
-	// Copy output data from WASM heap
-	const outputView = new Int16Array(wasm.HEAP, outputPtr, samplesDecoded * decoder.channels);
-	return new Int16Array(outputView);
+	// Native decode returns a Buffer of little-endian interleaved int16 PCM.
+	const pcm = decoder.native.decode(Buffer.from(opusData), decoder.maxFrameSize, false);
+	const samples = Math.floor(pcm.length / 2);
+	// Copy into a standalone Int16Array (don't alias the addon-owned buffer).
+	return Int16Array.from(new Int16Array(pcm.buffer, pcm.byteOffset, samples));
 }
 
 function freeOpusDecoder(decoder) {
-	decoder.wasm.free(decoder.inputPtr);
-	decoder.wasm.free(decoder.outputPtr);
-	decoder.wasm.opus_frame_decoder_destroy(decoder.decoderPtr);
+	decoder.native.destroy();
 }
 
 function writeWavFile(filename, pcmData, sampleRate, channels) {

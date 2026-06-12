@@ -165,7 +165,7 @@ dist
 .env*
 .wrangler/
 
-# Emscripten builds
+# Native addon build output (node-gyp) and bundle/compiled output
 build/
 dist/
 

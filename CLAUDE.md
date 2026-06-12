@@ -15,48 +15,47 @@ This is a real-time WebSocket transcription proxy that routes audio (Opus or oth
 
 ### Prerequisites
 
-**Emscripten** must be installed before building. Install it using the official emsdk:
+Opus is compiled **natively** (not WebAssembly) via a node-gyp N-API addon, so a
+C/C++ toolchain is required:
 
-```bash
-# Clone the Emscripten SDK
-git clone https://github.com/emscripten-core/emsdk.git
-cd emsdk
+- A C/C++ compiler (`clang`/`gcc` + `g++`), `make`, and `python3` (for node-gyp).
+  - macOS: install the Xcode Command Line Tools (`xcode-select --install`).
+  - Debian/Ubuntu: `apt-get install build-essential python3`.
+  - Alpine (container): `apk add python3 make g++` (handled by the Dockerfile).
+- The libopus source submodule must be checked out:
+  `git submodule update --init src/OpusDecoder/opus`.
 
-# Install and activate the latest SDK
-./emsdk install latest
-./emsdk activate latest
-
-# Activate environment variables (needs to be done in each new terminal)
-source ./emsdk_env.sh  # On Windows use: emsdk_env.bat
-```
-
-For more details, see the [official Emscripten installation guide](https://emscripten.org/docs/getting_started/downloads.html).
+No Emscripten is needed. libopus is built from the submodule entirely by node-gyp.
 
 ### Initial Setup (First Time Only)
 ```bash
 npm install
-npm run configure  # Configures libopus with emconfigure (requires Emscripten)
-npm run build:wasm # Compiles Opus decoder to WebAssembly
+git submodule update --init src/OpusDecoder/opus
+npm run build:native  # Compiles libopus + the N-API addon (build/Release/opus_native.node)
 ```
 
 ### Regular Build
 ```bash
-npm run build      # Builds WASM + TypeScript + esbuild bundle
+npm run build      # Builds the native addon + esbuild bundle
 ```
 
-This runs three steps:
-1. `npm run build:wasm` - Compiles C code to WASM using Emscripten (via Makefile)
-2. `npm run build:ts` - Compiles TypeScript to dist/
-3. `npm run build:bundle` - Bundles with esbuild for production (dist/bundle/server.js)
+This runs two steps:
+1. `npm run build:native` - `node-gyp rebuild`: compiles libopus (from the
+   submodule) and the N-API addon into `build/Release/opus_native.node`
+2. `npm run build:bundle` - Bundles with esbuild for production (dist/bundle/server.js)
 
-The WASM build uses a Makefile that:
-- Configures libopus with emconfigure
-- Compiles libopus.a with emmake
-- Links opus_frame_decoder.c with emcc to create opus-decoder.wasm
+The native build (`binding.gyp`) compiles a portable C float build of libopus and
+selects SIMD at **runtime** via libopus' RTCD: on x86 it probes the CPU (cpuid) and
+uses SSE/SSE2/SSE4.1/AVX2 only when present; on aarch64 NEON is part of the base ISA
+and used directly. Nothing is presumed on x86, so the binary runs on any CPU. Each
+ISA's intrinsic files are compiled into their own static_library (with the matching
+`-msse4.1`/`-mavx2` flags) so the addon never executes an instruction the CPU lacks.
+`native/opus_addon.cc` is the N-API wrapper; `native/opus-config/config.h` is the
+hand-written libopus build config.
 
 ### Development
 ```bash
-npm run dev        # Builds WASM once, then runs tsx with watch mode
+npm run dev        # Builds the native addon once, then runs tsx with watch mode
 npm run typecheck  # Type check without emitting files
 ```
 
@@ -71,10 +70,16 @@ Tests are in `test/` with helpers in `test/helpers/`. The test setup uses vitest
 
 ### Docker
 ```bash
-npm run docker:build       # Build + create Docker image
+npm run docker:build       # Build the Docker image (self-contained)
 npm run docker:run         # Run container with .env
 npm run docker:stop        # Stop running containers
 ```
+
+The Dockerfile is multi-stage and **self-contained**: the builder stage compiles
+the native Opus addon (libopus + N-API) and bundles the server inside the image; the
+runtime stage copies only `build/Release/opus_native.node`, `dist/bundle`, and
+production dependencies. A host-built `.node` cannot be reused because it is
+platform-specific, so `docker:build` no longer depends on a host `npm run build`.
 
 ### Cloudflare Deployment
 ```bash
@@ -98,7 +103,7 @@ TranscriberProxy (transcriberproxy.ts)
         ↓
 OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
     ├─ AudioDecoder (via AudioDecoderFactory)
-    │   ├─ OpusAudioDecoder - Decodes Opus frames to PCM (WASM-backed)
+    │   ├─ OpusAudioDecoder - Decodes Opus frames to PCM (native libopus)
     │   ├─ L16Decoder - Resamples or passes through raw PCM l16
     │   └─ PassThroughDecoder - Forwards raw Opus/Ogg frames unchanged
     └─ TranscriptionBackend - Sends audio to provider
@@ -143,7 +148,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 
 **OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
 - Implements `AudioDecoder` with packet-loss concealment logic
-- Wraps the low-level WASM `OpusDecoder`; handles gap detection and concealment frames
+- Wraps the low-level `OpusDecoder`; handles gap detection and concealment frames
 - Decodes Opus frames at 48kHz to PCM at 24kHz mono
 
 **L16Decoder** (`src/L16Decoder.ts`)
@@ -157,8 +162,19 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - `samplesDecoded` is always 0 (no PCM to count)
 
 **OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
-- Low-level TypeScript wrapper around the WASM Opus decoder
-- Used by `OpusAudioDecoder`; not used directly by `OutgoingConnection`
+- Low-level TypeScript wrapper around the native libopus addon (via `nativeOpus.ts`)
+- Supports `decodeFrame`, FEC/PLC `conceal`, `reset`, and `free`
+- Used by `OpusAudioDecoder` and `TranslatorConnection`; not used directly by `OutgoingConnection`
+
+**OpusEncoder** (`src/OpusEncoder/OpusEncoder.ts`)
+- Low-level TypeScript wrapper around the native libopus encoder (via `nativeOpus.ts`)
+- Accumulates PCM and emits one Opus packet per 20 ms frame (`encodeFrame`)
+- Used by `TranslatorConnection` to re-encode translated PCM back to Opus
+
+**nativeOpus** (`src/OpusDecoder/nativeOpus.ts`)
+- Loads the compiled N-API addon `build/Release/opus_native.node` (via `createRequire`,
+  probing a few known locations so it works under tsx and the esbuild bundle)
+- Exports typed `NativeOpusDecoder` / `NativeOpusEncoder` interfaces and `OPUS_APPLICATION`
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers
@@ -293,11 +309,18 @@ src/
 │   ├── DeepgramBackend.ts        # Deepgram implementation
 │   ├── GeminiBackend.ts          # Gemini implementation
 │   └── DummyBackend.ts           # Test/stats backend
-└── OpusDecoder/
-    ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
-    ├── OpusDecoder.ts            # Low-level WASM wrapper
-    ├── opus_frame_decoder.c/h    # C code for WASM
-    └── opus/                     # libopus source (submodule)
+├── OpusDecoder/
+│   ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
+│   ├── OpusDecoder.ts            # Low-level decoder wrapper (native libopus)
+│   ├── nativeOpus.ts             # Loader + typed interface for the N-API addon
+│   └── opus/                     # libopus source (submodule)
+└── OpusEncoder/
+    └── OpusEncoder.ts            # Low-level encoder wrapper (native libopus)
+
+native/                        # Native Opus addon (compiled by node-gyp)
+├── opus_addon.cc              # N-API wrapper (OpusDecoder + OpusEncoder classes)
+└── opus-config/config.h       # Hand-written libopus build config
+binding.gyp                    # node-gyp build: libopus + per-ISA SIMD + addon
 
 worker/
 ├── index.ts                   # Cloudflare Worker entry
@@ -396,7 +419,8 @@ Do not leave stale descriptions. If a note says "only X happens" and you change 
 
 ## Notes for Claude
 
-- The WASM build requires Emscripten to be installed and activated (see Prerequisites section). If build fails, check that Emscripten is installed and that `npm run configure` was run.
+- Opus is native (node-gyp N-API addon, `build:native`), not WebAssembly. The build needs a C/C++ toolchain + python3 and the `src/OpusDecoder/opus` submodule checked out. If the addon fails to load at runtime, confirm `build/Release/opus_native.node` exists (run `npm run build:native`) and that `src/OpusDecoder/nativeOpus.ts`'s candidate paths still resolve relative to `process.cwd()` / the module.
+- SIMD is selected at runtime (libopus RTCD on x86; NEON baseline on aarch64). Never add `-msse*`/`-mavx*` to the base `libopus` target or to global cflags — those flags must stay confined to their per-ISA static_library targets in `binding.gyp`, or the addon may execute instructions the CPU lacks.
 - When modifying backends, ensure they handle connection lifecycle correctly (pending → connected → failed/closed).
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
