@@ -18,18 +18,17 @@ export interface TranslatorProxyOptions {
  * to one or more OpenAI translation sessions.
  *
  * Driven by the JVB via the `sources` control event (PR jitsi/jitsi-videobridge#2419):
- *   {"event":"sources","exports":["523834112-a0.en"],"requests":["523834112-a0"]}
- * `exports` is the authoritative full set of synthetic, language-encoded sources the
- * proxy must produce. Each name encodes an input source name plus a target language,
- * separated by the last ".", e.g. "523834112-a0.en" -> input source "523834112-a0",
- * language "en". One {@link TranslatorConnection} is maintained per (input source,
- * language); returned audio is tagged with the synthetic name verbatim so the
- * bridge's findSyntheticAudioSource(tag) matches.
+ *   {"event":"sources","exports":["523834112-a0"],"requests":["523834112-a0.en"]}
+ * `requests` is the authoritative full set of synthetic sources to produce. Each
+ * request is a synthetic source name encoding an input (export) source name plus a
+ * target language, separated by the last ".", e.g. "523834112-a0.en" ->
+ * input source "523834112-a0", language "en". One {@link TranslatorConnection} is
+ * maintained per (input source, language); returned audio is tagged with the
+ * request string verbatim so the bridge's findSyntheticAudioSource(tag) matches.
  *
- * `requests` is the set of sender (input) source names whose audio the proxy receives.
- * Incoming `media` is keyed by the input source name — the bridge tags its outbound
- * media by source name — and is fanned to every synthetic source whose input matches,
- * producing one translated stream per requested language.
+ * Incoming `media` is keyed by the export (input) source name — the bridge tags its
+ * outbound media by source name — and is fanned to every translation session for
+ * that source, producing one translated stream per requested language.
  *
  * The legacy `start-translation` / `stop-translation` control frames and the
  * `?lang=` URL parameter are retained as the dev/replay path only. They apply a
@@ -107,38 +106,34 @@ export class TranslatorProxy extends EventEmitter {
 	}
 
 	/**
-	 * Reconcile the active translation sessions against a `sources` event. `exports` is the
-	 * authoritative full set of synthetic, language-encoded sources to produce; `requests` is
-	 * the set of sender (input) source names (advisory). Opens sessions for newly-requested
-	 * synthetic sources and closes ones no longer requested.
+	 * Reconcile the set of active translation sessions against the authoritative `requests`
+	 * list from a `sources` event: open sessions for newly-requested synthetic sources, close
+	 * sessions that are no longer requested.
 	 */
 	private handleSources(exports: unknown, requests: unknown): void {
-		// `exports` carries the synthetic, language-encoded names the proxy must produce
-		// (e.g. "523834112-a0.en"). `requests` carries the sender input source names (e.g.
-		// "523834112-a0") whose audio the proxy receives — advisory, used only to validate.
-		const syntheticList: string[] = Array.isArray(exports) ? exports.filter((s): s is string => typeof s === 'string') : [];
-		const inputList: string[] = Array.isArray(requests) ? requests.filter((s): s is string => typeof s === 'string') : [];
+		const exportList: string[] = Array.isArray(exports) ? exports.filter((s): s is string => typeof s === 'string') : [];
+		const requestList: string[] = Array.isArray(requests) ? requests.filter((s): s is string => typeof s === 'string') : [];
 
-		// Desired state: input source -> (language -> synthetic source name, used as the output tag verbatim).
+		// Desired state: input source -> (language -> request string verbatim, used as the output tag).
 		const desired = new Map<string, Map<string, string>>();
-		for (const synthetic of syntheticList) {
-			const parsed = this.parseSyntheticSource(synthetic);
+		for (const request of requestList) {
+			const parsed = this.parseRequest(request);
 			if (parsed === undefined) {
 				continue;
 			}
 			const { inputSourceName, language } = parsed;
-			if (inputList.length > 0 && !inputList.includes(inputSourceName)) {
-				logger.warn(`sources: synthetic source "${synthetic}" references input source "${inputSourceName}" not in requests`);
+			if (exportList.length > 0 && !exportList.includes(inputSourceName)) {
+				logger.warn(`sources: request "${request}" references input source "${inputSourceName}" not in exports`);
 			}
 			let byLanguage = desired.get(inputSourceName);
 			if (byLanguage === undefined) {
 				byLanguage = new Map<string, string>();
 				desired.set(inputSourceName, byLanguage);
 			}
-			byLanguage.set(language, synthetic);
+			byLanguage.set(language, request);
 		}
 
-		// Close any session no longer needed.
+		// Close any session no longer requested.
 		for (const [inputSourceName, byLanguage] of this.connections) {
 			const desiredLanguages = desired.get(inputSourceName);
 			for (const [language, conn] of byLanguage) {
@@ -152,15 +147,15 @@ export class TranslatorProxy extends EventEmitter {
 			}
 		}
 
-		// Open any newly-needed session.
+		// Open any newly-requested session.
 		for (const [inputSourceName, byLanguage] of desired) {
-			for (const [language, synthetic] of byLanguage) {
-				this.ensureConnection(inputSourceName, language, synthetic);
+			for (const [language, request] of byLanguage) {
+				this.ensureConnection(inputSourceName, language, request);
 			}
 		}
 
 		logger.info(
-			`sources: reconciled exports(synthetic)=${syntheticList.length} requests(inputs)=${inputList.length} active=${this.activeConnectionCount()}`,
+			`sources: reconciled exports=${exportList.length} requests=${requestList.length} active=${this.activeConnectionCount()}`,
 		);
 	}
 
@@ -169,14 +164,14 @@ export class TranslatorProxy extends EventEmitter {
 	 * is the substring after the LAST ".", so input source names (e.g. "523834112-a0") that
 	 * contain no "." are recovered intact.
 	 */
-	private parseSyntheticSource(synthetic: string): { inputSourceName: string; language: string } | undefined {
-		const dot = synthetic.lastIndexOf('.');
-		if (dot <= 0 || dot === synthetic.length - 1) {
-			logger.warn(`sources: cannot parse language from synthetic source "${synthetic}"`);
+	private parseRequest(request: string): { inputSourceName: string; language: string } | undefined {
+		const dot = request.lastIndexOf('.');
+		if (dot <= 0 || dot === request.length - 1) {
+			logger.warn(`sources: cannot parse language from request "${request}"`);
 			return undefined;
 		}
-		const inputSourceName = synthetic.slice(0, dot);
-		const language = this.normalize(synthetic.slice(dot + 1));
+		const inputSourceName = request.slice(0, dot);
+		const language = this.normalize(request.slice(dot + 1));
 		if (language === undefined) {
 			return undefined;
 		}
