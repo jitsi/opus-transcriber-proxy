@@ -11,6 +11,8 @@ RUN npm ci --only=production
 
 # Copy pre-built WASM modules (must be built before Docker build)
 COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-decoder.wasm.map ./dist/
+# Opus encoder (used by the translation path to re-encode translated audio)
+COPY dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/
 
 # Copy bundled server application
 COPY dist/bundle ./dist/bundle
