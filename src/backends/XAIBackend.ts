@@ -148,7 +148,10 @@ export class XAIBackend implements TranscriptionBackend {
 		// dropping the first utterance. xAI already finalizes utterances on silence
 		// via smart_turn (smart_turn_timeout, default 500ms), so no manual commit is
 		// needed; keeping the stream open across silences avoids the churn (JIT-15901).
-		logger.debug(`forceCommit is a no-op for xAI (smart_turn finalizes); keeping stream open for tag ${this.tag}`);
+		//
+		// Intentionally does nothing — and intentionally not logged: the idle-commit
+		// timer fires every FORCE_COMMIT_TIMEOUT (default 2s) per silent participant,
+		// so a log here would be pure noise under LOG_LEVEL=debug.
 	}
 
 	updatePrompt(_prompt: string): void {
@@ -214,11 +217,16 @@ export class XAIBackend implements TranscriptionBackend {
 		} else if (type === 'error') {
 			logger.error(`xAI API error for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
 			const message: string = parsedMessage.message || JSON.stringify(parsedMessage);
-			// xAI closes the ASR stream after a stretch of silence/inactivity with
-			// {type:error, message:"ASR stream timed out"}. This is a transient,
-			// stream-level condition for a still-active participant — signal it as
-			// recoverable so OutgoingConnection reopens the stream in place rather
-			// than dropping the participant (JIT-15901).
+			// xAI closes the ASR stream after a stretch of silence/inactivity. The exact
+			// message observed on wss://api.x.ai/v1/stt (2026-06-16) is:
+			//   {type:"error", message:"ASR stream timed out"}
+			// This is a transient, stream-level condition for a still-active participant,
+			// so we flag it recoverable and OutgoingConnection reopens the stream in place
+			// instead of dropping the participant (JIT-15901).
+			// NOTE: the match is on the message text. If xAI changes the wording this
+			// silently reverts to the fatal path. The full parsedMessage is logged at
+			// error level just above, so if the "ASR stream timed out" error rate climbs
+			// after an xAI API change, audit that log and update this matcher.
 			const recoverable = /timed out/i.test(message);
 			writeMetric(undefined, {
 				name: 'xai_api_error',

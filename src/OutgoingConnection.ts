@@ -207,10 +207,15 @@ export class OutgoingConnection {
 			if (recoverable && !this.isClosed) {
 				logger.warn(`Recoverable backend error for tag ${this.localTag} (${errorType}: ${errorMessage}); reconnecting backend in place`);
 				this.recoverBackend(errorType, errorMessage).catch((error) => {
+					// reconnectBackend handles its own connect failures (onBackendError +
+					// doClose) and resolves false, so reaching here means an unexpected
+					// throw during recovery. Report the actual cause, not the original
+					// timeout that triggered the recovery, so metrics/logs aren't misleading.
+					const cause = error instanceof Error ? error.message : String(error);
 					logger.error(`Unexpected error during backend recovery for tag ${this.localTag}:`, error);
-					this.onBackendError?.(errorType, errorMessage);
+					this.onBackendError?.('recovery_failed', cause);
 					this.doClose(true);
-					this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
+					this.onError?.(this.localTag, `Transcription backend error: ${cause}`);
 				});
 				return;
 			}
