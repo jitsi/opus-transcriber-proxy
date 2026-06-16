@@ -13,6 +13,18 @@ import { getInstruments } from './telemetry/instruments';
 
 const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
 
+/**
+ * Max number of consecutive recoverable backend errors (e.g. xAI "ASR stream
+ * timed out") tolerated without any audio being sent in between. A muted
+ * participant sends no audio, so the stream times out, we reconnect, it times
+ * out again — without a bound this loops for the entire mute. After this many
+ * consecutive recoveries we give up and tear the connection down; the next
+ * media event (unmute) recreates it cleanly. The counter resets whenever audio
+ * is actually sent, so an active (e.g. open-mic-but-silent) participant keeps
+ * reconnecting as intended.
+ */
+const MAX_CONSECUTIVE_RECOVERIES = 3;
+
 function audioFormatsDiffer(a: AudioFormat, b: AudioFormat): boolean {
 	return a.encoding !== b.encoding || a.sampleRate !== b.sampleRate || a.channels !== b.channels;
 }
@@ -39,6 +51,8 @@ export class OutgoingConnection {
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private decoder?: AudioDecoder;
 	private reinitGeneration = 0;
+	/** Consecutive recoverable backend errors with no audio sent since; reset on each audio send. */
+	private consecutiveRecoveries = 0;
 	private isClosed = false;
 	private backend?: TranscriptionBackend;
 	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
@@ -204,8 +218,17 @@ export class OutgoingConnection {
 			// instead of dropping the participant — keeps the decoder, transcript
 			// history and negotiated format, and restores transcription within the
 			// reconnect latency rather than waiting for coarse recovery (JIT-15901).
-			if (recoverable && !this.isClosed) {
-				logger.warn(`Recoverable backend error for tag ${this.localTag} (${errorType}: ${errorMessage}); reconnecting backend in place`);
+			//
+			// Bound the reconnect loop: a muted participant sends no audio, so a fresh
+			// stream just times out again. After MAX_CONSECUTIVE_RECOVERIES reconnects
+			// without any audio in between, give up and tear down; the next media event
+			// (unmute) recreates the connection cleanly. The counter resets on each
+			// audio send, so an active participant reconnects without limit.
+			if (recoverable && !this.isClosed && this.consecutiveRecoveries < MAX_CONSECUTIVE_RECOVERIES) {
+				this.consecutiveRecoveries++;
+				logger.warn(
+					`Recoverable backend error for tag ${this.localTag} (${errorType}: ${errorMessage}); reconnecting backend in place (attempt ${this.consecutiveRecoveries}/${MAX_CONSECUTIVE_RECOVERIES})`,
+				);
 				this.recoverBackend(errorType, errorMessage).catch((error) => {
 					// reconnectBackend handles its own connect failures (onBackendError +
 					// doClose) and resolves false, so reaching here means an unexpected
@@ -218,6 +241,12 @@ export class OutgoingConnection {
 					this.onError?.(this.localTag, `Transcription backend error: ${cause}`);
 				});
 				return;
+			}
+
+			if (recoverable && this.consecutiveRecoveries >= MAX_CONSECUTIVE_RECOVERIES) {
+				logger.warn(
+					`Tag ${this.localTag}: ${this.consecutiveRecoveries} consecutive recoverable errors with no audio in between; giving up — connection will be recreated on the next media event`,
+				);
 			}
 
 			this.onBackendError?.(errorType, errorMessage);
@@ -410,6 +439,11 @@ export class OutgoingConnection {
 			return;
 		}
 
+		// Defensive: a concurrent doClose() may have run while reconnectBackend was
+		// awaiting. reconnectBackend returns false if isClosed was set by its exit,
+		// but re-check here so we never flush into a torn-down connection.
+		if (this.isClosed) return;
+
 		// The decoder was left untouched, so it is still ready for the same input
 		// format. Flush anything buffered during the reconnect gap.
 		if (this.decoderStatus === 'ready') {
@@ -556,6 +590,10 @@ export class OutgoingConnection {
 
 		try {
 			this.backend.sendAudio(encodedAudio);
+			// Audio is flowing → the participant is active, so any earlier recoverable
+			// errors were transient. Reset the consecutive-recovery guard so an active
+			// participant can reconnect without limit (only silent ones get bounded).
+			this.consecutiveRecoveries = 0;
 			this.resetIdleCommitTimeout();
 			this.metricCache.increment({
 				name: 'backend_audio_sent',

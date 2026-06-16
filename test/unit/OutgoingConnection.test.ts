@@ -947,5 +947,63 @@ describe('OutgoingConnection', () => {
 
 			expect(onClosedSpy).toHaveBeenCalledWith('test-tag');
 		});
+
+		it('should give up after repeated recoverable errors with no audio in between (muted participant)', async () => {
+			const created: MockTranscriptionBackend[] = [];
+			vi.mocked(createBackend).mockImplementation(() => {
+				const b = new MockTranscriptionBackend({ autoConnect: true });
+				created.push(b);
+				return b;
+			});
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// 3 recoverable errors (MAX_CONSECUTIVE_RECOVERIES) → 3 reconnects, alive.
+			for (let i = 0; i < 3; i++) {
+				created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+				await vi.runAllTimersAsync();
+				expect(onClosedSpy).not.toHaveBeenCalled();
+			}
+
+			// 4th recoverable error with still no audio → give up and tear down.
+			created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+			expect(onClosedSpy).toHaveBeenCalledWith('test-tag');
+		});
+
+		it('should NOT give up while audio keeps flowing (counter resets on audio send)', async () => {
+			const created: MockTranscriptionBackend[] = [];
+			vi.mocked(createBackend).mockImplementation(() => {
+				const b = new MockTranscriptionBackend({ autoConnect: true });
+				created.push(b);
+				return b;
+			});
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+
+			// 5 recover cycles (> MAX), but audio flows between each → counter resets,
+			// so an active participant reconnects without limit and is never dropped.
+			for (let i = 0; i < 5; i++) {
+				created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+				await vi.runAllTimersAsync();
+				expect(onClosedSpy).not.toHaveBeenCalled();
+
+				conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: i + 1, timestamp: i * 960 } });
+				await vi.runAllTimersAsync();
+			}
+
+			expect(onClosedSpy).not.toHaveBeenCalled();
+			expect(created[created.length - 1].getSentAudioCount()).toBeGreaterThan(0);
+		});
 	});
 });
