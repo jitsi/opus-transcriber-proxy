@@ -232,7 +232,7 @@ describe('XAIBackend', () => {
 	});
 
 	describe('forceCommit', () => {
-		it('should send audio.done message', async () => {
+		it('should be a no-op and NOT send audio.done (keeps stream open across silence, JIT-15901)', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 			getMockWs().simulateOpen();
@@ -240,9 +240,10 @@ describe('XAIBackend', () => {
 
 			backend.forceCommit();
 
-			const sent = getMockWs().getSentMessages();
-			expect(sent).toHaveLength(1);
-			expect(JSON.parse(sent[0])).toEqual({ type: 'audio.done' });
+			// audio.done ends the xAI stream; sending it on every idle commit tore the
+			// stream down on silence and dropped the post-unmute speech burst.
+			expect(getMockWs().getSentMessages()).toHaveLength(0);
+			expect(backend.getStatus()).toBe('connected');
 		});
 	});
 

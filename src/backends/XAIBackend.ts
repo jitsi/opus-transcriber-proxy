@@ -140,14 +140,15 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	forceCommit(): void {
-		if (this.ws && this.status === 'connected') {
-			try {
-				this.ws.send(JSON.stringify({ type: 'audio.done' }));
-				logger.debug(`Sent audio.done to xAI for tag ${this.tag}`);
-			} catch (error) {
-				logger.error(`Failed to send audio.done for tag ${this.tag}`, error);
-			}
-		}
+		// No-op for xAI. `audio.done` signals end-of-stream: xAI finalizes and then
+		// closes the WebSocket (observed code 1006). The idle-commit timer fires on
+		// every short pause (e.g. FORCE_COMMIT_TIMEOUT=2s), so sending audio.done
+		// here tore the stream down on every silence — and on unmute the buffered
+		// speech burst was committed-and-closed before xAI could transcribe it,
+		// dropping the first utterance. xAI already finalizes utterances on silence
+		// via smart_turn (smart_turn_timeout, default 500ms), so no manual commit is
+		// needed; keeping the stream open across silences avoids the churn (JIT-15901).
+		logger.debug(`forceCommit is a no-op for xAI (smart_turn finalizes); keeping stream open for tag ${this.tag}`);
 	}
 
 	updatePrompt(_prompt: string): void {

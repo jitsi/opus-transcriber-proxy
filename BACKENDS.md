@@ -197,7 +197,7 @@ PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
 - `transcript.done` event → final transcription; includes detected `language` field
 - Detected language is always set as the `language` property on final transcription events; `XAI_INCLUDE_LANGUAGE=true` additionally appends it as text suffix (e.g. `[en]`) — these are independent behaviours (same as Deepgram)
 - Diarization splits messages by consecutive speaker segments; each message carries a `speaker: number` field (same as Deepgram)
-- `forceCommit()` sends `{"type": "audio.done"}` — signals end of audio stream; server emits final `transcript.done` then closes connection
+- `forceCommit()` is a **no-op** — `{"type": "audio.done"}` signals end-of-stream and xAI closes the connection after it, so sending it on every idle commit tore the stream down on each silence (and dropped the post-unmute speech burst). xAI finalizes utterances on silence via `smart_turn` instead, so no manual commit is needed and the stream is kept open across silences (JIT-15901)
 - No model selection for the STT endpoint (model is inherent to the service)
 
 ## Architecture
