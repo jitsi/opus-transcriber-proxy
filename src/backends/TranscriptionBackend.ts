@@ -79,6 +79,14 @@ export interface TranscriptionBackend {
 	// Event callbacks - set by OutgoingConnection
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
-	onError?: (errorType: string, errorMessage: string) => void;
+	/**
+	 * Reports a backend error.
+	 * @param recoverable - When true, the error is a transient stream-level
+	 *   condition (e.g. xAI's "ASR stream timed out" on silence) and the
+	 *   participant is still active; OutgoingConnection reconnects the backend
+	 *   in place instead of tearing down the whole connection. Defaults to false
+	 *   (fatal — close the connection).
+	 */
+	onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 	onClosed?: () => void;
 }

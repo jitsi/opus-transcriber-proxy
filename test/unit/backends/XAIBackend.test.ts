@@ -232,7 +232,7 @@ describe('XAIBackend', () => {
 	});
 
 	describe('forceCommit', () => {
-		it('should send audio.done message', async () => {
+		it('should be a no-op and NOT send audio.done (keeps stream open across silence, JIT-15901)', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 			getMockWs().simulateOpen();
@@ -240,9 +240,10 @@ describe('XAIBackend', () => {
 
 			backend.forceCommit();
 
-			const sent = getMockWs().getSentMessages();
-			expect(sent).toHaveLength(1);
-			expect(JSON.parse(sent[0])).toEqual({ type: 'audio.done' });
+			// audio.done ends the xAI stream; sending it on every idle commit tore the
+			// stream down on silence and dropped the post-unmute speech burst.
+			expect(getMockWs().getSentMessages()).toHaveLength(0);
+			expect(backend.getStatus()).toBe('connected');
 		});
 	});
 
@@ -380,7 +381,7 @@ describe('XAIBackend', () => {
 			expect(finalResults).toHaveLength(0);
 		});
 
-		it('should call onError and close on error message', () => {
+		it('should call onError (non-recoverable) and close on a generic error message', () => {
 			const errorSpy = vi.fn();
 			const closedSpy = vi.fn();
 			backend.onError = errorSpy;
@@ -391,7 +392,21 @@ describe('XAIBackend', () => {
 				message: 'invalid api key',
 			}));
 
-			expect(errorSpy).toHaveBeenCalledWith('api_error', 'invalid api key');
+			expect(errorSpy).toHaveBeenCalledWith('api_error', 'invalid api key', false);
+			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('should flag "ASR stream timed out" as recoverable (JIT-15901)', () => {
+			const errorSpy = vi.fn();
+			backend.onError = errorSpy;
+
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'error',
+				message: 'ASR stream timed out',
+			}));
+
+			expect(errorSpy).toHaveBeenCalledWith('api_error', 'ASR stream timed out', true);
+			// The dead WS is still closed; recovery happens on the OutgoingConnection side.
 			expect(backend.getStatus()).toBe('closed');
 		});
 	});

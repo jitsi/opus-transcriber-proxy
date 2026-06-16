@@ -26,7 +26,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	// Callbacks
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
-	onError?: (errorType: string, errorMessage: string) => void;
+	onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 	onClosed?: () => void;
 
 	constructor(options: MockTranscriptionBackendOptions = {}) {
@@ -125,9 +125,9 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	/**
 	 * Simulate an error
 	 */
-	simulateError(errorType: string, errorMessage: string): void {
+	simulateError(errorType: string, errorMessage: string, recoverable?: boolean): void {
 		if (this.onError) {
-			this.onError(errorType, errorMessage);
+			this.onError(errorType, errorMessage, recoverable);
 		}
 	}
 
