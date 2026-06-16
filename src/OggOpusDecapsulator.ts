@@ -104,11 +104,19 @@ function readMagic(packet: Uint8Array, len: number): string {
  * Each call to decodeChunk processes one complete Ogg page supplied as a
  * single chunk (the 'media' WebSocket event payload decoded from base64).
  *
- * The first page must contain an OpusHead identification packet; if it does
- * not, decodeChunk throws so the connection can be torn down cleanly.  The
- * second page must contain an OpusTags comment packet; it is silently
- * discarded.  All subsequent pages yield one DecodedAudio entry per Opus
- * packet (samplesDecoded is always 0 — no PCM decoding takes place here).
+ * If the first page is a beginning-of-stream (BOS) page (Ogg header_type
+ * 0x02), it must contain an OpusHead identification packet; if it does not,
+ * decodeChunk throws (the stream is not Ogg-Opus).  If the first page is a
+ * non-BOS page — a client that reconnected and resumed an existing stream
+ * mid-way without replaying the headers — it is decoded as audio directly and
+ * a warning is logged.  An OpusTags comment packet, when present as the second
+ * page, is silently discarded.  All audio pages yield one DecodedAudio entry
+ * per Opus packet (samplesDecoded is always 0 — no PCM decoding takes place
+ * here).
+ *
+ * Once in the audio state the state machine never expects headers again, so a
+ * stray BOS/OpusHead page arriving later (e.g. an encoder restart mid-session)
+ * is passed through as an audio packet rather than re-validated.
  *
  * Chunk-sequence tracking (out-of-order detection) operates at the Ogg page
  * level using the chunkNo supplied by the caller, consistent with every other

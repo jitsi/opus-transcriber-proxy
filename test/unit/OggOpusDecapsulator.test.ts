@@ -213,11 +213,8 @@ describe('OggOpusDecapsulator', () => {
 			const dec = new OggOpusDecapsulator();
 			const pkt = audioPacket(7);
 			const page = buildOggPage(42, 0x00, [pkt]); // non-BOS: header_type 0x00
-			let result: ReturnType<typeof dec.decodeChunk>;
-			expect(() => {
-				result = dec.decodeChunk(page, 42, NO_CHUNK_INFO);
-			}).not.toThrow();
-			expect(result!).not.toBeNull();
+			const result = dec.decodeChunk(page, 42, NO_CHUNK_INFO); // would throw before the fix
+			expect(result).not.toBeNull();
 			expect(result!).toHaveLength(1);
 			expect(result![0].audioData).toEqual(pkt);
 		});
@@ -235,10 +232,8 @@ describe('OggOpusDecapsulator', () => {
 			// Reproduces the exact prod failure: reconnecting client resumes with
 			// a real Ogg-Opus audio page, no OpusHead.
 			const dec = new OggOpusDecapsulator();
-			let result: ReturnType<typeof dec.decodeChunk>;
-			expect(() => {
-				result = dec.decodeChunk(REAL_AUDIO_PAGE_0, 2, NO_CHUNK_INFO);
-			}).not.toThrow();
+			const result = dec.decodeChunk(REAL_AUDIO_PAGE_0, 2, NO_CHUNK_INFO); // would throw before the fix
+			expect(result).not.toBeNull();
 			expect(result!).toHaveLength(1);
 			expect(result![0].audioData).toEqual(REAL_OPUS_FRAME_0);
 		});
