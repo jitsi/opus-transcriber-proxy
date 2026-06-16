@@ -380,7 +380,7 @@ describe('XAIBackend', () => {
 			expect(finalResults).toHaveLength(0);
 		});
 
-		it('should call onError and close on error message', () => {
+		it('should call onError (non-recoverable) and close on a generic error message', () => {
 			const errorSpy = vi.fn();
 			const closedSpy = vi.fn();
 			backend.onError = errorSpy;
@@ -391,7 +391,21 @@ describe('XAIBackend', () => {
 				message: 'invalid api key',
 			}));
 
-			expect(errorSpy).toHaveBeenCalledWith('api_error', 'invalid api key');
+			expect(errorSpy).toHaveBeenCalledWith('api_error', 'invalid api key', false);
+			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('should flag "ASR stream timed out" as recoverable (JIT-15901)', () => {
+			const errorSpy = vi.fn();
+			backend.onError = errorSpy;
+
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'error',
+				message: 'ASR stream timed out',
+			}));
+
+			expect(errorSpy).toHaveBeenCalledWith('api_error', 'ASR stream timed out', true);
+			// The dead WS is still closed; recovery happens on the OutgoingConnection side.
 			expect(backend.getStatus()).toBe('closed');
 		});
 	});

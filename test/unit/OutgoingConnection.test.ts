@@ -881,4 +881,71 @@ describe('OutgoingConnection', () => {
 			expect(onErrorSpy).toHaveBeenCalled();
 		});
 	});
+
+	describe('recoverable backend error (JIT-15901)', () => {
+		it('should reconnect the backend in place without closing the connection', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			const onErrorSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+			conn.onError = onErrorSpy;
+
+			expect(firstBackend.getConnectCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(0);
+
+			// Recoverable error (xAI "ASR stream timed out" on silence)
+			firstBackend.simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+
+			// Old backend closed, new backend connected — participant NOT dropped.
+			expect(firstBackend.getCloseCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(1);
+			expect(onClosedSpy).not.toHaveBeenCalled();
+			expect(onErrorSpy).not.toHaveBeenCalled();
+
+			// Audio now flows through the reconnected backend.
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 1, timestamp: 0 } });
+			expect(secondBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+
+		it('should tear down the connection if the recovery reconnect fails', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const secondBackend = new MockTranscriptionBackend({ status: 'failed' });
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onBackendErrorSpy = vi.fn();
+			const onClosedSpy = vi.fn();
+			conn.onBackendError = onBackendErrorSpy;
+			conn.onClosed = onClosedSpy;
+
+			firstBackend.simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+
+			expect(onBackendErrorSpy).toHaveBeenCalledWith('connection_failed', expect.any(String));
+			expect(onClosedSpy).toHaveBeenCalled();
+		});
+
+		it('should still tear down the connection on a non-recoverable error', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// recoverable omitted/false → fatal path (existing behaviour)
+			mockBackend.simulateError('api_error', 'invalid api key', false);
+
+			expect(onClosedSpy).toHaveBeenCalledWith('test-tag');
+		});
+	});
 });

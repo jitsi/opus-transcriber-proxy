@@ -238,7 +238,7 @@ interface TranscriptionBackend {
   // Callbacks
   onInterimTranscription?: (message: TranscriptionMessage) => void;
   onCompleteTranscription?: (message: TranscriptionMessage) => void;
-  onError?: (errorType: string, errorMessage: string) => void;
+  onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
   onClosed?: () => void;
 }
 ```
@@ -347,7 +347,7 @@ export class YourBackend implements TranscriptionBackend {
 
   onInterimTranscription?: (message: TranscriptionMessage) => void;
   onCompleteTranscription?: (message: TranscriptionMessage) => void;
-  onError?: (errorType: string, errorMessage: string) => void;
+  onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 
   constructor(tag: string, participantInfo: any) {
     this.tag = tag;
@@ -562,7 +562,12 @@ node scripts/replay-dump.cjs standup-2026-01-14/recording/media.jsonl "ws://loca
 1. **Error Handling**
    - Call `onError` for connection failures
    - Handle API rate limits gracefully
-   - Retry transient errors
+   - For transient, stream-level errors that leave the participant active (e.g. xAI
+     closing the ASR stream with `"ASR stream timed out"` after silence), call
+     `onError(type, message, /* recoverable */ true)`. `OutgoingConnection` then
+     reopens the backend in place (preserving the decoder, transcript history and
+     negotiated format) instead of dropping the participant. Omit the third arg (or
+     pass `false`) for fatal errors that should tear the connection down.
 
 2. **Logging**
    - Use the logger from `src/logger.ts`

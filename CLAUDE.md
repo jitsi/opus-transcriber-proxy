@@ -126,6 +126,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Implements idle commit timeout (forces transcription when audio stops)
 - Maintains transcript history for context injection
 - On every `reinitializeDecoder` call, compares the new desired format against `activeDesiredFormat`; if they differ, closes the old backend and opens a fresh connection (via `reconnectBackend`) before creating the decoder
+- The backend `onError` handler distinguishes **recoverable** errors (third callback arg `recoverable === true`) from fatal ones. Recoverable errors (e.g. xAI `"ASR stream timed out"` on silence) trigger `recoverBackend()`, which reopens the backend in place via `reconnectBackend` (preserving the decoder, transcript history and negotiated format) instead of tearing down the connection. Fatal errors call `doClose(true)` as before. `recoverBackend` bumps `reinitGeneration` so it shares the same staleness guard as format-change reconnects (JIT-15901)
 - `doClose()` is idempotent (guarded by `isClosed`); it increments `reinitGeneration` to make in-flight async operations detect they are stale, and detaches backend callbacks before calling `close()` to prevent stale events from firing after teardown
 
 **AudioDecoder** (`src/AudioDecoder.ts`)
@@ -202,6 +203,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Auth via `Authorization: Bearer` header — passed using Node.js/CF Workers-specific third argument to `WebSocket` constructor (cast via `as any`)
 - Sends raw binary PCM frames (signed 16-bit LE, 24kHz); always requests `{ encoding: 'l16', sampleRate: 24000 }` from `getDesiredAudioFormat()`
 - `forceCommit()` sends `{"type": "audio.done"}` to signal end of audio; no multiplexing — one WS per stream
+- xAI closes the ASR stream after a stretch of silence with `{type:error, message:"ASR stream timed out"}`. `handleMessage` detects this (message matches `/timed out/i`) and calls `onError('api_error', message, /* recoverable */ true)` (metric `errorType: 'stream_timeout'`); other `type:error` messages are non-recoverable (`errorType: 'api_error'`, `recoverable === false`). Either way the dead WS is still `close()`d — the in-place reconnect happens on the `OutgoingConnection` side (JIT-15901)
 - `transcript.partial` with `speech_final=false` → interim; `transcript.partial` with `speech_final=true` → final (true utterance end); multiple `is_final=true` partials may arrive for a single utterance with accumulating text — only `speech_final=true` is the definitive end; `transcript.done` fires at stream end with empty text and is ignored
 - Detected `language` is a BCP-47 code (e.g. `"en"`) and is present on `transcript.partial` events. It is passed through verbatim from xAI (no transformation)
 - When `XAI_DIARIZE=true` and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram)

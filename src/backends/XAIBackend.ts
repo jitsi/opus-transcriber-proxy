@@ -28,7 +28,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
-	onError?: (errorType: string, errorMessage: string) => void;
+	onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 	onClosed?: () => void;
 
 	constructor(tag: string, participantInfo: any) {
@@ -212,12 +212,19 @@ export class XAIBackend implements TranscriptionBackend {
 			this.handleDone(parsedMessage);
 		} else if (type === 'error') {
 			logger.error(`xAI API error for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
+			const message: string = parsedMessage.message || JSON.stringify(parsedMessage);
+			// xAI closes the ASR stream after a stretch of silence/inactivity with
+			// {type:error, message:"ASR stream timed out"}. This is a transient,
+			// stream-level condition for a still-active participant — signal it as
+			// recoverable so OutgoingConnection reopens the stream in place rather
+			// than dropping the participant (JIT-15901).
+			const recoverable = /timed out/i.test(message);
 			writeMetric(undefined, {
 				name: 'xai_api_error',
 				worker: 'opus-transcriber-proxy',
-				errorType: 'api_error',
+				errorType: recoverable ? 'stream_timeout' : 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.message || JSON.stringify(parsedMessage));
+			this.onError?.('api_error', message, recoverable);
 			this.close();
 		} else {
 			logger.debug(`Unhandled xAI message type for ${this.tag}: ${type}`);
