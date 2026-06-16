@@ -5,6 +5,10 @@ import logger from './logger';
 const OGG_HEADER_MIN_SIZE = 27;
 /** 'OggS' as a little-endian uint32 */
 const OGG_CAPTURE_PATTERN = 0x5367674f;
+/** Byte offset of the header_type flags within an Ogg page header */
+const OGG_HEADER_TYPE_OFFSET = 5;
+/** header_type bit 0x02 — set only on the first (beginning-of-stream) page */
+const OGG_HEADER_TYPE_BOS = 0x02;
 const OPUS_HEAD_MAGIC = 'OpusHead';
 const OPUS_TAGS_MAGIC = 'OpusTags';
 
@@ -129,15 +133,34 @@ export class OggOpusDecapsulator implements AudioDecoder {
 		const packets = parseOggPage(page);
 
 		if (this._state === 'expect_head') {
-			if (packets.length === 0 || readMagic(packets[0], 8) !== OPUS_HEAD_MAGIC) {
-				const found = packets.length > 0 ? `"${readMagic(packets[0], 8)}"` : '(empty page)';
-				throw new Error(
-					`Expected OpusHead as first Ogg packet, got: ${found}. ` +
-					`This Ogg stream does not appear to contain Opus audio.`,
-				);
+			// The BOS (beginning-of-stream) flag is set only on the first page of
+			// a logical bitstream, which for Ogg-Opus carries OpusHead. A non-BOS
+			// first page means we joined an existing stream mid-way — e.g. the
+			// client reconnected after a server restart and resumed the same Ogg
+			// stream without replaying OpusHead/OpusTags. OpusHead carries nothing
+			// consumed downstream (the Opus decoder is fixed to mono and decodes
+			// raw packets), so we decode straight from here rather than failing the
+			// stream permanently.
+			const isBeginningOfStream = (page[OGG_HEADER_TYPE_OFFSET] & OGG_HEADER_TYPE_BOS) !== 0;
+			if (isBeginningOfStream) {
+				if (packets.length === 0 || readMagic(packets[0], 8) !== OPUS_HEAD_MAGIC) {
+					const found = packets.length > 0 ? `"${readMagic(packets[0], 8)}"` : '(empty page)';
+					throw new Error(
+						`Expected OpusHead as first Ogg packet, got: ${found}. ` +
+						`This Ogg stream does not appear to contain Opus audio.`,
+					);
+				}
+				this._state = 'expect_tags';
+				return []; // header page — no audio output
 			}
-			this._state = 'expect_tags';
-			return []; // header page — no audio output
+
+			// Mid-stream join: no header/tags to negotiate, decode this page as audio.
+			logger.warn(
+				'OggOpusDecapsulator: first page is not a beginning-of-stream page; ' +
+				'assuming a mid-stream reconnect and decoding without OpusHead.',
+			);
+			this._state = 'audio';
+			// fall through to audio handling below
 		}
 
 		if (this._state === 'expect_tags') {

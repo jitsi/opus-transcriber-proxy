@@ -195,6 +195,55 @@ describe('OggOpusDecapsulator', () => {
 		});
 	});
 
+	// -------------------------------------------------------------------------
+	// Mid-stream start.
+	//
+	// When the server process is restarted, a client may reconnect and CONTINUE
+	// the same Ogg stream mid-way — it does NOT replay the OpusHead/OpusTags BOS
+	// pages. A fresh decapsulator therefore sees a normal (non-BOS) audio page as
+	// its very first chunk. It must decode it, not throw and wedge itself in
+	// 'expect_head' forever.
+	//
+	// The BOS flag (header_type & 0x02) distinguishes the two cases:
+	//   - BOS page  -> start of a logical bitstream -> must be OpusHead.
+	//   - non-BOS   -> joined mid-stream            -> decode as audio.
+	// -------------------------------------------------------------------------
+	describe('Mid-stream start (client reconnect)', () => {
+		it('decodes a non-BOS audio page received as the first chunk instead of throwing', () => {
+			const dec = new OggOpusDecapsulator();
+			const pkt = audioPacket(7);
+			const page = buildOggPage(42, 0x00, [pkt]); // non-BOS: header_type 0x00
+			let result: ReturnType<typeof dec.decodeChunk>;
+			expect(() => {
+				result = dec.decodeChunk(page, 42, NO_CHUNK_INFO);
+			}).not.toThrow();
+			expect(result!).not.toBeNull();
+			expect(result!).toHaveLength(1);
+			expect(result![0].audioData).toEqual(pkt);
+		});
+
+		it('continues decoding subsequent pages after a mid-stream start', () => {
+			const dec = new OggOpusDecapsulator();
+			dec.decodeChunk(buildOggPage(42, 0x00, [audioPacket(1)]), 42, NO_CHUNK_INFO);
+			const r2 = dec.decodeChunk(buildOggPage(43, 0x00, [audioPacket(2)]), 43, NO_CHUNK_INFO);
+			expect(r2).not.toBeNull();
+			expect(r2!).toHaveLength(1);
+			expect(r2![0].audioData).toEqual(audioPacket(2));
+		});
+
+		it('decodes a real VoxImplant audio page (REAL_AUDIO_PAGE_0) as the first chunk', () => {
+			// Reproduces the exact prod failure: reconnecting client resumes with
+			// a real Ogg-Opus audio page, no OpusHead.
+			const dec = new OggOpusDecapsulator();
+			let result: ReturnType<typeof dec.decodeChunk>;
+			expect(() => {
+				result = dec.decodeChunk(REAL_AUDIO_PAGE_0, 2, NO_CHUNK_INFO);
+			}).not.toThrow();
+			expect(result!).toHaveLength(1);
+			expect(result![0].audioData).toEqual(REAL_OPUS_FRAME_0);
+		});
+	});
+
 	describe('Audio pages', () => {
 		function makeDecapsulatorInAudioState(): OggOpusDecapsulator {
 			const dec = new OggOpusDecapsulator();
