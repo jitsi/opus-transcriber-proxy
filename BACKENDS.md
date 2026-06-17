@@ -179,8 +179,9 @@ XAI_API_KEY=your-key-here
 XAI_LANGUAGE=                     # Language code (e.g. en, fr, de); omit for auto-detect
 XAI_INCLUDE_LANGUAGE=true         # Append language to transcript (e.g., "Hello [en]")
 XAI_DIARIZE=false                 # Enable speaker diarization
-XAI_SMART_TURN=0.5                # Turn-end confidence threshold (0.0–1.0); default 0.5
-XAI_SMART_TURN_TIMEOUT=500        # Max silence ms before forced turn end; default 500
+XAI_ENDPOINTING=850               # Silence ms before a final (utterance segmentation); always sent; default 850
+XAI_SMART_TURN=                   # End-of-turn confidence (0.0–1.0); OPT-IN, unset = disabled (only for multi-speaker single streams; we run one stream per participant)
+XAI_SMART_TURN_TIMEOUT=500        # Max silence ms before forced speech_final; only sent when XAI_SMART_TURN is set; default 500
 XAI_STT_URL=wss://api.x.ai/v1/stt  # Override STT endpoint (optional)
 
 # Make xAI the default provider
@@ -197,7 +198,8 @@ PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
 - `transcript.done` event → final transcription; includes detected `language` field
 - Detected language is always set as the `language` property on final transcription events; `XAI_INCLUDE_LANGUAGE=true` additionally appends it as text suffix (e.g. `[en]`) — these are independent behaviours (same as Deepgram)
 - Diarization splits messages by consecutive speaker segments; each message carries a `speaker: number` field (same as Deepgram)
-- `forceCommit()` is a **no-op** — `{"type": "audio.done"}` signals end-of-stream and xAI closes the connection after it, so sending it on every idle commit tore the stream down on each silence (and dropped the post-unmute speech burst). xAI finalizes utterances on silence via `smart_turn` instead, so no manual commit is needed and the stream is kept open across silences (JIT-15901)
+- `forceCommit()` is a **no-op** — `{"type": "audio.done"}` signals end-of-stream and xAI closes the connection after it, so sending it on every idle commit tore the stream down on each silence (and dropped the post-unmute speech burst). xAI finalizes utterances on silence via `endpointing` (silence-based) instead, so no manual commit is needed and the stream is kept open across silences (JIT-15901)
+- **Segmentation:** finals are driven by `endpointing` (silence ms; always sent, default `850` via `XAI_ENDPOINTING`). `smart_turn` (end-of-turn detection for a multi-speaker single stream) is **opt-in / disabled by default** — we run one stream per participant, so it has no turns to detect and only delays finals across mid-sentence pauses. `endpointing`, `smart_turn`, and `smart_turn_timeout` are also overridable **per-connection** via URL query params (resolved as `backendConfig.xaiX ?? config.xai.X`)
 - No model selection for the STT endpoint (model is inherent to the service)
 
 ## Architecture

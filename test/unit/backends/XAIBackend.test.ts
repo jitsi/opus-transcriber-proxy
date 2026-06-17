@@ -84,7 +84,8 @@ vi.mock('../../../src/config', () => ({
 			language: undefined,
 			diarize: false,
 			includeLanguage: false,
-			smartTurn: 0.5,
+			endpointing: 850,
+			smartTurn: undefined,
 			smartTurnTimeout: 500,
 		},
 	},
@@ -164,17 +165,17 @@ describe('XAIBackend', () => {
 			}
 		});
 
-		it('should always include smart_turn params (defaults applied)', async () => {
+		it('should send endpointing and NOT smart_turn by default (one stream per participant)', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 			getMockWs().simulateOpen();
 			await connectPromise;
 
-			expect(getMockWs().url).toContain('smart_turn=0.5');
-			expect(getMockWs().url).toContain('smart_turn_timeout=500');
+			expect(getMockWs().url).toContain('endpointing=850');
+			expect(getMockWs().url).not.toContain('smart_turn');
 		});
 
-		it('should reflect configured smart_turn params', async () => {
+		it('should send smart_turn params only when configured', async () => {
 			(config.xai as any).smartTurn = 0.7;
 			(config.xai as any).smartTurnTimeout = 3000;
 			try {
@@ -186,9 +187,28 @@ describe('XAIBackend', () => {
 				expect(getMockWs().url).toContain('smart_turn=0.7');
 				expect(getMockWs().url).toContain('smart_turn_timeout=3000');
 			} finally {
-				(config.xai as any).smartTurn = 0.5;
+				(config.xai as any).smartTurn = undefined;
 				(config.xai as any).smartTurnTimeout = 500;
 			}
+		});
+
+		it('should apply per-connection endpointing override over config', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, xaiEndpointing: 300 });
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			expect(getMockWs().url).toContain('endpointing=300');
+		});
+
+		it('should enable smart_turn via per-connection override even when config disables it', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, xaiSmartTurn: 0.4, xaiSmartTurnTimeout: 1200 });
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			expect(getMockWs().url).toContain('smart_turn=0.4');
+			expect(getMockWs().url).toContain('smart_turn_timeout=1200');
 		});
 
 		it('should reject when API key is missing', async () => {

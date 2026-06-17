@@ -32,6 +32,10 @@ export interface TranscriberProxyOptions {
 	openaiCustomUrl?: string;
 	openaiCustomApiKey?: string;
 	deepgramMipOptOut?: boolean;
+	/** Per-connection xAI segmentation overrides (undefined = use config). */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
 }
 
 export class TranscriberProxy extends EventEmitter {

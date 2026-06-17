@@ -28,6 +28,15 @@ export interface BackendConfig {
 	 * undefined = use global config (DEEPGRAM_MIP_OPT_OUT); true/false overrides it.
 	 */
 	deepgramMipOptOut?: boolean;
+	/**
+	 * Per-connection xAI segmentation overrides (undefined = use global config).
+	 * `xaiEndpointing`: silence ms before a final. `xaiSmartTurn`: end-of-turn
+	 * confidence (0–1); when set, enables smart_turn. `xaiSmartTurnTimeout`: max
+	 * silence ms before forcing speech_final (only used when smart_turn is enabled).
+	 */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
 }
 
 export interface TranscriptionBackend {
