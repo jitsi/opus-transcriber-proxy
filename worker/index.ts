@@ -156,6 +156,10 @@ export class TranscriberContainer extends Container<Env> {
 					console.log(`Activity timeout but ${active} active + ${detached} detached session(s) — keeping container alive`);
 					return; // containerFetch already renewed the timer; skip the default stop
 				}
+			} else {
+				// Non-2xx from /status: can't trust session state, so allow the default stop —
+				// but log it, otherwise a recurring 4xx/5xx that sleeps live calls is invisible.
+				console.error(`onActivityExpired: /status returned ${res.status}, allowing container to sleep`);
 			}
 		} catch (error) {
 			// Can't determine session state — fall through to the default stop. If the
