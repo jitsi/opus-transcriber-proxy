@@ -103,7 +103,10 @@ export class TranscriberContainer extends Container<Env> {
 	// Longer = Fewer cold starts, but uses more resources when idle
 	// For pool-based routing: Keep this longer (containers serve many sessions)
 	// For session-based routing: Keep this shorter (containers are session-specific)
-	sleepAfter = this.env.SLEEP_AFTER || '1m';
+	// NOTE: must stay > the renewal interval below (180s), with margin for a missed
+	// renewal — otherwise a live call's container sleeps mid-session. After audio stops,
+	// the container reclaims ~sleepAfter after the last renewal.
+	sleepAfter = this.env.SLEEP_AFTER || '7m';
 
 	// Pass environment variables to the container (default, without instance name)
 	envVars: Record<string, string> = buildContainerEnvVars(this.env);
@@ -268,26 +271,25 @@ async function handleWebSocketWithDispatcher(
 		}
 	}
 
-	// Keep container alive by periodically renewing activity timeout
-	// WebSocket messages bypass the Container class, so sleepAfter doesn't reset automatically
+	// Keep the container alive for the life of the call by renewing its activity timeout.
+	// WebSocket audio frames bypass the Container class, so sleepAfter does NOT reset on
+	// its own — without this the container sleeps (SIGTERM) ~sleepAfter after start, mid-call.
+	// renewActivityTimeout() is the real Container method (there is no keepAlive()); each
+	// call is one Worker subrequest, so we renew infrequently (every 3m) to stay well under
+	// the 1000-subrequest-per-invocation limit on long sessions. The interval must stay
+	// below `sleepAfter` (7m) with margin for a missed renewal.
 	const keepAliveInterval = setInterval(() => {
-		container.keepAlive().catch((error) => {
+		container.renewActivityTimeout().catch((error) => {
 			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`Container keepAlive failed: ${msg}, closing connections, sessionId=${sessionId}`);
-
-			// Clean up interval to prevent further keepAlive attempts
-			clearInterval(keepAliveInterval);
-
-			// Close all WebSocket connections when container connection is lost
-			if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
-				serverWs.close(1011, `Container connection lost: ${msg}`);
-			}
-			if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
-				containerWs.close(1011, 'Container keepAlive failed');
-			}
-			dispatcherWs?.close(1000, 'Container connection lost');
+			// A renewal failure is a control-plane RPC hiccup, NOT proof the call is dead —
+			// the audio WS pipe is independent. Log and let the next tick retry; sleepAfter
+			// (7m) leaves margin for a missed 3m renewal. Genuine container death is detected
+			// and torn down by the containerWs close/error handlers below (which the client
+			// then reconnects from) — don't duplicate that here, since closing on a transient
+			// blip would force an unnecessary reconnect and drop the in-flight utterance.
+			console.error(`Container renewActivityTimeout failed (will retry next tick): ${msg}, sessionId=${sessionId}`);
 		});
-	}, 10_000); // Every 10 seconds
+	}, 180_000); // Every 3 minutes (subrequest-light; must stay < sleepAfter)
 
 
 	// Pipe: client → container (upstream, no interception needed)
