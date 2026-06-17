@@ -17,6 +17,10 @@ import { writeMetric } from '../metrics';
 // Reused across messages; TextDecoder is stateless for our usage (one full frame per call).
 const textDecoder = new TextDecoder();
 
+// Extra silence (ms) injected beyond the endpointing threshold on idle commit, to be
+// sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
+const XAI_IDLE_SILENCE_MARGIN_MS = 300;
+
 export class XAIBackend implements TranscriptionBackend {
 	private ws?: WsWebSocket;
 	private status: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
@@ -153,24 +157,34 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	forceCommit(): void {
-		// When the audio stream goes idle, signal end-of-stream so xAI flushes and
-		// emits the final for the last pending utterance.
+		// Finalize the trailing utterance when the stream goes idle WITHOUT closing it.
 		//
-		// #94 made this a no-op (relying on smart_turn alone to finalize on silence),
-		// to avoid the WS being torn down on every pause. In stage testing that
-		// regressed finalization: the trailing utterance before a pause/mute was left
-		// unfinalized once audio stopped, so we restore the explicit idle commit.
+		// xAI exposes no flush/commit message (unlike OpenAI's input_audio_buffer.commit
+		// or Deepgram's Finalize) — only `audio.done`, which makes xAI close the WS
+		// (code 1006). Closing forces a full OutgoingConnection teardown + cold-start of
+		// the next utterance (clipped post-pause burst, lost context, churn). #94 instead
+		// made this a no-op, but then the trailing utterance before a pause/mute was never
+		// finalized once audio stopped.
 		//
-		// xAI closes the WS after audio.done (observed code 1006); the connection is
-		// recreated on the next media event, and xAI's own "ASR stream timed out" is
-		// still handled by the recoverable-reconnect path in OutgoingConnection.
-		if (this.ws && this.status === 'connected') {
-			try {
-				this.ws.send(JSON.stringify({ type: 'audio.done' }));
-				logger.debug(`Sent audio.done to xAI for tag ${this.tag}`);
-			} catch (error) {
-				logger.error(`Failed to send audio.done for tag ${this.tag}`, error);
-			}
+		// Finalization is driven by `endpointing`: xAI's VAD emits speech_final once it
+		// sees `endpointing` ms of silence in the audio. When the client stops sending
+		// (pause/mute) no further frames arrive, so the VAD never crosses the threshold.
+		// We bridge that by injecting a short tail of digital silence — enough to exceed
+		// the endpointing window — which makes xAI finalize the pending utterance while
+		// the WS stays open for the next one. (Same idea as jitsi/skynet's idle flush
+		// worker, adapted: we can't force-transcribe xAI's model locally.)
+		if (!this.ws || this.status !== 'connected') {
+			return;
+		}
+		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
+		const silenceMs = endpointingMs + XAI_IDLE_SILENCE_MARGIN_MS;
+		// 24 kHz, signed 16-bit mono PCM (2 bytes/sample); a zero-filled buffer is silence.
+		const silence = Buffer.alloc(Math.round((24000 * silenceMs) / 1000) * 2);
+		try {
+			this.ws.send(silence);
+			logger.debug(`Injected ${silenceMs}ms idle silence to flush xAI final (WS kept open) for tag ${this.tag}`);
+		} catch (error) {
+			logger.error(`Failed to inject idle silence for tag ${this.tag}`, error);
 		}
 	}
 

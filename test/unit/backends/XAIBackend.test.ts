@@ -252,7 +252,7 @@ describe('XAIBackend', () => {
 	});
 
 	describe('forceCommit', () => {
-		it('should send audio.done to flush the pending utterance on idle', async () => {
+		it('should inject a silence tail (not audio.done) to flush the final and keep the WS open', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 			getMockWs().simulateOpen();
@@ -262,7 +262,28 @@ describe('XAIBackend', () => {
 
 			const sent = getMockWs().getSentMessages();
 			expect(sent).toHaveLength(1);
-			expect(JSON.parse(sent[0])).toEqual({ type: 'audio.done' });
+			// Binary silence, NOT an audio.done (which would close the stream).
+			expect(Buffer.isBuffer(sent[0])).toBe(true);
+			expect(sent.some((m: any) => typeof m === 'string' && m.includes('audio.done'))).toBe(false);
+			// (endpointing 850ms + 300ms margin) of 24kHz signed-16-bit mono silence.
+			const expectedBytes = Math.round((24000 * (850 + 300)) / 1000) * 2;
+			expect(sent[0].length).toBe(expectedBytes);
+			expect(sent[0].every((b: number) => b === 0)).toBe(true);
+			// Stream stays open — no teardown.
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('should size the silence tail to a per-connection endpointing override', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, xaiEndpointing: 300 });
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			backend.forceCommit();
+
+			const sent = getMockWs().getSentMessages();
+			expect(sent).toHaveLength(1);
+			expect(sent[0].length).toBe(Math.round((24000 * (300 + 300)) / 1000) * 2);
 		});
 	});
 
