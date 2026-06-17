@@ -153,18 +153,25 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	forceCommit(): void {
-		// No-op for xAI. `audio.done` signals end-of-stream: xAI finalizes and then
-		// closes the WebSocket (observed code 1006). The idle-commit timer fires on
-		// every short pause (e.g. FORCE_COMMIT_TIMEOUT=2s), so sending audio.done
-		// here tore the stream down on every silence — and on unmute the buffered
-		// speech burst was committed-and-closed before xAI could transcribe it,
-		// dropping the first utterance. xAI already finalizes utterances on silence
-		// via smart_turn (smart_turn_timeout, default 500ms), so no manual commit is
-		// needed; keeping the stream open across silences avoids the churn (JIT-15901).
+		// When the audio stream goes idle, signal end-of-stream so xAI flushes and
+		// emits the final for the last pending utterance.
 		//
-		// Intentionally does nothing — and intentionally not logged: the idle-commit
-		// timer fires every FORCE_COMMIT_TIMEOUT (default 2s) per silent participant,
-		// so a log here would be pure noise under LOG_LEVEL=debug.
+		// #94 made this a no-op (relying on smart_turn alone to finalize on silence),
+		// to avoid the WS being torn down on every pause. In stage testing that
+		// regressed finalization: the trailing utterance before a pause/mute was left
+		// unfinalized once audio stopped, so we restore the explicit idle commit.
+		//
+		// xAI closes the WS after audio.done (observed code 1006); the connection is
+		// recreated on the next media event, and xAI's own "ASR stream timed out" is
+		// still handled by the recoverable-reconnect path in OutgoingConnection.
+		if (this.ws && this.status === 'connected') {
+			try {
+				this.ws.send(JSON.stringify({ type: 'audio.done' }));
+				logger.debug(`Sent audio.done to xAI for tag ${this.tag}`);
+			} catch (error) {
+				logger.error(`Failed to send audio.done for tag ${this.tag}`, error);
+			}
+		}
 	}
 
 	updatePrompt(_prompt: string): void {
