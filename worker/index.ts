@@ -132,12 +132,38 @@ export class TranscriberContainer extends Container<Env> {
 	}
 
 	/**
-	 * Keep the container alive by renewing the activity timeout.
-	 * Call this periodically for long-lived WebSocket connections
-	 * where messages bypass the Container class's fetch method.
+	 * Called when the activity timer (`sleepAfter`) elapses. The default stops the
+	 * container. WebSocket audio frames bypass the Container class, so the timer never
+	 * sees an in-progress call and would sleep it mid-session — on EVERY routing path,
+	 * including the direct `container.fetch` path used by `useDispatcher=false` (VCC)
+	 * connections, which has no Worker-side renewal loop.
+	 *
+	 * So before sleeping, ask the container whether any sessions are still live; if so,
+	 * keep it alive. This is path-agnostic (it's the DO's own lifecycle hook) and costs
+	 * one DO->container request per `sleepAfter` (~7m) — no Worker subrequests.
+	 *
+	 * Note: `containerFetch` renews the activity timer itself (it proxies a request), so
+	 * the probe keeps the container alive in the active branch. In the idle branch we
+	 * call the default `onActivityExpired()`, which stops the container explicitly
+	 * regardless of the renewed timer.
 	 */
-	keepAlive() {
-		this.renewActivityTimeout();
+	override async onActivityExpired(): Promise<void> {
+		try {
+			const res = await this.containerFetch('http://container/status', 8080);
+			if (res.ok) {
+				const { active = 0, detached = 0 } = (await res.json()) as { active?: number; detached?: number };
+				if (active + detached > 0) {
+					console.log(`Activity timeout but ${active} active + ${detached} detached session(s) — keeping container alive`);
+					return; // containerFetch already renewed the timer; skip the default stop
+				}
+			}
+		} catch (error) {
+			// Can't determine session state — fall through to the default stop. If the
+			// container is too unhealthy to answer /status it isn't usefully serving a call.
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`onActivityExpired: /status probe failed, allowing container to sleep: ${msg}`);
+		}
+		await super.onActivityExpired();
 	}
 }
 
