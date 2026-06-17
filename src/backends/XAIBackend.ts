@@ -62,10 +62,23 @@ export class XAIBackend implements TranscriptionBackend {
 					params.set('diarize', 'true');
 				}
 
-				// smartTurn / smartTurnTimeout always have config defaults (0.5 / 500), so
-				// they are always sent.
-				params.set('smart_turn', config.xai.smartTurn.toString());
-				params.set('smart_turn_timeout', config.xai.smartTurnTimeout.toString());
+				// Endpointing (silence-based finalization) is the correct finalizer for our
+				// one-stream-per-participant topology; always sent. Per-connection override
+				// (`endpointing` URL param) wins over the XAI_ENDPOINTING config default.
+				const endpointing = backendConfig.xaiEndpointing ?? config.xai.endpointing;
+				params.set('endpointing', endpointing.toString());
+
+				// smart_turn is end-of-turn detection for a multi-speaker single stream. We
+				// run one WS per participant, so there are no turns — it's opt-in (disabled
+				// by default; it otherwise holds finals across mid-sentence pauses, producing
+				// very long chunks). Sent only when configured via XAI_SMART_TURN or the
+				// `smart_turn` URL param. smart_turn_timeout requires smart_turn.
+				const smartTurn = backendConfig.xaiSmartTurn ?? config.xai.smartTurn;
+				if (smartTurn !== undefined) {
+					params.set('smart_turn', smartTurn.toString());
+					const smartTurnTimeout = backendConfig.xaiSmartTurnTimeout ?? config.xai.smartTurnTimeout;
+					params.set('smart_turn_timeout', smartTurnTimeout.toString());
+				}
 
 				const url = `${this.wsUrl}?${params.toString()}`;
 

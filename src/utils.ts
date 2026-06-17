@@ -13,6 +13,10 @@ export interface ISessionParameters {
 	tags: string[];
 	openaiCustomUrl?: string;
 	deepgramMipOptOut?: boolean;
+	/** Per-connection xAI segmentation overrides (undefined = use config). */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
 }
 
 /**
@@ -63,6 +67,22 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	// Per-connection override for Deepgram MIP opt-out. Absent = undefined (use config).
 	const mipOptOutParam = parsedUrl.searchParams.get('deepgram_mip_opt_out');
 	const deepgramMipOptOut = mipOptOutParam === null ? undefined : mipOptOutParam === 'true';
+	// Per-connection xAI segmentation overrides. Absent or unparseable = undefined (use config).
+	const parseFloatParam = (name: string): number | undefined => {
+		const raw = parsedUrl.searchParams.get(name);
+		if (raw === null) return undefined;
+		const n = parseFloat(raw);
+		return Number.isFinite(n) ? n : undefined;
+	};
+	const parseIntParam = (name: string): number | undefined => {
+		const raw = parsedUrl.searchParams.get(name);
+		if (raw === null) return undefined;
+		const n = parseInt(raw, 10);
+		return Number.isFinite(n) ? n : undefined;
+	};
+	const xaiEndpointing = parseIntParam('endpointing');
+	const xaiSmartTurn = parseFloatParam('smart_turn');
+	const xaiSmartTurnTimeout = parseIntParam('smart_turn_timeout');
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -80,6 +100,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		tags,
 		openaiCustomUrl: openaiCustomUrl ?? undefined,
 		deepgramMipOptOut,
+		xaiEndpointing,
+		xaiSmartTurn,
+		xaiSmartTurnTimeout,
 	};
 }
 

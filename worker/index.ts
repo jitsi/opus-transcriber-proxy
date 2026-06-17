@@ -62,6 +62,7 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.XAI_LANGUAGE && { XAI_LANGUAGE: env.XAI_LANGUAGE }),
 		...(env.XAI_DIARIZE && { XAI_DIARIZE: env.XAI_DIARIZE }),
 		...(env.XAI_INCLUDE_LANGUAGE && { XAI_INCLUDE_LANGUAGE: env.XAI_INCLUDE_LANGUAGE }),
+		...(env.XAI_ENDPOINTING && { XAI_ENDPOINTING: env.XAI_ENDPOINTING }),
 		...(env.XAI_SMART_TURN && { XAI_SMART_TURN: env.XAI_SMART_TURN }),
 		...(env.XAI_SMART_TURN_TIMEOUT && { XAI_SMART_TURN_TIMEOUT: env.XAI_SMART_TURN_TIMEOUT }),
 		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',

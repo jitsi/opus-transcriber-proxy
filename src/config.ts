@@ -69,7 +69,16 @@ export const config = {
 		language: process.env.XAI_LANGUAGE || undefined,
 		diarize: process.env.XAI_DIARIZE === 'true',
 		includeLanguage: process.env.XAI_INCLUDE_LANGUAGE === 'true',
-		smartTurn: process.env.XAI_SMART_TURN !== undefined ? parseFloat(process.env.XAI_SMART_TURN) : 0.5,
+		// Silence-based finalization — the right finalizer for our one-stream-per-
+		// participant topology (no speaker turns to detect). Default 850ms (tuned with
+		// jitsi/skynet STT); xAI's own default (10ms) is far too choppy. Overridable
+		// per-connection via the `endpointing` URL param.
+		endpointing: parseIntOrDefault(process.env.XAI_ENDPOINTING, 850),
+		// smart_turn is end-of-turn detection for a MULTI-speaker single stream. We run
+		// one WS per participant, so there are no turns — it just holds finals across
+		// mid-sentence pauses, producing very long chunks. Disabled by default
+		// (undefined = not sent); opt in via XAI_SMART_TURN or the `smart_turn` URL param.
+		smartTurn: process.env.XAI_SMART_TURN !== undefined ? parseFloat(process.env.XAI_SMART_TURN) : undefined,
 		smartTurnTimeout: parseIntOrDefault(process.env.XAI_SMART_TURN_TIMEOUT, 500),
 	},
 

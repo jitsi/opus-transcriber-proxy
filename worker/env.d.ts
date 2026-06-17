@@ -38,6 +38,7 @@ export interface Env {
 	XAI_LANGUAGE?: string;
 	XAI_DIARIZE?: string;
 	XAI_INCLUDE_LANGUAGE?: string;
+	XAI_ENDPOINTING?: string;
 	XAI_SMART_TURN?: string;
 	XAI_SMART_TURN_TIMEOUT?: string;
 	PROVIDERS_PRIORITY?: string;

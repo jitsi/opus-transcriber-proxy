@@ -159,6 +159,9 @@ export class OutgoingConnection {
 			backendConfig.language = this.options.language;
 			backendConfig.tags = this.options.tags;
 			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -371,6 +374,9 @@ export class OutgoingConnection {
 		backendConfig.language = this.options.language;
 		backendConfig.tags = this.options.tags;
 		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
 
 		try {
 			const connectStartTime = Date.now();
