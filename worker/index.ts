@@ -154,7 +154,12 @@ export class TranscriberContainer extends Container<Env> {
 				const { active = 0, detached = 0 } = (await res.json()) as { active?: number; detached?: number };
 				if (active + detached > 0) {
 					console.log(`Activity timeout but ${active} active + ${detached} detached session(s) — keeping container alive`);
-					return; // containerFetch already renewed the timer; skip the default stop
+					// Renew explicitly rather than relying on containerFetch's renew-on-proxy
+					// side effect: if a future @cloudflare/containers version stops renewing on
+					// probe requests, the keep-alive would silently break. This makes the intent
+					// unambiguous (idempotent — just pushes sleepAfterMs out again).
+					this.renewActivityTimeout();
+					return; // skip the default stop
 				}
 			} else {
 				// Non-2xx from /status: can't trust session state, so allow the default stop —
