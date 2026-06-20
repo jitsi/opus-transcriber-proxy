@@ -1,0 +1,364 @@
+{
+  "note": "Real live xAI transcript.partial event stream captured from wss://api.x.ai/v1/stt (paused monologue, endpointing=850, smart_turn OFF, 16kHz). Used to validate XAIGranularSegmenter against real provider behavior.",
+  "capturedFrom": "unreal-agents/experiments/xai-vs-deepgram-finalization sweep.cjs",
+  "authoritativeTurn": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that, that I thought I'd actually much rather talk to a person, because this is just like their flows are broken in the middle and they're asking for things that don't exist, and it's just like no, I'd rather just talk to a person at this point. This is worse than a person. So yeah.",
+  "events": [
+    {
+      "t": 1342,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a pain."
+    },
+    {
+      "t": 1808,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process."
+    },
+    {
+      "t": 2309,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process."
+    },
+    {
+      "t": 2826,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me."
+    },
+    {
+      "t": 3371,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be."
+    },
+    {
+      "t": 3848,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked."
+    },
+    {
+      "t": 4358,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regular."
+    },
+    {
+      "t": 4868,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory."
+    },
+    {
+      "t": 5381,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant."
+    },
+    {
+      "t": 5878,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant."
+    },
+    {
+      "t": 6395,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to"
+    },
+    {
+      "t": 6906,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload."
+    },
+    {
+      "t": 7412,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver."
+    },
+    {
+      "t": 7924,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's license."
+    },
+    {
+      "t": 8431,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and."
+    },
+    {
+      "t": 8943,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that."
+    },
+    {
+      "t": 9455,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that."
+    },
+    {
+      "t": 10012,
+      "kind": "chunk_final",
+      "is_final": true,
+      "speech_final": false,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that."
+    },
+    {
+      "t": 10960,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "That I thought I'd actually"
+    },
+    {
+      "t": 11437,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "That I thought I'd actually much rather."
+    },
+    {
+      "t": 11937,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "That I thought I'd actually much rather talk to a"
+    },
+    {
+      "t": 12448,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "That I thought I'd actually much rather talk to a person."
+    },
+    {
+      "t": 12958,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "That I thought I'd actually much rather talk to a person."
+    },
+    {
+      "t": 13010,
+      "kind": "chunk_final",
+      "is_final": true,
+      "speech_final": false,
+      "text": "That I thought I'd actually much rather talk to a person."
+    },
+    {
+      "t": 14558,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is"
+    },
+    {
+      "t": 15072,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like"
+    },
+    {
+      "t": 15580,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flow."
+    },
+    {
+      "t": 16103,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken."
+    },
+    {
+      "t": 16616,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle."
+    },
+    {
+      "t": 17121,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle."
+    },
+    {
+      "t": 17640,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're"
+    },
+    {
+      "t": 18147,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for"
+    },
+    {
+      "t": 18656,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't"
+    },
+    {
+      "t": 19167,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist."
+    },
+    {
+      "t": 19688,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist."
+    },
+    {
+      "t": 20177,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist."
+    },
+    {
+      "t": 20683,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist."
+    },
+    {
+      "t": 21198,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist. And it's just like"
+    },
+    {
+      "t": 21709,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist. And it's just like, no."
+    },
+    {
+      "t": 22262,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist. And it's just like, no."
+    },
+    {
+      "t": 22290,
+      "kind": "chunk_final",
+      "is_final": true,
+      "speech_final": false,
+      "text": "Because this is just like their flows are broken in the middle and they're asking for things that don't exist. And it's just like, no."
+    },
+    {
+      "t": 23350,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "I'd rather just talk"
+    },
+    {
+      "t": 23785,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "I'd rather just talk to a person."
+    },
+    {
+      "t": 24299,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "I'd rather just talk to a person at this point."
+    },
+    {
+      "t": 24806,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "I'd rather just talk to a person at this point."
+    },
+    {
+      "t": 25226,
+      "kind": "chunk_final",
+      "is_final": true,
+      "speech_final": false,
+      "text": "I'd rather just talk to a person at this point."
+    },
+    {
+      "t": 26259,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "This is worse than"
+    },
+    {
+      "t": 26710,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "This is worse than a person."
+    },
+    {
+      "t": 27243,
+      "kind": "chunk_final",
+      "is_final": true,
+      "speech_final": false,
+      "text": "This is worse than a person."
+    },
+    {
+      "t": 28362,
+      "kind": "interim",
+      "is_final": false,
+      "speech_final": false,
+      "text": "So yeah."
+    },
+    {
+      "t": 29570,
+      "kind": "speech_final",
+      "is_final": true,
+      "speech_final": true,
+      "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that, that I thought I'd actually much rather talk to a person, because this is just like their flows are broken in the middle and they're asking for things that don't exist, and it's just like no, I'd rather just talk to a person at this point. This is worse than a person. So yeah."
+    }
+  ]
+}

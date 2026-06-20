@@ -41,6 +41,10 @@ export interface Env {
 	XAI_ENDPOINTING?: string;
 	XAI_SMART_TURN?: string;
 	XAI_SMART_TURN_TIMEOUT?: string;
+	XAI_GRANULAR_FINALS?: string;
+	XAI_GRANULAR_STABILITY_MS?: string;
+	XAI_GRANULAR_GUARD_WORDS?: string;
+	XAI_GRANULAR_MIN_WORDS?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;

@@ -13,6 +13,7 @@ import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
+import { XAIGranularSegmenter, type GranularResult } from './XAIGranularSegmenter';
 
 // Reused across messages; TextDecoder is stateless for our usage (one full frame per call).
 const textDecoder = new TextDecoder();
@@ -29,6 +30,14 @@ export class XAIBackend implements TranscriptionBackend {
 	private tag: string;
 	private apiKey: string;
 	private wsUrl: string;
+
+	// Consumer-side roll-own granular finalization (off by default). When enabled, we commit a
+	// stable prefix of xAI's growing hypothesis incrementally instead of only on end-of-turn
+	// speech_final, so a long turn interleaves in order with other speakers' short acks. See
+	// XAIGranularSegmenter for the algorithm and the GT-meeting ordering bug it fixes.
+	private segmenter?: XAIGranularSegmenter;
+	private granularTimer?: ReturnType<typeof setTimeout>;
+	private lastLanguage?: string;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
@@ -47,6 +56,23 @@ export class XAIBackend implements TranscriptionBackend {
 
 		if (!this.apiKey) {
 			throw new Error('XAI_API_KEY not configured');
+		}
+
+		// Roll-own granular finalization is purely consumer-side: it does NOT change the xAI URL
+		// (endpointing/smart_turn are unchanged). It only changes how transcript.partial events are
+		// turned into finals. Gated by config/per-connection flag; scoped to the non-diarized path
+		// (one WS per participant), since diarization needs per-speaker hypotheses.
+		const granularEnabled = backendConfig.xaiGranularFinals ?? config.xai.granularFinals;
+		if (granularEnabled && config.xai.diarize) {
+			logger.warn(`xAI granular finals requested but diarize is on for tag ${this.tag}; disabled (per-speaker hypotheses unsupported)`);
+		} else if (granularEnabled) {
+			const stabilityMs = backendConfig.xaiGranularStabilityMs ?? config.xai.granularStabilityMs;
+			const guardWords = backendConfig.xaiGranularGuardWords ?? config.xai.granularGuardWords;
+			const minWords = config.xai.granularMinWords;
+			this.segmenter = new XAIGranularSegmenter({ stabilityMs, guardWords, minWords });
+			logger.info(
+				`xAI granular finals ENABLED for tag ${this.tag} (stability=${stabilityMs}ms guard=${guardWords}w min=${minWords}w)`,
+			);
 		}
 
 		return new Promise((resolve, reject) => {
@@ -195,6 +221,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 	close(): void {
 		logger.debug(`Closing xAI backend for tag: ${this.tag}`);
+		this.clearGranularTimer();
 		// Null callbacks before tearing down the socket so events fired during/after
 		// ws.close() (and any re-entrant close() call) are dropped; onClosed fires once.
 		const onClosed = this.onClosed;
@@ -278,23 +305,32 @@ export class XAIBackend implements TranscriptionBackend {
 		const text: string = msg.text ?? '';
 		if (!text.trim()) return;
 
-		// xAI accumulates text within an utterance and emits multiple is_final=true
-		// partials, each a superset of the previous. speech_final=true marks the true
-		// end of an utterance — only that should be emitted as a final transcription.
-		// transcript.done fires at stream end with empty text — not useful for finals.
-		const isFinal: boolean = msg.speech_final === true;
 		const language: string | undefined = msg.language || undefined;
 
+		// Diarization re-splits per speaker. Granular finals are not initialized on the diarized
+		// path (they need per-speaker hypotheses), so this branch is reached only in default mode.
 		if (
 			config.xai.diarize &&
 			Array.isArray(msg.words) &&
 			msg.words.length > 0 &&
 			msg.words[0].speaker !== undefined
 		) {
-			this.emitDiarized(msg.words, language, !isFinal);
+			this.emitDiarized(msg.words, language, msg.speech_final !== true);
 			return;
 		}
 
+		// Roll-own granular finalization: commit a stable prefix of the growing hypothesis
+		// incrementally so a long turn interleaves in order with other speakers' acks.
+		if (this.segmenter) {
+			this.handlePartialGranular(text, msg.is_final === true, msg.speech_final === true, language, msg.words);
+			return;
+		}
+
+		// Default (one final per turn): xAI accumulates text within an utterance and emits
+		// multiple is_final=true partials, each a superset of the previous. speech_final=true marks
+		// the true end of an utterance — only that is emitted as a final. transcript.done fires at
+		// stream end with empty text — not useful for finals.
+		const isFinal: boolean = msg.speech_final === true;
 		const confidence = this.avgConfidence(msg.words);
 		const transcript = config.xai.includeLanguage && language && isFinal ? `${text} [${language}]` : text;
 		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language);
@@ -303,6 +339,77 @@ export class XAIBackend implements TranscriptionBackend {
 			this.onCompleteTranscription?.(message);
 		} else {
 			this.onInterimTranscription?.(message);
+		}
+	}
+
+	/**
+	 * Granular path: feed the partial to the segmenter, emit any newly committed segments as
+	 * finals and the remainder as an interim, then (re)arm a timer so a now-stable prefix still
+	 * commits if the speaker pauses and interims stop arriving. speech_final flushes the trailing
+	 * remainder and ends the turn (the segmenter reconciles it against what was already committed,
+	 * so the whole-turn re-emit is NOT reprinted).
+	 */
+	private handlePartialGranular(
+		text: string,
+		isFinalSeg: boolean,
+		speechFinal: boolean,
+		language: string | undefined,
+		words: any[] | undefined,
+	): void {
+		if (language) this.lastLanguage = language;
+		const result = this.segmenter!.pushPartial(text, isFinalSeg, speechFinal, Date.now());
+		this.emitGranular(result, language ?? this.lastLanguage, words);
+		if (result.endOfTurn) {
+			this.clearGranularTimer();
+		} else {
+			this.scheduleGranularFlush();
+		}
+	}
+
+	/** Emit committed segments as finals and the in-progress remainder as a single interim. */
+	private emitGranular(result: GranularResult, language: string | undefined, words: any[] | undefined): void {
+		const confidence = this.avgConfidence(words);
+		for (const segment of result.commits) {
+			const transcript = config.xai.includeLanguage && language ? `${segment} [${language}]` : segment;
+			this.onCompleteTranscription?.(
+				this.createMessage(transcript, confidence, Date.now(), randomUUID(), false, undefined, language),
+			);
+		}
+		if (result.interim) {
+			this.onInterimTranscription?.(
+				this.createMessage(result.interim, confidence, Date.now(), randomUUID(), true, undefined, language),
+			);
+		}
+	}
+
+	/**
+	 * Arm a single timer to fire when the next word becomes freeze-eligible. The per-partial
+	 * freeze handles active speech; this timer covers the case where interims stop (a pause)
+	 * before the held prefix has aged past the stability window.
+	 */
+	private scheduleGranularFlush(): void {
+		this.clearGranularTimer();
+		if (!this.segmenter) return;
+		const due = this.segmenter.nextDueTime();
+		if (due == null) return;
+		const delay = Math.max(0, due - Date.now());
+		this.granularTimer = setTimeout(() => {
+			this.granularTimer = undefined;
+			if (!this.segmenter || this.status !== 'connected') return;
+			const result = this.segmenter.flushDue(Date.now());
+			if (result.commits.length > 0 || result.interim) {
+				this.emitGranular(result, this.lastLanguage, undefined);
+			}
+			this.scheduleGranularFlush();
+		}, delay);
+		// Don't let the flush timer keep the process alive on its own (Node).
+		(this.granularTimer as any)?.unref?.();
+	}
+
+	private clearGranularTimer(): void {
+		if (this.granularTimer) {
+			clearTimeout(this.granularTimer);
+			this.granularTimer = undefined;
 		}
 	}
 
@@ -319,6 +426,19 @@ export class XAIBackend implements TranscriptionBackend {
 			msg.words[0].speaker !== undefined
 		) {
 			this.emitDiarized(msg.words, language, false);
+			return;
+		}
+
+		// Granular mode: transcript.done re-emits the whole turn at stream end. If a turn is still
+		// in progress (ended by the stream closing rather than a speech_final) flush only its
+		// uncommitted tail; if the turn already ended via speech_final, ignore it (re-emitting the
+		// whole turn would duplicate what was already committed).
+		if (this.segmenter) {
+			if (this.segmenter.hasActiveTurn()) {
+				const result = this.segmenter.pushPartial(text, true, true, Date.now());
+				this.emitGranular(result, language ?? this.lastLanguage, msg.words);
+			}
+			this.clearGranularTimer();
 			return;
 		}
 
