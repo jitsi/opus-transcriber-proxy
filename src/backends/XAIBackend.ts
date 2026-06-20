@@ -322,7 +322,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Roll-own granular finalization: commit a stable prefix of the growing hypothesis
 		// incrementally so a long turn interleaves in order with other speakers' acks.
 		if (this.segmenter) {
-			this.handlePartialGranular(text, msg.is_final === true, msg.speech_final === true, language, msg.words);
+			this.handlePartialGranular(text, msg.is_final === true, msg.speech_final === true, language);
 			return;
 		}
 
@@ -354,11 +354,10 @@ export class XAIBackend implements TranscriptionBackend {
 		isFinalSeg: boolean,
 		speechFinal: boolean,
 		language: string | undefined,
-		words: any[] | undefined,
 	): void {
 		if (language) this.lastLanguage = language;
 		const result = this.segmenter!.pushPartial(text, isFinalSeg, speechFinal, Date.now());
-		this.emitGranular(result, language ?? this.lastLanguage, words);
+		this.emitGranular(result, language ?? this.lastLanguage);
 		if (result.endOfTurn) {
 			this.clearGranularTimer();
 		} else {
@@ -366,18 +365,25 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 	}
 
-	/** Emit committed segments as finals and the in-progress remainder as a single interim. */
-	private emitGranular(result: GranularResult, language: string | undefined, words: any[] | undefined): void {
-		const confidence = this.avgConfidence(words);
+	/**
+	 * Emit committed segments as finals and the in-progress remainder as a single interim.
+	 *
+	 * Granular emissions deliberately carry NO confidence. A committed segment is a stable prefix
+	 * reconstructed across MANY transcript.partial events, so no single partial's per-word
+	 * confidence corresponds to it (and the timer/pause path has no partial at all). Attaching the
+	 * current partial's average would be misleading, so we omit it — createMessage drops the field
+	 * when confidence is undefined.
+	 */
+	private emitGranular(result: GranularResult, language: string | undefined): void {
 		for (const segment of result.commits) {
 			const transcript = config.xai.includeLanguage && language ? `${segment} [${language}]` : segment;
 			this.onCompleteTranscription?.(
-				this.createMessage(transcript, confidence, Date.now(), randomUUID(), false, undefined, language),
+				this.createMessage(transcript, undefined, Date.now(), randomUUID(), false, undefined, language),
 			);
 		}
 		if (result.interim) {
 			this.onInterimTranscription?.(
-				this.createMessage(result.interim, confidence, Date.now(), randomUUID(), true, undefined, language),
+				this.createMessage(result.interim, undefined, Date.now(), randomUUID(), true, undefined, language),
 			);
 		}
 	}
@@ -398,7 +404,7 @@ export class XAIBackend implements TranscriptionBackend {
 			if (!this.segmenter || this.status !== 'connected') return;
 			const result = this.segmenter.flushDue(Date.now());
 			if (result.commits.length > 0 || result.interim) {
-				this.emitGranular(result, this.lastLanguage, undefined);
+				this.emitGranular(result, this.lastLanguage);
 			}
 			this.scheduleGranularFlush();
 		}, delay);
@@ -436,7 +442,7 @@ export class XAIBackend implements TranscriptionBackend {
 		if (this.segmenter) {
 			if (this.segmenter.hasActiveTurn()) {
 				const result = this.segmenter.pushPartial(text, true, true, Date.now());
-				this.emitGranular(result, language ?? this.lastLanguage, msg.words);
+				this.emitGranular(result, language ?? this.lastLanguage);
 			}
 			this.clearGranularTimer();
 			return;

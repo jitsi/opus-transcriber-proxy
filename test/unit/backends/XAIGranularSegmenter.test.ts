@@ -77,6 +77,18 @@ describe('XAIGranularSegmenter', () => {
 			const r = seg.pushPartial('second', false, false, 100);
 			expect(r.interim).toBe('second'); // no leakage of the first turn
 		});
+
+		it('emits no trailing segment when speech_final CONTRACTS below the committed word count', () => {
+			// Known acceptable edge: a late xAI revision that shortens the turn below what we already
+			// committed. We never un-emit, so endTurn just emits nothing rather than a negative slice.
+			const seg = new XAIGranularSegmenter({ stabilityMs: 600, guardWords: 0, minWords: 2 });
+			seg.pushPartial('alpha beta gamma delta', false, false, 0);
+			const r1 = seg.pushPartial('alpha beta gamma delta', false, false, 700); // commit all 4
+			expect(r1.commits).toEqual(['alpha beta', 'gamma delta']);
+			const r2 = seg.pushPartial('alpha beta', true, true, 800); // speech_final shorter than committed
+			expect(r2.endOfTurn).toBe(true);
+			expect(r2.commits).toEqual([]); // empty tail, nothing dropped-and-reprinted
+		});
 	});
 
 	describe('chunk_final reconstruction (segment-wise, interims reset)', () => {
@@ -97,6 +109,15 @@ describe('XAIGranularSegmenter', () => {
 			// a cumulative provider would resend the base prefix; mergeBase must not double it.
 			const r = seg.pushPartial('alpha beta. gamma', false, false, 100);
 			expect(r.interim).toBe('alpha beta. gamma');
+		});
+
+		it('mergeBase is word-boundary safe (does not treat "I am" as a prefix of "I ample")', () => {
+			const seg = new XAIGranularSegmenter({ stabilityMs: 10_000, guardWords: 0, minWords: 100 });
+			seg.pushPartial('I am', true, false, 0); // chunk_final base = "I am"
+			// "I ample" must NOT be read as cumulative (char-level startsWith would false-positive);
+			// it is a fresh continuation, so the base is preserved and appended to.
+			const r = seg.pushPartial('I ample', false, false, 100);
+			expect(r.interim).toBe('I am I ample');
 		});
 	});
 

@@ -152,9 +152,11 @@ export class XAIGranularSegmenter {
 
 	private mergeBase(base: string, t: string): string {
 		if (!base) return t;
-		// If the new text already includes the base (cumulative provider), use it as-is;
-		// otherwise it is a fresh continuation -> append.
-		return normalize(t).startsWith(normalize(base)) ? t : `${base} ${t}`;
+		// If the new text already includes the base (cumulative provider), use it as-is; otherwise
+		// it is a fresh continuation -> append. The check is WORD-boundary safe (compare with a
+		// trailing space) so a base of "I am" is not treated as a prefix of "I ample ...".
+		const nb = normalize(base);
+		return `${normalize(t)} `.startsWith(`${nb} `) ? t : `${base} ${t}`;
 	}
 
 	private updateHyp(w: string[], now: number): void {
@@ -203,6 +205,14 @@ export class XAIGranularSegmenter {
 	 * authoritative whole-turn text, then reset for the next turn. Slicing by emittedWordCount
 	 * (not the freeze pointer) means any frozen-but-unemitted/guard-held words get their final
 	 * value from speech_final rather than a possibly-premature interim guess.
+	 *
+	 * KNOWN EDGE (acceptable): if speech_final's authoritative text CONTRACTS below emittedWordCount
+	 * (a late revision that shortens the turn — e.g. drops a word we already committed), the slice
+	 * is empty and no trailing segment is emitted; the already-committed prefix then has one extra
+	 * word vs the authoritative final. We never un-emit a committed word, so this is the same
+	 * append-only contract as the expanding case. Measured 0 across the live tuning grid; if it ever
+	 * shows up in practice a longer stability window shrinks the chance. (`< emittedWordCount` is
+	 * not logged here to keep the segmenter pure/loggerless.)
 	 */
 	private endTurn(text: string): GranularResult {
 		const fullWords = splitWords(text);

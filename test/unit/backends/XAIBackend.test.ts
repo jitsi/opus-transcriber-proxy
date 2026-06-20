@@ -635,6 +635,18 @@ describe('XAIBackend', () => {
 			expect(finalResults[0].transcript[0].text).toBe('aa bb cc');
 		});
 
+		it('clears the flush timer on close — no ghost commit after teardown (reconnect safety)', async () => {
+			// On a recoverable "ASR stream timed out" reconnect the old backend is closed and a fresh
+			// XAIBackend (fresh segmenter) takes over. The old backend's armed flush timer must not
+			// fire a late/ghost commit after teardown — close() clears it.
+			await connectGranular();
+			partial('aa bb cc dd ee', false, false); // arms the flush timer, nothing committed yet
+			expect(finalResults).toHaveLength(0);
+			backend.close();
+			await vi.advanceTimersByTimeAsync(3000); // the timer would have fired by now
+			expect(finalResults).toHaveLength(0); // no ghost commit
+		});
+
 		it('flushes the in-progress tail on transcript.done when no speech_final occurred', async () => {
 			await connectGranular();
 			partial('hello world foo bar', false, false); // t=0
