@@ -359,6 +359,8 @@ export class XAIBackend implements TranscriptionBackend {
 		const result = this.segmenter!.pushPartial(text, isFinalSeg, speechFinal, Date.now());
 		this.emitGranular(result, language ?? this.lastLanguage);
 		if (result.endOfTurn) {
+			// Turn ended (the segmenter already reset its per-turn state inside endTurn); just stop
+			// the pending flush timer — there is nothing left to flush for this turn.
 			this.clearGranularTimer();
 		} else {
 			this.scheduleGranularFlush();
@@ -408,7 +410,9 @@ export class XAIBackend implements TranscriptionBackend {
 			}
 			this.scheduleGranularFlush();
 		}, delay);
-		// Don't let the flush timer keep the process alive on its own (Node).
+		// Don't let the flush timer keep the process alive on its own (Node). The `as any` cast is
+		// because the DOM/CF setTimeout type (number) has no unref(); the optional chain makes it a
+		// no-op where unref isn't available.
 		(this.granularTimer as any)?.unref?.();
 	}
 

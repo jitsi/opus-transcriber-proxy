@@ -140,6 +140,9 @@ export class XAIGranularSegmenter {
 	 * Whether a turn is currently in progress (some hypothesis seen and not yet ended). Used to
 	 * decide whether a non-empty transcript.done should flush a trailing remainder or be ignored
 	 * (the turn already ended via speech_final and committing it again would duplicate).
+	 *
+	 * `pending.length` is intentionally not checked: pending words are a subset of `hyp`, so a
+	 * non-empty `pending` always implies `hyp.length > 0` — the two checks here already cover it.
 	 */
 	hasActiveTurn(): boolean {
 		return this.hyp.length > 0 || this.emittedWordCount > 0;
@@ -152,9 +155,10 @@ export class XAIGranularSegmenter {
 
 	private mergeBase(base: string, t: string): string {
 		if (!base) return t;
-		// If the new text already includes the base (cumulative provider), use it as-is; otherwise
-		// it is a fresh continuation -> append. The check is WORD-boundary safe (compare with a
-		// trailing space) so a base of "I am" is not treated as a prefix of "I ample ...".
+		// If the new text already includes the base (cumulative provider), use it as-is (return `t`,
+		// NOT `base` — the hypothesis adopts xAI's latest text/punctuation); otherwise it is a fresh
+		// continuation -> append. The check is WORD-boundary safe (compare with a trailing space) so
+		// a base of "I am" is not treated as a prefix of "I ample ...".
 		const nb = normalize(base);
 		return `${normalize(t)} `.startsWith(`${nb} `) ? t : `${base} ${t}`;
 	}
