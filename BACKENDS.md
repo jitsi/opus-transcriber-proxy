@@ -193,7 +193,7 @@ PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
 **Technical Details:**
 - Uses WebSocket API: `wss://api.x.ai/v1/stt`; all config via URL query parameters
 - Authentication via `Authorization: Bearer` header (passed using Node.js/CF Workers-specific third constructor argument)
-- Always receives signed 16-bit LE PCM at 24kHz (raw binary frames, not base64)
+- Always receives signed 16-bit LE PCM at 16kHz (xAI's native rate; raw binary frames, not base64)
 - `transcript.partial` events → interim transcriptions; optionally split by speaker when `XAI_DIARIZE=true`
 - `transcript.done` event → final transcription; includes detected `language` field
 - Detected language is always set as the `language` property on final transcription events; `XAI_INCLUDE_LANGUAGE=true` additionally appends it as text suffix (e.g. `[en]`) — these are independent behaviours (same as Deepgram)
