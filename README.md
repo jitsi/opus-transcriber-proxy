@@ -97,6 +97,10 @@ Set environment variables or use a `.env` file:
 | `XAI_INCLUDE_LANGUAGE` | `false` | Append detected language to transcript text (e.g. `Hello [English]`) |
 | `XAI_SMART_TURN` | `0.5` | Turn-end confidence threshold (0.0–1.0) |
 | `XAI_SMART_TURN_TIMEOUT` | `500` | Max silence ms before forced turn end |
+| `XAI_GRANULAR_FINALS` | `false` | Roll-own granular finalization — commit a stable prefix incrementally instead of one final per turn (fixes long-turn-vs-acks ordering). Overridable per-connection via the `xai_granular_finals` URL query param |
+| `XAI_GRANULAR_STABILITY_MS` | `1000` | Debounce window: a word freezes after this many ms unchanged (per-connection: `xai_granular_stability_ms`) |
+| `XAI_GRANULAR_GUARD_WORDS` | `3` | Volatile words held back at the growing edge (per-connection: `xai_granular_guard_words`) |
+| `XAI_GRANULAR_MIN_WORDS` | `5` | Frozen words batched into segments of at least this size (or at a sentence end) |
 | `XAI_STT_URL` | `wss://api.x.ai/v1/stt` | Override STT endpoint |
 
 ### Server

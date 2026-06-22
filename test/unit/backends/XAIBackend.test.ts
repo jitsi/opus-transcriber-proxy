@@ -87,6 +87,10 @@ vi.mock('../../../src/config', () => ({
 			endpointing: 850,
 			smartTurn: undefined,
 			smartTurnTimeout: 500,
+			granularFinals: false,
+			granularStabilityMs: 1000,
+			granularGuardWords: 3,
+			granularMinWords: 5,
 		},
 	},
 }));
@@ -530,6 +534,175 @@ describe('XAIBackend', () => {
 
 			expect(finalResults).toHaveLength(1);
 			expect(finalResults[0].speaker).toBeUndefined();
+		});
+	});
+
+	describe('granular finalization (roll-own)', () => {
+		let backend: XAIBackend;
+		let interimResults: TranscriptionMessage[];
+		let finalResults: TranscriptionMessage[];
+
+		async function connectGranular(overrides: Partial<BackendConfig> = {}) {
+			backend = new XAIBackend('test-tag', { id: 'p1' });
+			interimResults = [];
+			finalResults = [];
+			backend.onInterimTranscription = (msg) => interimResults.push(msg);
+			backend.onCompleteTranscription = (msg) => finalResults.push(msg);
+			const connectPromise = backend.connect({
+				...DEFAULT_CONFIG,
+				xaiGranularFinals: true,
+				xaiGranularStabilityMs: 600,
+				xaiGranularGuardWords: 2,
+				...overrides,
+			});
+			getMockWs().simulateOpen();
+			await connectPromise;
+		}
+
+		const partial = (text: string, isFinal: boolean, speechFinal: boolean) =>
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: isFinal, speech_final: speechFinal, text }));
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(0);
+			(config.xai as any).granularMinWords = 3;
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+			(config.xai as any).granularMinWords = 5;
+		});
+
+		it('does NOT enable granular by default (one final per turn preserved)', async () => {
+			// Default config (no granular flag) -> is_final/!speech_final stays interim, only
+			// speech_final commits. This guards the default behavioral contract.
+			const b = new XAIBackend('test-tag', { id: 'p1' });
+			const finals: TranscriptionMessage[] = [];
+			b.onCompleteTranscription = (m) => finals.push(m);
+			const p = b.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await p;
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: true, speech_final: false, text: 'one two three four five' }));
+			expect(finals).toHaveLength(0); // no granular commit without the flag
+		});
+
+		it('commits a stabilized prefix as a FINAL before end of turn', async () => {
+			await connectGranular();
+			partial('one two three four five', false, false); // t=0
+			expect(finalResults).toHaveLength(0); // nothing stable yet
+
+			vi.setSystemTime(700);
+			partial('one two three four five six', false, false); // first 4 stable >=600ms
+			// guard=2 holds back the last two; minWords=3 -> "one two three" committed.
+			expect(finalResults).toHaveLength(1);
+			expect(finalResults[0].is_interim).toBe(false);
+			expect(finalResults[0].transcript[0].text).toBe('one two three');
+		});
+
+		it('speech_final flushes only the trailing remainder (no double-emit of committed text)', async () => {
+			await connectGranular();
+			partial('hello world foo bar', false, false); // t=0
+			vi.setSystemTime(700);
+			partial('hello world foo bar baz', false, false); // commit "hello world foo"
+			const committedSoFar = finalResults.map((m) => m.transcript[0].text).join(' ');
+			expect(committedSoFar).toBe('hello world foo');
+
+			vi.setSystemTime(800);
+			partial('hello world foo bar baz qux', true, true); // speech_final re-emits whole turn
+			const all = finalResults.map((m) => m.transcript[0].text);
+			// the end-of-turn commit must be only the uncommitted tail, never the whole turn
+			expect(all[all.length - 1]).toBe('bar baz qux');
+			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe('hello world foo bar baz qux');
+		});
+
+		it('emits the in-progress remainder as an interim (Deepgram-like)', async () => {
+			await connectGranular();
+			partial('one two three four five', false, false);
+			vi.setSystemTime(700);
+			partial('one two three four five six', false, false);
+			// after committing "one two three", the interim shows the uncommitted remainder
+			expect(interimResults[interimResults.length - 1].is_interim).toBe(true);
+			expect(interimResults[interimResults.length - 1].transcript[0].text).toBe('four five six');
+		});
+
+		it('flushes a now-stable prefix on the timer when interims stop (pause)', async () => {
+			await connectGranular();
+			partial('aa bb cc dd ee', false, false); // t=0, nothing stable yet
+			expect(finalResults).toHaveLength(0);
+			// No further interims arrive; advance time so the scheduled flush timer fires.
+			await vi.advanceTimersByTimeAsync(900);
+			expect(finalResults.length).toBeGreaterThanOrEqual(1);
+			expect(finalResults[0].transcript[0].text).toBe('aa bb cc');
+		});
+
+		it('clears the flush timer on close — no ghost commit after teardown (reconnect safety)', async () => {
+			// On a recoverable "ASR stream timed out" reconnect the old backend is closed and a fresh
+			// XAIBackend (fresh segmenter) takes over. The old backend's armed flush timer must not
+			// fire a late/ghost commit after teardown — close() clears it.
+			await connectGranular();
+			partial('aa bb cc dd ee', false, false); // arms the flush timer, nothing committed yet
+			expect(finalResults).toHaveLength(0);
+			backend.close();
+			await vi.advanceTimersByTimeAsync(3000); // the timer would have fired by now
+			expect(finalResults).toHaveLength(0); // no ghost commit
+		});
+
+		it('flushes the in-progress tail on transcript.done when no speech_final occurred', async () => {
+			await connectGranular();
+			partial('hello world foo bar', false, false); // t=0
+			vi.setSystemTime(700);
+			partial('hello world foo bar baz', false, false); // commit "hello world foo"
+			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe('hello world foo');
+			// stream closes mid-turn -> transcript.done re-emits the whole turn; flush only the tail
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'hello world foo bar baz', duration: 3 }));
+			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe('hello world foo bar baz');
+		});
+
+		it('ignores transcript.done that repeats an already-committed turn (no duplicate)', async () => {
+			await connectGranular();
+			partial('hello world foo bar baz', true, true); // speech_final ends the turn
+			const afterTurn = finalResults.map((m) => m.transcript[0].text).join(' ');
+			expect(afterTurn).toBe('hello world foo bar baz');
+			// stream-end done repeats the whole turn -> must be ignored
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'hello world foo bar baz', duration: 5 }));
+			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe(afterTurn);
+		});
+
+		it('falls back to default mode (no granular) when diarize is enabled', async () => {
+			(config.xai as any).diarize = true;
+			try {
+				await connectGranular();
+				// is_final/!speech_final must remain interim (granular disabled under diarize)
+				partial('one two three four five', true, false);
+				vi.setSystemTime(700);
+				partial('one two three four five six', true, false);
+				expect(finalResults).toHaveLength(0);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('can be enabled via global config flag (not just per-connection)', async () => {
+			(config.xai as any).granularFinals = true;
+			(config.xai as any).granularStabilityMs = 600;
+			(config.xai as any).granularGuardWords = 2;
+			try {
+				backend = new XAIBackend('test-tag', { id: 'p1' });
+				finalResults = [];
+				backend.onCompleteTranscription = (m) => finalResults.push(m);
+				const p = backend.connect(DEFAULT_CONFIG); // no per-connection override
+				getMockWs().simulateOpen();
+				await p;
+				partial('one two three four five', false, false);
+				vi.setSystemTime(700);
+				partial('one two three four five six', false, false);
+				expect(finalResults).toHaveLength(1);
+				expect(finalResults[0].transcript[0].text).toBe('one two three');
+			} finally {
+				(config.xai as any).granularFinals = false;
+				(config.xai as any).granularStabilityMs = 1000;
+				(config.xai as any).granularGuardWords = 3;
+			}
 		});
 	});
 

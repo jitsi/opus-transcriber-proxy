@@ -17,6 +17,10 @@ export interface ISessionParameters {
 	xaiEndpointing?: number;
 	xaiSmartTurn?: number;
 	xaiSmartTurnTimeout?: number;
+	/** Per-connection xAI roll-own granular finalization overrides (undefined = use config). */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 /**
@@ -83,6 +87,11 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const xaiEndpointing = parseIntParam('endpointing');
 	const xaiSmartTurn = parseFloatParam('smart_turn');
 	const xaiSmartTurnTimeout = parseIntParam('smart_turn_timeout');
+	// Per-connection xAI roll-own granular finalization overrides.
+	const granularFinalsParam = parsedUrl.searchParams.get('xai_granular_finals');
+	const xaiGranularFinals = granularFinalsParam === null ? undefined : granularFinalsParam === 'true';
+	const xaiGranularStabilityMs = parseIntParam('xai_granular_stability_ms');
+	const xaiGranularGuardWords = parseIntParam('xai_granular_guard_words');
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -103,6 +112,9 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		xaiEndpointing,
 		xaiSmartTurn,
 		xaiSmartTurnTimeout,
+		xaiGranularFinals,
+		xaiGranularStabilityMs,
+		xaiGranularGuardWords,
 	};
 }
 

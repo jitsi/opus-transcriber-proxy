@@ -37,6 +37,16 @@ export interface BackendConfig {
 	xaiEndpointing?: number;
 	xaiSmartTurn?: number;
 	xaiSmartTurnTimeout?: number;
+	/**
+	 * Per-connection overrides for xAI consumer-side roll-own granular finalization
+	 * (undefined = use global config). `xaiGranularFinals`: commit a stable prefix of the growing
+	 * hypothesis incrementally instead of only on end-of-turn speech_final (fixes long-turn vs
+	 * acks ordering). `xaiGranularStabilityMs`: debounce window before a word freezes.
+	 * `xaiGranularGuardWords`: volatile words held back at the growing edge.
+	 */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 export interface TranscriptionBackend {

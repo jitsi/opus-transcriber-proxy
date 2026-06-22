@@ -80,6 +80,21 @@ export const config = {
 		// (undefined = not sent); opt in via XAI_SMART_TURN or the `smart_turn` URL param.
 		smartTurn: process.env.XAI_SMART_TURN !== undefined ? parseFloat(process.env.XAI_SMART_TURN) : undefined,
 		smartTurnTimeout: parseIntOrDefault(process.env.XAI_SMART_TURN_TIMEOUT, 500),
+		// Consumer-side "roll-own" granular finalization. xAI commits a final only on its
+		// end-of-turn speech_final (the whole turn at once), so a long turn's text lands AFTER
+		// other speakers' short acks in the stored transcript (the GT-meeting ordering bug). When
+		// enabled, we instead commit a STABLE PREFIX of xAI's growing hypothesis incrementally so
+		// the turn interleaves in order. Off by default — it is a behavioral change from the
+		// deliberate one-final-per-turn model, so it ships behind a flag for A/B. Defaults tuned
+		// live (see unreal-agents/experiments/xai-vs-deepgram-finalization): a ~1000ms stability
+		// window with 3 guard words drives the word-revision cost to ~0 while first commit stays
+		// ~3s (well under Deepgram's ~5s) and ordering is preserved. Overridable per-connection via
+		// the `xai_granular_finals` / `xai_granular_stability_ms` / `xai_granular_guard_words`
+		// URL params.
+		granularFinals: process.env.XAI_GRANULAR_FINALS === 'true', // Default false
+		granularStabilityMs: parseIntOrDefault(process.env.XAI_GRANULAR_STABILITY_MS, 1000),
+		granularGuardWords: parseIntOrDefault(process.env.XAI_GRANULAR_GUARD_WORDS, 3),
+		granularMinWords: parseIntOrDefault(process.env.XAI_GRANULAR_MIN_WORDS, 5),
 	},
 
 	// Deepgram configuration

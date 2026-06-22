@@ -36,6 +36,10 @@ export interface TranscriberProxyOptions {
 	xaiEndpointing?: number;
 	xaiSmartTurn?: number;
 	xaiSmartTurnTimeout?: number;
+	/** Per-connection xAI roll-own granular finalization overrides (undefined = use config). */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 export class TranscriberProxy extends EventEmitter {

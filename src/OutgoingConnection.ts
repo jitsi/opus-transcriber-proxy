@@ -162,6 +162,9 @@ export class OutgoingConnection {
 			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
 			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
 			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -377,6 +380,9 @@ export class OutgoingConnection {
 		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
 		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
 		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
 
 		try {
 			const connectStartTime = Date.now();
