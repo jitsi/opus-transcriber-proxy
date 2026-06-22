@@ -107,7 +107,7 @@ describe('XAIBackend', () => {
 	});
 
 	describe('getDesiredAudioFormat', () => {
-		it('should always return l16 at 24kHz', () => {
+		it('should always return l16 at 16kHz', () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const inputFormat: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
 			expect(backend.getDesiredAudioFormat(inputFormat)).toEqual({ encoding: 'l16', sampleRate: 16000 });
