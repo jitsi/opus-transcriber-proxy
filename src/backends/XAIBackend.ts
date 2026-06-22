@@ -18,6 +18,11 @@ import { XAIGranularSegmenter, type GranularResult } from './XAIGranularSegmente
 // Reused across messages; TextDecoder is stateless for our usage (one full frame per call).
 const textDecoder = new TextDecoder();
 
+// PCM sample rate sent to xAI. 16 kHz is the model's native rate (per xAI STT docs),
+// which avoids a server-side resample. Used for the request param, the desired decoder
+// output format, and the idle-silence buffer — keep these in sync.
+const XAI_SAMPLE_RATE = 16000;
+
 // Extra silence (ms) injected beyond the endpointing threshold on idle commit, to be
 // sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
 const XAI_IDLE_SILENCE_MARGIN_MS = 300;
@@ -78,7 +83,7 @@ export class XAIBackend implements TranscriptionBackend {
 		return new Promise((resolve, reject) => {
 			try {
 				const params = new URLSearchParams({
-					sample_rate: '24000',
+					sample_rate: XAI_SAMPLE_RATE.toString(),
 					encoding: 'pcm',
 					interim_results: 'true',
 				});
@@ -204,8 +209,8 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
 		const silenceMs = endpointingMs + XAI_IDLE_SILENCE_MARGIN_MS;
-		// 24 kHz, signed 16-bit mono PCM (2 bytes/sample); a zero-filled buffer is silence.
-		const silence = Buffer.alloc(Math.round((24000 * silenceMs) / 1000) * 2);
+		// Signed 16-bit mono PCM (2 bytes/sample) at the stream rate; a zero-filled buffer is silence.
+		const silence = Buffer.alloc(Math.round((XAI_SAMPLE_RATE * silenceMs) / 1000) * 2);
 		try {
 			this.ws.send(silence);
 			logger.debug(`Injected ${silenceMs}ms idle silence to flush xAI final (WS kept open) for tag ${this.tag}`);
@@ -238,7 +243,7 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
-		return { encoding: 'l16', sampleRate: 24000 };
+		return { encoding: 'l16', sampleRate: XAI_SAMPLE_RATE };
 	}
 
 	private async handleMessage(data: any): Promise<void> {
