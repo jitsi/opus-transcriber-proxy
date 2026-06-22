@@ -110,7 +110,7 @@ describe('XAIBackend', () => {
 		it('should always return l16 at 24kHz', () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const inputFormat: AudioFormat = { encoding: 'opus', sampleRate: 48000 };
-			expect(backend.getDesiredAudioFormat(inputFormat)).toEqual({ encoding: 'l16', sampleRate: 24000 });
+			expect(backend.getDesiredAudioFormat(inputFormat)).toEqual({ encoding: 'l16', sampleRate: 16000 });
 		});
 	});
 
@@ -122,7 +122,7 @@ describe('XAIBackend', () => {
 			await connectPromise;
 
 			expect(getMockWs().url).toContain('wss://api.x.ai/v1/stt');
-			expect(getMockWs().url).toContain('sample_rate=24000');
+			expect(getMockWs().url).toContain('sample_rate=16000');
 			expect(getMockWs().url).toContain('encoding=pcm');
 			expect(getMockWs().url).toContain('interim_results=true');
 			expect(backend.getStatus()).toBe('connected');
@@ -265,8 +265,8 @@ describe('XAIBackend', () => {
 			// Binary silence, NOT an audio.done (which would close the stream).
 			expect(Buffer.isBuffer(sent[0])).toBe(true);
 			expect(sent.some((m: any) => typeof m === 'string' && m.includes('audio.done'))).toBe(false);
-			// (endpointing 850ms + 300ms margin) of 24kHz signed-16-bit mono silence.
-			const expectedBytes = Math.round((24000 * (850 + 300)) / 1000) * 2;
+			// (endpointing 850ms + 300ms margin) of 16kHz signed-16-bit mono silence.
+			const expectedBytes = Math.round((16000 * (850 + 300)) / 1000) * 2;
 			expect(sent[0].length).toBe(expectedBytes);
 			expect(sent[0].every((b: number) => b === 0)).toBe(true);
 			// Stream stays open — no teardown.
@@ -283,7 +283,7 @@ describe('XAIBackend', () => {
 
 			const sent = getMockWs().getSentMessages();
 			expect(sent).toHaveLength(1);
-			expect(sent[0].length).toBe(Math.round((24000 * (300 + 300)) / 1000) * 2);
+			expect(sent[0].length).toBe(Math.round((16000 * (300 + 300)) / 1000) * 2);
 		});
 	});
 
