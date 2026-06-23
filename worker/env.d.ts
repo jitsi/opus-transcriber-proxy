@@ -20,6 +20,10 @@ export interface Env {
 	// Durable Object for auto-scaling
 	CONTAINER_COORDINATOR: DurableObjectNamespace<ContainerCoordinator>;
 
+	// Deployed Worker version metadata (wrangler `version_metadata` binding). Optional so the
+	// worker still runs if the binding is not configured.
+	CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
+
 	// Environment variables
 	OPENAI_API_KEY: string;
 	OPENAI_MODEL?: string;
