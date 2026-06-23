@@ -93,6 +93,28 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 }
 
 /**
+ * Build the `worker` block that augments the container's `info` message, recording that the
+ * request went through the Cloudflare Worker and adding edge/deployment details the container
+ * cannot know about (deployed Worker version, the colo/location that handled the request, the
+ * routing mode). Merged in-place into the container's info before forwarding to the client.
+ */
+function buildWorkerInfo(request: Request, env: Env): Record<string, unknown> {
+	const cf = (request.cf || {}) as Record<string, unknown>;
+	const worker: Record<string, unknown> = {
+		present: true,
+		routingMode: env.ROUTING_MODE || 'session',
+	};
+	if (env.CF_VERSION_METADATA) {
+		worker.versionId = env.CF_VERSION_METADATA.id;
+		worker.versionTag = env.CF_VERSION_METADATA.tag;
+	}
+	if (cf.colo) worker.colo = cf.colo;
+	if (cf.country) worker.country = cf.country;
+	if (cf.city) worker.city = cf.city;
+	return worker;
+}
+
+/**
  * TranscriberContainer wraps the Node.js transcription server
  * and forwards WebSocket requests to it.
  */
@@ -427,6 +449,25 @@ async function handleWebSocketWithDispatcher(
 
 	// Pipe: container → client (downstream, intercept for dispatcher)
 	containerWs.addEventListener('message', (event) => {
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (typeof event.data === 'string') {
+			let parsedInfo: Record<string, unknown> | null = null;
+			try {
+				const p = JSON.parse(event.data);
+				if (p && p.event === 'info') parsedInfo = p;
+			} catch {
+				parsedInfo = null;
+			}
+			if (parsedInfo) {
+				parsedInfo.worker = buildWorkerInfo(request, env);
+				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+					serverWs.send(JSON.stringify(parsedInfo));
+				}
+				return;
+			}
+		}
+
 		// Forward to client immediately
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
 			serverWs.send(event.data);
