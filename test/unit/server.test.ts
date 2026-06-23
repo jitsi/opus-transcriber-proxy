@@ -54,6 +54,7 @@ vi.mock('../../src/SessionManager', () => ({
 		unregisterSession: vi.fn(),
 		detachSession: vi.fn(),
 		shutdown: vi.fn(),
+		getStats: vi.fn().mockReturnValue({ active: 2, detached: 1 }),
 	},
 }));
 
@@ -91,6 +92,8 @@ vi.mock('../../src/transcriberproxy', () => ({
 import { handleWebSocketConnection } from '../../src/server';
 import { config as mockedConfig } from '../../src/config';
 import { TranscriberProxy } from '../../src/transcriberproxy';
+import http from 'http';
+import { sessionManager } from '../../src/SessionManager';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -192,5 +195,33 @@ describe('handleWebSocketConnection – openai_custom validation', () => {
 		);
 
 		expect(mockWs.close).not.toHaveBeenCalledWith(1002, expect.anything());
+	});
+});
+
+describe('HTTP request handler', () => {
+	// server.ts calls http.createServer(handler) at import time; grab that handler.
+	const requestHandler = (http.createServer as any).mock.calls[0][0] as (req: any, res: any) => void;
+
+	function makeMockRes() {
+		return { writeHead: vi.fn(), end: vi.fn() };
+	}
+
+	it('returns live session counts as JSON on GET /status', () => {
+		(sessionManager.getStats as any).mockReturnValue({ active: 2, detached: 1 });
+		const res = makeMockRes();
+
+		requestHandler({ url: '/status', method: 'GET', headers: {} }, res);
+
+		expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+		expect(res.end).toHaveBeenCalledWith(JSON.stringify({ active: 2, detached: 1 }));
+	});
+
+	it('still returns OK on GET /health', () => {
+		const res = makeMockRes();
+
+		requestHandler({ url: '/health', method: 'GET', headers: {} }, res);
+
+		expect(res.writeHead).toHaveBeenCalledWith(200);
+		expect(res.end).toHaveBeenCalledWith('OK');
 	});
 });

@@ -30,6 +30,15 @@ const server = http.createServer((req, res) => {
 		res.end('OK');
 		return;
 	}
+	// Live session counts, used by the container's Durable Object (onActivityExpired)
+	// to decide whether to keep the container alive or let it sleep. WebSocket frames
+	// bypass the Container class so its activity timer doesn't see them; this lets the
+	// DO renew the timer only while a call is actually in progress.
+	if (req.url === '/status') {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(sessionManager.getStats()));
+		return;
+	}
 	res.writeHead(426, { 'Content-Type': 'text/plain' });
 	res.end('Upgrade Required: Expected WebSocket connection');
 });
@@ -331,7 +340,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -424,7 +433,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);

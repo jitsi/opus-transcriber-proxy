@@ -52,7 +52,23 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		DEEPGRAM_DIARIZE: env.DEEPGRAM_DIARIZE || 'false',
 		DEEPGRAM_PUNCTUATE: env.DEEPGRAM_PUNCTUATE || 'true',
 		DEEPGRAM_ENCODING: env.DEEPGRAM_ENCODING || 'opus',
+		DEEPGRAM_MIP_OPT_OUT: env.DEEPGRAM_MIP_OPT_OUT || 'false',
 		DEEPGRAM_TAGS: env.DEEPGRAM_TAGS || '',
+		// XAI_API_KEY is forwarded as '' when unset so the container treats xAI as
+		// unconfigured (provider disabled). The remaining XAI_* knobs are only
+		// forwarded when explicitly set, otherwise the container's code defaults apply.
+		XAI_API_KEY: env.XAI_API_KEY || '',
+		...(env.XAI_STT_URL && { XAI_STT_URL: env.XAI_STT_URL }),
+		...(env.XAI_LANGUAGE && { XAI_LANGUAGE: env.XAI_LANGUAGE }),
+		...(env.XAI_DIARIZE && { XAI_DIARIZE: env.XAI_DIARIZE }),
+		...(env.XAI_INCLUDE_LANGUAGE && { XAI_INCLUDE_LANGUAGE: env.XAI_INCLUDE_LANGUAGE }),
+		...(env.XAI_ENDPOINTING && { XAI_ENDPOINTING: env.XAI_ENDPOINTING }),
+		...(env.XAI_SMART_TURN && { XAI_SMART_TURN: env.XAI_SMART_TURN }),
+		...(env.XAI_SMART_TURN_TIMEOUT && { XAI_SMART_TURN_TIMEOUT: env.XAI_SMART_TURN_TIMEOUT }),
+		...(env.XAI_GRANULAR_FINALS && { XAI_GRANULAR_FINALS: env.XAI_GRANULAR_FINALS }),
+		...(env.XAI_GRANULAR_STABILITY_MS && { XAI_GRANULAR_STABILITY_MS: env.XAI_GRANULAR_STABILITY_MS }),
+		...(env.XAI_GRANULAR_GUARD_WORDS && { XAI_GRANULAR_GUARD_WORDS: env.XAI_GRANULAR_GUARD_WORDS }),
+		...(env.XAI_GRANULAR_MIN_WORDS && { XAI_GRANULAR_MIN_WORDS: env.XAI_GRANULAR_MIN_WORDS }),
 		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',
 		ENABLE_OPENAI_CUSTOM_PROVIDER: env.ENABLE_OPENAI_CUSTOM_PROVIDER || 'false',
 		OPENAI_CUSTOM_REQUIRE_WSS: env.OPENAI_CUSTOM_REQUIRE_WSS || 'true',
@@ -77,6 +93,28 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 }
 
 /**
+ * Build the `worker` block that augments the container's `info` message, recording that the
+ * request went through the Cloudflare Worker and adding edge/deployment details the container
+ * cannot know about (deployed Worker version, the colo/location that handled the request, the
+ * routing mode). Merged in-place into the container's info before forwarding to the client.
+ */
+function buildWorkerInfo(request: Request, env: Env): Record<string, unknown> {
+	const cf = (request.cf || {}) as Record<string, unknown>;
+	const worker: Record<string, unknown> = {
+		present: true,
+		routingMode: env.ROUTING_MODE || 'session',
+	};
+	if (env.CF_VERSION_METADATA) {
+		worker.versionId = env.CF_VERSION_METADATA.id;
+		worker.versionTag = env.CF_VERSION_METADATA.tag;
+	}
+	if (cf.colo) worker.colo = cf.colo;
+	if (cf.country) worker.country = cf.country;
+	if (cf.city) worker.city = cf.city;
+	return worker;
+}
+
+/**
  * TranscriberContainer wraps the Node.js transcription server
  * and forwards WebSocket requests to it.
  */
@@ -91,7 +129,10 @@ export class TranscriberContainer extends Container<Env> {
 	// Longer = Fewer cold starts, but uses more resources when idle
 	// For pool-based routing: Keep this longer (containers serve many sessions)
 	// For session-based routing: Keep this shorter (containers are session-specific)
-	sleepAfter = this.env.SLEEP_AFTER || '1m';
+	// NOTE: must stay > the renewal interval below (180s), with margin for a missed
+	// renewal — otherwise a live call's container sleeps mid-session. After audio stops,
+	// the container reclaims ~sleepAfter after the last renewal.
+	sleepAfter = this.env.SLEEP_AFTER || '7m';
 
 	// Pass environment variables to the container (default, without instance name)
 	envVars: Record<string, string> = buildContainerEnvVars(this.env);
@@ -117,12 +158,47 @@ export class TranscriberContainer extends Container<Env> {
 	}
 
 	/**
-	 * Keep the container alive by renewing the activity timeout.
-	 * Call this periodically for long-lived WebSocket connections
-	 * where messages bypass the Container class's fetch method.
+	 * Called when the activity timer (`sleepAfter`) elapses. The default stops the
+	 * container. WebSocket audio frames bypass the Container class, so the timer never
+	 * sees an in-progress call and would sleep it mid-session — on EVERY routing path,
+	 * including the direct `container.fetch` path used by `useDispatcher=false` (VCC)
+	 * connections, which has no Worker-side renewal loop.
+	 *
+	 * So before sleeping, ask the container whether any sessions are still live; if so,
+	 * keep it alive. This is path-agnostic (it's the DO's own lifecycle hook) and costs
+	 * one DO->container request per `sleepAfter` (~7m) — no Worker subrequests.
+	 *
+	 * Note: `containerFetch` renews the activity timer itself (it proxies a request), so
+	 * the probe keeps the container alive in the active branch. In the idle branch we
+	 * call the default `onActivityExpired()`, which stops the container explicitly
+	 * regardless of the renewed timer.
 	 */
-	keepAlive() {
-		this.renewActivityTimeout();
+	override async onActivityExpired(): Promise<void> {
+		try {
+			const res = await this.containerFetch('http://container/status', 8080);
+			if (res.ok) {
+				const { active = 0, detached = 0 } = (await res.json()) as { active?: number; detached?: number };
+				if (active + detached > 0) {
+					console.log(`Activity timeout but ${active} active + ${detached} detached session(s) — keeping container alive`);
+					// Renew explicitly rather than relying on containerFetch's renew-on-proxy
+					// side effect: if a future @cloudflare/containers version stops renewing on
+					// probe requests, the keep-alive would silently break. This makes the intent
+					// unambiguous (idempotent — just pushes sleepAfterMs out again).
+					this.renewActivityTimeout();
+					return; // skip the default stop
+				}
+			} else {
+				// Non-2xx from /status: can't trust session state, so allow the default stop —
+				// but log it, otherwise a recurring 4xx/5xx that sleeps live calls is invisible.
+				console.error(`onActivityExpired: /status returned ${res.status}, allowing container to sleep`);
+			}
+		} catch (error) {
+			// Can't determine session state — fall through to the default stop. If the
+			// container is too unhealthy to answer /status it isn't usefully serving a call.
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`onActivityExpired: /status probe failed, allowing container to sleep: ${msg}`);
+		}
+		await super.onActivityExpired();
 	}
 }
 
@@ -256,26 +332,25 @@ async function handleWebSocketWithDispatcher(
 		}
 	}
 
-	// Keep container alive by periodically renewing activity timeout
-	// WebSocket messages bypass the Container class, so sleepAfter doesn't reset automatically
+	// Keep the container alive for the life of the call by renewing its activity timeout.
+	// WebSocket audio frames bypass the Container class, so sleepAfter does NOT reset on
+	// its own — without this the container sleeps (SIGTERM) ~sleepAfter after start, mid-call.
+	// renewActivityTimeout() is the real Container method (there is no keepAlive()); each
+	// call is one Worker subrequest, so we renew infrequently (every 3m) to stay well under
+	// the 1000-subrequest-per-invocation limit on long sessions. The interval must stay
+	// below `sleepAfter` (7m) with margin for a missed renewal.
 	const keepAliveInterval = setInterval(() => {
-		container.keepAlive().catch((error) => {
+		container.renewActivityTimeout().catch((error) => {
 			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`Container keepAlive failed: ${msg}, closing connections, sessionId=${sessionId}`);
-
-			// Clean up interval to prevent further keepAlive attempts
-			clearInterval(keepAliveInterval);
-
-			// Close all WebSocket connections when container connection is lost
-			if (serverWs.readyState === WebSocket.READY_STATE_OPEN || serverWs.readyState === WebSocket.READY_STATE_CONNECTING) {
-				serverWs.close(1011, `Container connection lost: ${msg}`);
-			}
-			if (containerWs.readyState === WebSocket.READY_STATE_OPEN || containerWs.readyState === WebSocket.READY_STATE_CONNECTING) {
-				containerWs.close(1011, 'Container keepAlive failed');
-			}
-			dispatcherWs?.close(1000, 'Container connection lost');
+			// A renewal failure is a control-plane RPC hiccup, NOT proof the call is dead —
+			// the audio WS pipe is independent. Log and let the next tick retry; sleepAfter
+			// (7m) leaves margin for a missed 3m renewal. Genuine container death is detected
+			// and torn down by the containerWs close/error handlers below (which the client
+			// then reconnects from) — don't duplicate that here, since closing on a transient
+			// blip would force an unnecessary reconnect and drop the in-flight utterance.
+			console.error(`Container renewActivityTimeout failed (will retry next tick): ${msg}, sessionId=${sessionId}`);
 		});
-	}, 10_000); // Every 10 seconds
+	}, 180_000); // Every 3 minutes (subrequest-light; must stay < sleepAfter)
 
 
 	// Pipe: client → container (upstream, no interception needed)
@@ -374,6 +449,25 @@ async function handleWebSocketWithDispatcher(
 
 	// Pipe: container → client (downstream, intercept for dispatcher)
 	containerWs.addEventListener('message', (event) => {
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (typeof event.data === 'string') {
+			let parsedInfo: Record<string, unknown> | null = null;
+			try {
+				const p = JSON.parse(event.data);
+				if (p && p.event === 'info') parsedInfo = p;
+			} catch {
+				parsedInfo = null;
+			}
+			if (parsedInfo) {
+				parsedInfo.worker = buildWorkerInfo(request, env);
+				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+					serverWs.send(JSON.stringify(parsedInfo));
+				}
+				return;
+			}
+		}
+
 		// Forward to client immediately
 		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
 			serverWs.send(event.data);

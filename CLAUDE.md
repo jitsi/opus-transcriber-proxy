@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini). It supports:
+This is a real-time WebSocket transcription proxy that routes audio (Opus or other formats) to multiple speech-to-text backends (OpenAI, Deepgram, Google Gemini, xAI). It supports:
 - Multi-participant sessions (one WebSocket handles multiple audio streams)
 - Provider fallback with configurable priority
 - Two deployment modes: Node.js standalone or Cloudflare Workers with Containers
@@ -126,6 +126,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Implements idle commit timeout (forces transcription when audio stops)
 - Maintains transcript history for context injection
 - On every `reinitializeDecoder` call, compares the new desired format against `activeDesiredFormat`; if they differ, closes the old backend and opens a fresh connection (via `reconnectBackend`) before creating the decoder
+- The backend `onError` handler distinguishes **recoverable** errors (third callback arg `recoverable === true`) from fatal ones. Recoverable errors (e.g. xAI `"ASR stream timed out"` on silence) trigger `recoverBackend()`, which reopens the backend in place via `reconnectBackend` (preserving the decoder, transcript history and negotiated format) instead of tearing down the connection. Fatal errors call `doClose(true)` as before. `recoverBackend` bumps `reinitGeneration` so it shares the same staleness guard as format-change reconnects (JIT-15901). The reconnect loop is bounded by `MAX_CONSECUTIVE_RECOVERIES` (3): a muted participant sends no audio so the fresh stream just times out again, so after that many recoveries with no audio in between it gives up and tears down (the next media event on unmute recreates the connection cleanly). `consecutiveRecoveries` resets on every audio send, so an active participant reconnects without limit
 - `doClose()` is idempotent (guarded by `isClosed`); it increments `reinitGeneration` to make in-flight async operations detect they are stale, and detaches backend callbacks before calling `close()` to prevent stale events from firing after teardown
 
 **AudioDecoder** (`src/AudioDecoder.ts`)
@@ -144,7 +145,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 **OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
 - Implements `AudioDecoder` with packet-loss concealment logic
 - Wraps the low-level WASM `OpusDecoder`; handles gap detection and concealment frames
-- Decodes Opus frames at 48kHz to PCM at 24kHz mono
+- Decodes Opus frames to mono PCM at a configurable output rate (default 24kHz; 16kHz when requested by the xAI backend). Supported rates: 8/12/16/24/48kHz
 
 **L16Decoder** (`src/L16Decoder.ts`)
 - Implements `AudioDecoder` for raw PCM l16 input
@@ -189,12 +190,28 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
 - When `DEEPGRAM_DIARIZE=true` and word-level `speaker` indices are present, results are split per speaker segment; each message carries a `speaker: number` field
+- `DEEPGRAM_MIP_OPT_OUT=true` adds `mip_opt_out=true` to the WS URL (opts out of Deepgram's Model Improvement Program; default false). Overridable per-connection via the `deepgram_mip_opt_out` URL query param, which flows `ISessionParameters` → `TranscriberProxyOptions` → `BackendConfig.deepgramMipOptOut`; `DeepgramBackend` resolves `backendConfig.deepgramMipOptOut ?? config.deepgram.mipOptOut`. The CF Worker forwards `DEEPGRAM_MIP_OPT_OUT` to the container via `buildContainerEnvVars`
 - When Deepgram provides `alternative.languages`, the first entry is always set as the `language` property on the `TranscriptionMessage` (both standard and diarized paths), unconditionally. `DEEPGRAM_INCLUDE_LANGUAGE=true` additionally appends the language as a text suffix (e.g. `[en]`) — these are independent behaviours
 
 **Gemini**
 - Multimodal model (primarily used for audio here)
 - Real-time API with WebSocket
 - Sends PCM audio
+
+**xAI**
+- Uses xAI's WebSocket STT API (`wss://api.x.ai/v1/stt`); config entirely via URL query params (no session message)
+- Auth via `Authorization: Bearer` header — passed using Node.js/CF Workers-specific third argument to `WebSocket` constructor (cast via `as any`)
+- Sends raw binary PCM frames (signed 16-bit LE, 16kHz); always requests `{ encoding: 'l16', sampleRate: 16000 }` from `getDesiredAudioFormat()` (the `XAI_SAMPLE_RATE` constant). 16 kHz is xAI's native rate per their STT docs, avoiding a server-side resample; the Opus decoder outputs 16 kHz directly (a natively supported decode rate, no separate resample step)
+- `forceCommit()` finalizes the trailing utterance when the stream goes idle **without closing the WS**, by injecting a short tail of digital silence (`endpointing` + `XAI_IDLE_SILENCE_MARGIN_MS` (300) ms of 16kHz 16-bit zeros). xAI has no flush/commit message (unlike OpenAI `input_audio_buffer.commit` / Deepgram `Finalize`) — only `audio.done`, which closes the WS (code 1006) and forces a full teardown + cold-start of the next utterance. Finalization is driven by `endpointing` (xAI's VAD emits `speech_final` after that many ms of silence in the audio); when the client stops sending (pause/mute) no frames arrive so the VAD never crosses the threshold, so we feed it the silence ourselves. #94 had made this a no-op (trailing utterance before a pause/mute went unfinalized); a prior iteration used `audio.done` (verified to tear the stream down on every pause). The silence-injection approach was verified on stage: single WS survives pauses/mutes, each idle injection yields a `speech_final` within ~0.5s, no `1006` close. xAI's own `"ASR stream timed out"` on a long idle is still handled by the recoverable-reconnect path above
+- xAI closes the ASR stream after a stretch of silence with `{type:error, message:"ASR stream timed out"}`. `handleMessage` detects this (message matches `/timed out/i`) and calls `onError('api_error', message, /* recoverable */ true)` (metric `errorType: 'stream_timeout'`); other `type:error` messages are non-recoverable (`errorType: 'api_error'`, `recoverable === false`). Either way the dead WS is still `close()`d — the in-place reconnect happens on the `OutgoingConnection` side (JIT-15901)
+- `transcript.partial` with `speech_final=false` → interim; `transcript.partial` with `speech_final=true` → final (true utterance end); multiple `is_final=true` partials may arrive for a single utterance with accumulating text — only `speech_final=true` is the definitive end; `transcript.done` fires at stream end with empty text and is ignored
+- Detected `language` is a BCP-47 code (e.g. `"en"`) and is present on `transcript.partial` events. It is passed through verbatim from xAI (no transformation)
+- When `XAI_DIARIZE=true` and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram)
+- `XAI_INCLUDE_LANGUAGE=true` appends language suffix (e.g. `[en]`) to final transcript text; `language` field is always set on final messages when detected
+- **Segmentation = `endpointing` (silence), not `smart_turn`.** `endpointing` (silence ms before a final) is **always sent**, default **850ms** (`XAI_ENDPOINTING`; xAI's own default of 10ms is far too choppy). `smart_turn` is end-of-turn detection for a *multi-speaker single stream*; we run one WS per participant (no turns), and enabling it holds finals across mid-sentence pauses → very long chunks. So `smart_turn`/`smart_turn_timeout` are **opt-in**: sent only when `XAI_SMART_TURN` is explicitly set (`config.xai.smartTurn` defaults to `undefined`). `smart_turn_timeout` (default 500) is only sent alongside `smart_turn`.
+- All three segmentation knobs are **per-connection overridable** via URL query params — `endpointing`, `smart_turn`, `smart_turn_timeout` — flowing `ISessionParameters` (`xaiEndpointing`/`xaiSmartTurn`/`xaiSmartTurnTimeout`) → `TranscriberProxyOptions` → `BackendConfig`; `XAIBackend` resolves `backendConfig.xaiX ?? config.xai.X` (same pattern as `language`/`deepgram_mip_opt_out`)
+- **Granular finalization (roll-own, `XAI_GRANULAR_FINALS`, default OFF):** xAI commits a final only on its end-of-turn `speech_final`, which re-emits the WHOLE turn at once — so a long speaker's turn lands in the stored transcript AFTER other participants' short acks (the GT-meeting ordering bug). When enabled, `XAIBackend` instead runs `XAIGranularSegmenter` (`src/backends/XAIGranularSegmenter.ts`): it reconstructs xAI's growing hypothesis from the interim stream (chunk_finals are segment-wise and interims reset after each — `mergeBase()` handles both that and a hypothetical cumulative provider), commits a **stable prefix** once it's been unchanged for `XAI_GRANULAR_STABILITY_MS` (default 1000) holding back `XAI_GRANULAR_GUARD_WORDS` (default 3) volatile words, and batches frozen words into `XAI_GRANULAR_MIN_WORDS` (default 5)-word segments emitted as finals (the in-progress remainder is emitted as an interim, Deepgram-style). The end-of-turn `speech_final` is **reconciled** — only the trailing words not already committed are flushed from its authoritative text, so the whole-turn re-emit is never reprinted; reconciliation only appends, so the sole correctness cost is a prefix word xAI revised after we froze it (measured **0 word-edits** across the whole tuned grid on 12 live captures — the "slower ⇒ fewer edits" framing is moot, the floor is already 0; slower only buys latency-margin). A non-empty `transcript.done` is routed through the segmenter only when a turn is still active (`hasActiveTurn()`) to avoid duplicating a turn already ended by `speech_final`. Granular finals are scoped to the **non-diarized** path (diarization needs per-speaker hypotheses → falls back to one-final-per-turn). DTX silence-injection `forceCommit()` and the recoverable stream-timeout reconnect are unchanged. Flag + the stability/guard knobs are overridable **per-connection** via `xai_granular_finals`/`xai_granular_stability_ms`/`xai_granular_guard_words` URL params (resolved `backendConfig.xaiGranularX ?? config.xai.granularX`); `XAI_GRANULAR_MIN_WORDS` is **global-only** (a batching detail, not per-connection). Tuned live in `unreal-agents/experiments/xai-vs-deepgram-finalization` (see `TUNING.md`)
+- The CF Worker forwards `XAI_API_KEY` (as `''` when unset → provider disabled) plus any set `XAI_STT_URL`/`XAI_LANGUAGE`/`XAI_DIARIZE`/`XAI_INCLUDE_LANGUAGE`/`XAI_ENDPOINTING`/`XAI_SMART_TURN`/`XAI_SMART_TURN_TIMEOUT`/`XAI_GRANULAR_FINALS`/`XAI_GRANULAR_STABILITY_MS`/`XAI_GRANULAR_GUARD_WORDS`/`XAI_GRANULAR_MIN_WORDS` to the container via `buildContainerEnvVars`
 
 ### Configuration System (`src/config.ts`)
 
@@ -292,6 +309,7 @@ src/
 │   ├── OpenAIBackend.ts          # OpenAI implementation
 │   ├── DeepgramBackend.ts        # Deepgram implementation
 │   ├── GeminiBackend.ts          # Gemini implementation
+│   ├── XAIBackend.ts             # xAI implementation
 │   └── DummyBackend.ts           # Test/stats backend
 └── OpusDecoder/
     ├── OpusAudioDecoder.ts       # High-level AudioDecoder (gap detection + concealment)
@@ -369,6 +387,24 @@ npm run mix-audio /tmp/session123/media.jsonl output.wav
 {"event": "pong", "id": 123}
 ```
 
+**Info (sent once per connection, independent of `sendBack`):**
+```json
+{
+  "event": "info",
+  "application": "opus-transcriber-proxy",
+  "gitHash": "c23ab2a",
+  "runtime": "cloudflare-container",
+  "provider": "openai",
+  "providersAvailable": ["openai", "deepgram"],
+  "config": {"providersPriority": ["openai"], "forceCommitTimeout": 2, "sessionResumeEnabled": true, "useDispatcher": false},
+  "sessionId": "...",
+  "instanceId": "...",
+  "location": {"city": "Vienna", "country": "AT"},
+  "worker": {"present": true, "versionId": "...", "routingMode": "session", "colo": "VIE"}
+}
+```
+An informational/observability message describing the running build and effective session config. Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
+
 ## Environment Variables Reference
 
 See README.md for complete list. Key ones:
@@ -406,4 +442,5 @@ Do not leave stale descriptions. If a note says "only X happens" and you change 
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.
 - When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly. This method is called on every `reinitializeDecoder` call (not just once at construction), so it must be a pure function of `inputFormat` for a given backend configuration. If the method has connect-time side effects (like `DeepgramBackend` storing `negotiatedFormat`), it will also be called on any new backend instance before `connect()`, so those side effects will be applied correctly.
 - `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
+- `OggOpusDecapsulator` only requires an `OpusHead` packet when its first page is a beginning-of-stream page (Ogg `header_type & 0x02`). If the first page seen is a non-BOS page — which happens when a client reconnects and resumes an existing Ogg stream mid-way after a server/container restart, without replaying the headers — it logs a warning and decodes from that point instead of throwing. This matters for any backend that requests `l16` from `ogg` input (e.g. xAI always, Deepgram with `DEEPGRAM_ENCODING=linear16`), which routes audio through `CascadedDecoder(OggOpusDecapsulator → OpusAudioDecoder)`. Backends on the pass-through path (`PassThroughDecoder`) never hit this validation.
 - `doClose()` is idempotent. Do not call it more than once expecting repeated side effects — the `isClosed` guard makes subsequent calls no-ops. Backend callbacks (`onClosed`, `onError`, etc.) are nulled before `close()` is called, so async backend events arriving after teardown are silently dropped.

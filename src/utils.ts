@@ -12,6 +12,15 @@ export interface ISessionParameters {
 	encoding: AudioEncoding;
 	tags: string[];
 	openaiCustomUrl?: string;
+	deepgramMipOptOut?: boolean;
+	/** Per-connection xAI segmentation overrides (undefined = use config). */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
+	/** Per-connection xAI roll-own granular finalization overrides (undefined = use config). */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 /**
@@ -59,6 +68,30 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	// Parse tags as multiple tag= parameters (like Deepgram API), filter empty strings
 	const tags = parsedUrl.searchParams.getAll('tag').filter((t) => t);
 	const openaiCustomUrl = parsedUrl.searchParams.get('openaiCustomUrl');
+	// Per-connection override for Deepgram MIP opt-out. Absent = undefined (use config).
+	const mipOptOutParam = parsedUrl.searchParams.get('deepgram_mip_opt_out');
+	const deepgramMipOptOut = mipOptOutParam === null ? undefined : mipOptOutParam === 'true';
+	// Per-connection xAI segmentation overrides. Absent or unparseable = undefined (use config).
+	const parseFloatParam = (name: string): number | undefined => {
+		const raw = parsedUrl.searchParams.get(name);
+		if (raw === null) return undefined;
+		const n = parseFloat(raw);
+		return Number.isFinite(n) ? n : undefined;
+	};
+	const parseIntParam = (name: string): number | undefined => {
+		const raw = parsedUrl.searchParams.get(name);
+		if (raw === null) return undefined;
+		const n = parseInt(raw, 10);
+		return Number.isFinite(n) ? n : undefined;
+	};
+	const xaiEndpointing = parseIntParam('endpointing');
+	const xaiSmartTurn = parseFloatParam('smart_turn');
+	const xaiSmartTurnTimeout = parseIntParam('smart_turn_timeout');
+	// Per-connection xAI roll-own granular finalization overrides.
+	const granularFinalsParam = parsedUrl.searchParams.get('xai_granular_finals');
+	const xaiGranularFinals = granularFinalsParam === null ? undefined : granularFinalsParam === 'true';
+	const xaiGranularStabilityMs = parseIntParam('xai_granular_stability_ms');
+	const xaiGranularGuardWords = parseIntParam('xai_granular_guard_words');
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -75,6 +108,13 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		encoding,
 		tags,
 		openaiCustomUrl: openaiCustomUrl ?? undefined,
+		deepgramMipOptOut,
+		xaiEndpointing,
+		xaiSmartTurn,
+		xaiSmartTurnTimeout,
+		xaiGranularFinals,
+		xaiGranularStabilityMs,
+		xaiGranularGuardWords,
 	};
 }
 

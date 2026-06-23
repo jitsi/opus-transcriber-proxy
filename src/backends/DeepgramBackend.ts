@@ -100,6 +100,15 @@ export class DeepgramBackend implements TranscriptionBackend {
 					params.set('diarize', config.deepgram.diarize.toString());
 				}
 
+				// Model Improvement Program opt-out. Per-connection override
+				// (deepgram_mip_opt_out URL param) takes precedence over the global
+				// DEEPGRAM_MIP_OPT_OUT config. Only emit the param when opting out.
+				// See: https://dpgr.am/deepgram-mip
+				const mipOptOut = backendConfig.deepgramMipOptOut ?? config.deepgram.mipOptOut;
+				if (mipOptOut) {
+					params.set('mip_opt_out', 'true');
+				}
+
 				// Add tags from config and URL parameter
 				const allTags = [...(config.deepgram.tags || []), ...(backendConfig.tags || [])];
 				if (allTags.length > 0) {

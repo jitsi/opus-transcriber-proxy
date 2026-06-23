@@ -8,6 +8,7 @@ import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
+import { buildServerInfo } from './serverInfo';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -31,6 +32,15 @@ export interface TranscriberProxyOptions {
 	tags?: string[];
 	openaiCustomUrl?: string;
 	openaiCustomApiKey?: string;
+	deepgramMipOptOut?: boolean;
+	/** Per-connection xAI segmentation overrides (undefined = use config). */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
+	/** Per-connection xAI roll-own granular finalization overrides (undefined = use config). */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 export class TranscriberProxy extends EventEmitter {
@@ -121,8 +131,33 @@ export class TranscriberProxy extends EventEmitter {
 				this.handleStartEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
+			} else if (parsedMessage && parsedMessage.event === 'info') {
+				// Informational message from the client (e.g. JVB application/version). Log it for
+				// runtime observability; no behavioural effect.
+				logger.info(`Received info from client for session ${this.sessionId}: ${JSON.stringify(parsedMessage)}`);
 			}
 		});
+
+		// Announce ourselves to the client (build/config/deployment details) now that the
+		// connection is up. Called on both initial connect and reattach.
+		this.sendServerInfo();
+	}
+
+	/**
+	 * Send the server `info` message to the connected client. Carries git hash, effective provider,
+	 * high-level config and deployment details for runtime observability.
+	 */
+	private sendServerInfo(): void {
+		if (this.ws.readyState !== WebSocket.OPEN) {
+			return;
+		}
+		try {
+			const info = buildServerInfo({ sessionId: this.sessionId, provider: this.options.provider });
+			logger.info(`Sending server info for session ${this.sessionId}: ${JSON.stringify(info)}`);
+			this.ws.send(JSON.stringify(info));
+		} catch (error) {
+			logger.error('Failed to send server info:', error);
+		}
 	}
 
 	private initializeDumpStreams(): void {
