@@ -17,8 +17,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { OpusEncoder } from '../../src/OpusEncoder/OpusEncoder';
-import { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
+
+// Type-only imports: the concrete modules (which statically import the real dist/*.cjs WASM) are loaded
+// dynamically in beforeAll so that, when the WASM artefacts are absent (e.g. CI without `build:wasm`), this
+// suite skips cleanly instead of failing at collection time on the missing modules.
+import type { OpusEncoder } from '../../src/OpusEncoder/OpusEncoder';
+import type { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
 
 // Matches the rate the TranslatorConnection pipeline uses end-to-end.
 const SAMPLE_RATE = 24000;
@@ -67,6 +71,9 @@ describeIfWasm('Opus round trip (encoder → decoder)', () => {
 	let decoder: OpusDecoder<24000>;
 
 	beforeAll(async () => {
+		const { OpusEncoder } = await import('../../src/OpusEncoder/OpusEncoder');
+		const { OpusDecoder } = await import('../../src/OpusDecoder/OpusDecoder');
+
 		encoder = new OpusEncoder({
 			sampleRate: SAMPLE_RATE,
 			channels: 1,
