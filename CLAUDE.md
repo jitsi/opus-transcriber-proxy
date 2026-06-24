@@ -108,6 +108,22 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
     Provider API (WebSocket or HTTP stream)
 ```
 
+The `/translate` endpoint runs a parallel pipeline for speech-to-speech translation:
+
+```
+Bridge WebSocket (/translate)
+    ↓
+TranslatorProxy (translatorproxy.ts)
+    ├─ One per WebSocket connection
+    ├─ Reconciles `sources` control events into per-(source, language) connections
+    └─ Routes media by tag to multiple TranslatorConnections
+        ↓
+TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
+    ├─ OpusDecoder - Decodes the speaker's Opus to PCM
+    ├─ OpenAI Realtime translations session - PCM in, translated PCM + transcript out
+    └─ OpusEncoder - Re-encodes the translated PCM to Opus for the return path
+```
+
 ### Key Components
 
 **TranscriberProxy** (`src/transcriberproxy.ts`)
@@ -160,6 +176,22 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 **OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
 - Low-level TypeScript wrapper around the WASM Opus decoder
 - Used by `OpusAudioDecoder`; not used directly by `OutgoingConnection`
+
+**TranslatorProxy** (`src/translatorproxy.ts`)
+- Manages a single `/translate` WebSocket connection (the bridge side)
+- Reconciles `sources` control events (`exports` = sender source names, `requests` = synthetic `<source>.<language>` names) into one `TranslatorConnection` per (source, language)
+- Routes incoming `media` events to the matching connection by tag; closes connections dropped from `requests`
+- Also supports a dev `?lang=` path that seeds the initial target languages
+
+**TranslatorConnection** (`src/TranslatorConnection.ts`)
+- Manages one (source, language) translation stream
+- Decodes the speaker's Opus to PCM (`OpusDecoder`), forwards it to an OpenAI Realtime translations session, and re-encodes the returned translated PCM to Opus (`OpusEncoder`) for the return path
+- Emits translated Opus frames (`onAudioFrame`) and the translated-text transcript (`onTranscription`)
+- `doClose()` is idempotent (guarded by `isClosed`) and detaches callbacks before teardown, mirroring `OutgoingConnection`
+
+**OpusEncoder** (`src/OpusEncoder/OpusEncoder.ts`)
+- Low-level TypeScript wrapper around the WASM Opus encoder (symmetric to `OpusDecoder`)
+- Accumulates PCM and emits one Opus frame per encode interval; used by `TranslatorConnection`
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers

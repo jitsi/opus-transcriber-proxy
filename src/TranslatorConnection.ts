@@ -100,8 +100,10 @@ export class TranslatorConnection {
 	private connectionStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private encoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
+	// Guards doClose so teardown + onClosed run exactly once (a WS error is always followed by a close event).
+	private isClosed = false;
 	private opusDecoder?: OpusDecoder<24000>;
-	private opusEncoder?: OpusEncoder<24000>;
+	private opusEncoder?: OpusEncoder;
 	private openaiWebSocket?: WebSocket;
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingAudioData: Uint8Array = new Uint8Array(0);
@@ -190,8 +192,9 @@ export class TranslatorConnection {
 		} catch (error) {
 			this.logError(`Failed to create Opus decoder for tag ${this.localTag}:`, error);
 			this.decoderStatus = 'failed';
-			this.doClose(true);
+			// Notify before doClose() detaches the callbacks.
 			this.onError?.(this.localTag, `Error initializing Opus decoder: ${error instanceof Error ? error.message : String(error)}`);
+			this.doClose(true);
 		}
 	}
 
@@ -212,6 +215,11 @@ export class TranslatorConnection {
 		} catch (error) {
 			this.logError(`Failed to create Opus encoder for tag ${this.localTag}:`, error);
 			this.encoderStatus = 'failed';
+			// Notify before doClose() detaches the callbacks. Without the encoder the return path can't produce
+			// translated audio, so tear the connection down (matching the decoder path) instead of leaving it
+			// open and silently dropping every translated frame.
+			this.onError?.(this.localTag, `Error initializing Opus encoder: ${error instanceof Error ? error.message : String(error)}`);
+			this.doClose(true);
 		}
 	}
 
@@ -255,16 +263,17 @@ export class TranslatorConnection {
 			});
 
 			openaiWs.addEventListener('error', (event) => {
-				const errorMessage = (event as ErrorEvent)?.message || 'WebSocket error';
+				const errorMessage = (event as { message?: string; }).message ?? 'WebSocket error';
 				this.logError(`OpenAI WebSocket error for tag ${this.localTag}: ${errorMessage}`);
 				writeMetric(undefined, {
 					name: 'openai_api_error',
 					worker: 'opus-transcriber-proxy',
 					errorType: 'websocket_error',
 				});
-				this.doClose(true);
-				this.connectionStatus = 'failed';
+				// Notify before doClose() detaches the callbacks. doClose() is idempotent, so the close event
+				// that always follows an error is a no-op.
 				this.onError?.(this.localTag, `Error connecting to OpenAI service: ${errorMessage}`);
+				this.doClose(true);
 			});
 
 			openaiWs.addEventListener('close', (event) => {
@@ -272,7 +281,6 @@ export class TranslatorConnection {
 					`OpenAI WebSocket closed for tag ${this.localTag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 				);
 				this.doClose(true);
-				this.connectionStatus = 'failed';
 			});
 		} catch (error) {
 			this.logError(`Failed to create OpenAI WebSocket for tag ${this.localTag}:`, error);
@@ -282,6 +290,7 @@ export class TranslatorConnection {
 				errorType: 'connection_failed',
 			});
 			this.connectionStatus = 'failed';
+			this.onError?.(this.localTag, `Failed to connect to OpenAI service: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -419,7 +428,7 @@ export class TranslatorConnection {
 		}
 
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
-			const encodedAudio = Buffer.from(audioData).toString('base64');
+			const encodedAudio = safeToBase64(audioData);
 			this.sendAudioToOpenAI(encodedAudio);
 		} else if (this.connectionStatus === 'pending') {
 			if (this.pendingAudioData.length + audioData.length <= MAX_AUDIO_BLOCK_BYTES) {
@@ -428,8 +437,10 @@ export class TranslatorConnection {
 				merged.set(audioData, this.pendingAudioData.length);
 				this.pendingAudioData = merged;
 			} else {
-				const encodedAudio = safeToBase64(this.pendingAudioData);
-				this.sendAudioToOpenAI(encodedAudio);
+				// Connection still pending and the buffer is full (~234 s of audio) — drop the accumulated
+				// audio rather than send on a socket that has not opened yet. processPendingAudioData flushes
+				// the buffer once the connection opens.
+				this.log(`Dropping buffered audio for tag ${this.localTag}: pending buffer full before connect`);
 				this.pendingAudioData = new Uint8Array(audioData);
 			}
 		} else {
@@ -485,7 +496,7 @@ export class TranslatorConnection {
 		this.sendAudioToOpenAI(encodedAudio);
 	}
 
-	private async handleOpenAIMessage(data: any): Promise<void> {
+	private handleOpenAIMessage(data: any): void {
 		let parsedMessage;
 		try {
 			parsedMessage = JSON.parse(data);
@@ -502,9 +513,11 @@ export class TranslatorConnection {
 			return;
 		}
 
+		// Note: the response.output_audio_transcript.delta/done events are intentionally NOT listed here — they
+		// are real transcript events for the general /v1/realtime endpoint and are handled below (the early
+		// return for minimalLogEvents would otherwise make those handlers dead code).
 		const minimalLogEvents = [
 			'response.audio_transcript.delta',
-			'response.output_audio_transcript.delta',
 			'input_audio_buffer.speech_started',
 			'input_audio_buffer.speech_stopped',
 			'conversation.item.added',
@@ -513,7 +526,6 @@ export class TranslatorConnection {
 			'response.created',
 			'response.output_item.added',
 			'response.content_part.added',
-			'response.output_audio_transcript.done',
 			'response.output_item.done',
 			'conversation.item.done',
 		];
@@ -583,19 +595,13 @@ export class TranslatorConnection {
 			return;
 		}
 
-		// End-of-utterance markers. Reset wall-clock so the next response
-		// starts a fresh RTP timestamp window, and reset firstOutputAt so the
-		// next response's latency is measured from its own input window.
+		// Final transcript. Emitted only from the transcript-done events so it fires once per utterance — the
+		// /v1/realtime/translations endpoint sends both session.output_transcript.done and response.done for the
+		// same utterance, and the audio-done events (below) carry no transcript.
 		if (
-			parsedMessage.type === 'session.output_audio.done'
-			|| parsedMessage.type === 'response.output_audio.done'
-			|| parsedMessage.type === 'session.output_transcript.done'
-			|| parsedMessage.type === 'response.done'
+			parsedMessage.type === 'session.output_transcript.done'
+			|| parsedMessage.type === 'response.output_audio_transcript.done'
 		) {
-			this.isFirstFrameOfResponse = true;
-			this.firstOutputAt = null;
-			this.firstInputAt = null;
-			this.lastInputAppendAt = null;
 			const transcript =
 				parsedMessage.transcript
 				|| parsedMessage.response?.output?.[0]?.content?.[0]?.transcript
@@ -609,6 +615,22 @@ export class TranslatorConnection {
 			return;
 		}
 
+		// End-of-utterance markers (audio-stream end / response complete). Reset wall-clock so the next response
+		// starts a fresh RTP timestamp window and its latency is measured from its own input window. These do not
+		// carry the transcript — that is emitted above — so response.done is used here only for the reset.
+		if (
+			parsedMessage.type === 'session.output_audio.done'
+			|| parsedMessage.type === 'response.output_audio.done'
+			|| parsedMessage.type === 'response.done'
+		) {
+			this.isFirstFrameOfResponse = true;
+			this.firstOutputAt = null;
+			this.firstInputAt = null;
+			this.lastInputAppendAt = null;
+			this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}`);
+			return;
+		}
+
 		this.log(`[${this.options.targetLanguage}] Received event: ${parsedMessage.type}`);
 
 		if (parsedMessage.type === 'error') {
@@ -618,8 +640,9 @@ export class TranslatorConnection {
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.doClose(true);
+			// Notify before doClose() detaches the callbacks.
 			this.onError?.(this.localTag, `OpenAI service sent error message: ${data}`);
+			this.doClose(true);
 		}
 	}
 
@@ -654,21 +677,33 @@ export class TranslatorConnection {
 	}
 
 	private doClose(notify: boolean): void {
+		if (this.isClosed) {
+			return;
+		}
+		this.isClosed = true;
+
+		// Detach callbacks before teardown so a late OpenAI event firing during close() can't re-emit on the
+		// proxy. Keep onClosed locally so we can notify exactly once after everything is torn down.
+		const onClosed = this.onClosed;
+		this.onClosed = undefined;
+		this.onError = undefined;
+		this.onTranscription = undefined;
+		this.onAudioFrame = undefined;
+
+		this.connectionStatus = 'closed';
+		this.decoderStatus = 'closed';
+		this.encoderStatus = 'closed';
+
 		this.metricCache.flush();
 		this.opusDecoder?.free();
 		this.opusDecoder = undefined;
-		this.decoderStatus = 'closed';
-
 		this.opusEncoder?.free();
 		this.opusEncoder = undefined;
-		this.encoderStatus = 'closed';
-
 		this.openaiWebSocket?.close();
 		this.openaiWebSocket = undefined;
-		this.connectionStatus = 'closed';
 
 		if (notify) {
-			this.onClosed?.(this.localTag);
+			onClosed?.(this.localTag);
 		}
 	}
 }

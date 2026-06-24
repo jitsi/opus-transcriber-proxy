@@ -37,7 +37,7 @@ const APPLICATION_TYPES = {
 	restricted_lowdelay: 2051, // OPUS_APPLICATION_RESTRICTED_LOWDELAY
 };
 
-export class OpusEncoder<SR extends SampleRate> {
+export class OpusEncoder {
 	private module: OpusEncoderModule | null = null;
 	private ctx: number = 0;
 	private config: Required<OpusEncoderConfig>;
@@ -137,6 +137,10 @@ export class OpusEncoder<SR extends SampleRate> {
 
 			this.inputBuffer = this.inputBuffer.subarray(frameSizeBytes);
 		}
+
+		// inputBuffer is a subarray view into newBuffer; copy the remainder into its own backing store so the
+		// full appended allocation can be released instead of staying alive until the next call.
+		this.inputBuffer = new Uint8Array(this.inputBuffer);
 
 		return encodedFrames;
 	}

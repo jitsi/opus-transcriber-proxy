@@ -67,7 +67,7 @@ function meanSquareEnergy(samples: Int16Array): number {
 }
 
 describeIfWasm('Opus round trip (encoder → decoder)', () => {
-	let encoder: OpusEncoder<24000>;
+	let encoder: OpusEncoder;
 	let decoder: OpusDecoder<24000>;
 
 	beforeAll(async () => {

@@ -66,6 +66,11 @@ export class TranslatorProxy extends EventEmitter {
 			this.emit('closed');
 		});
 
+		this.ws.addEventListener('error', (event) => {
+			const message = (event as { message?: string; }).message ?? 'WebSocket error';
+			logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
+		});
+
 		this.ws.addEventListener('message', (event) => {
 			let parsedMessage;
 			try {

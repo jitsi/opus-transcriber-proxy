@@ -250,6 +250,14 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
 
+	// Translation always uses the OpenAI Realtime endpoint; without a key every TranslatorConnection would fail
+	// immediately, so reject the upgrade with a clear signal for operators.
+	if (!config.openai.apiKey) {
+		logger.error('Rejecting /translate connection: OpenAI API key not configured');
+		ws.close(1011, 'OpenAI API key not configured');
+		return;
+	}
+
 	// Seed the initially-active target languages from `?lang=` for the dev/replay path only.
 	// The JVB connects without `lang` and drives synthetic sources via `sources` control events.
 	let initialLanguages: string[] = [];
@@ -264,7 +272,9 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error(`Rejecting /translate connection: ${msg}`);
-			ws.close(1002, msg);
+			// WebSocket close reasons are capped at 123 bytes; a longer reason makes ws.close throw and leaves
+			// the socket open. The full detail is already logged above.
+			ws.close(1002, msg.slice(0, 123));
 			return;
 		}
 	}
@@ -281,13 +291,11 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	});
 
 	translateSession.on('error', (tag: string, error: any) => {
-		const message = `Error in translation session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+		// A single (source, language) connection failing must not tear down the whole /translate session, which
+		// carries every speaker/language. The failed connection self-removes from the proxy and the next
+		// `sources` event reconciles it back open, so just log here.
+		const message = `Error in translation connection ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 		logger.error(message);
-		try {
-			ws.close(1011, message);
-		} catch {
-			// ignore
-		}
 	});
 
 	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
@@ -322,11 +330,13 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 			// bridge's findSyntheticAudioSource(tag) matches the colibri2-signaled synthetic source.
 			const audioMessage = {
 				event: 'media',
-				sequenceNumber: data.sequenceNumber.toString(),
+				// Numeric per the mediajson protocol (matches the inbound media events); the bridge/JVB parser
+				// expects numbers, not strings, for these fields.
+				sequenceNumber: data.sequenceNumber,
 				media: {
 					tag: data.tag,
-					chunk: data.chunk.toString(),
-					timestamp: data.timestamp.toString(),
+					chunk: data.chunk,
+					timestamp: data.timestamp,
 					payload: data.payload,
 				},
 			};
