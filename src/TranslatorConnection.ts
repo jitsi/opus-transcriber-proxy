@@ -637,6 +637,10 @@ export class TranslatorConnection {
 					// The transcript-done event is the authoritative full utterance → final.
 					this.onTranscription?.(transcript, this.options.targetLanguage, /* isInterim */ false);
 				}
+			} else if (this.options.emitTranscripts !== false) {
+				// A transcript-done event with no extractable text usually means OpenAI changed the response
+				// schema (the fallback accessors no longer match) — warn so the mismatch is visible in prod.
+				logger.warn(`[${this.connectionId}] [${this.options.targetLanguage}] ${parsedMessage.type} carried no extractable transcript`);
 			} else {
 				this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}`);
 			}
