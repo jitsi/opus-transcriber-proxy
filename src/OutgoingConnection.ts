@@ -11,7 +11,7 @@ import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
-const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
+const tagMatcher = /^([0-9a-fA-F]+)-/;
 
 /**
  * Max number of consecutive recoverable backend errors (e.g. xAI "ASR stream
@@ -38,10 +38,10 @@ export class OutgoingConnection {
 	private setServerAcknowledgedTag(newTag: string) {
 		this.serverAcknowledgedTag = newTag;
 		const match = tagMatcher.exec(newTag);
-		if (match !== null && match.length === 3) {
-			this.participant = { id: match[1], ssrc: match[2] };
+		if (match !== null && match.length === 2) {
+			this.participant = { id: match[1], tag: newTag };
 		} else {
-			this.participant = { id: newTag };
+			this.participant = { id: newTag, tag: newTag };
 		}
 	}
 	private participant: any;

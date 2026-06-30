@@ -330,7 +330,7 @@ interface TranscriptionMessage {
   message_id: string;
   type: 'transcription-result';
   event: 'transcription-result';
-  participant: { id: string; ssrc?: string };
+  participant: { id: string; tag?: string };
   timestamp: number;
 }
 ```
