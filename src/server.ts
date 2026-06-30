@@ -246,6 +246,17 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
+/**
+ * A /translate transcript message. The inner `type` is `realtime-translation-result` (not
+ * `transcription-result`) so jitsi-meet recognizes it as a translation stream and does not render it
+ * in the CC panel like a normal transcription. The outer `event` stays `transcription-result` because
+ * JVB dispatches on `event` (via jicoco-mediajson) and only forwards payloads it recognizes — it
+ * passes the inner `type` through to the client verbatim.
+ */
+interface TranslationTranscriptMessage extends Omit<TranscriptionMessage, 'type'> {
+	type: 'realtime-translation-result';
+}
+
 function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
@@ -304,12 +315,12 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 			return;
 		}
 		// participant.id is the input (export) source name the translation was produced from.
-		const msg: TranscriptionMessage = {
+		const msg: TranslationTranscriptMessage = {
 			transcript: [{ text: data.transcript }],
 			is_interim: false,
 			language: data.targetLanguage,
 			message_id: `translation-${data.tag}-${Date.now()}`,
-			type: 'transcription-result',
+			type: 'realtime-translation-result',
 			event: 'transcription-result',
 			participant: { id: data.tag },
 			timestamp: Date.now(),
