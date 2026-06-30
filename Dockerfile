@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1
 
+# The image ships BOTH Opus backends so a container can run either at runtime via OPUS_BACKEND
+# (default 'wasm'; set OPUS_BACKEND=native for the libopus addon).
+#
+# - The native addon is architecture-specific, so it is compiled in-container (per target platform).
+# - The WASM artifacts are architecture-independent and are built on the host/CI (npm run build:wasm)
+#   and copied in. They are NOT built here: emscripten/emsdk is amd64-only, so building WASM in the
+#   image would run under QEMU emulation on arm64 and be far too slow. `npm run docker:build` builds
+#   them first; CI does the same before `docker build`.
+
 # ---- Builder: compile the native Opus addon and bundle the server ----
 FROM node:22-alpine AS builder
 WORKDIR /usr/src/app
@@ -22,7 +31,7 @@ COPY src ./src
 RUN npm run build:native
 RUN npm run build:bundle
 
-# ---- Runtime: slim image with only production deps + built artifacts ----
+# ---- Runtime: slim image with production deps + both backends' artifacts ----
 FROM node:22-alpine AS runtime
 WORKDIR /usr/src/app
 
@@ -34,9 +43,12 @@ RUN apk add --no-cache libstdc++
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 
-# Native Opus addon + bundled server, copied from the builder stage.
+# Native Opus addon + bundled server, compiled in the builder stage.
 COPY --from=builder /usr/src/app/build/Release/opus_native.node ./build/Release/opus_native.node
 COPY --from=builder /usr/src/app/dist/bundle ./dist/bundle
+
+# Prebuilt, architecture-independent WASM artifacts (from the build context; built by build:wasm).
+COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/
 
 # Expose the port
 EXPOSE 8080

@@ -29,5 +29,10 @@ jobs:
             - name: Build native Opus addon
               run: npm run build:native
 
+            # Run the suite against the native backend (no Emscripten needed on the runner). This
+            # exercises all logic plus the native codec round-trip. The WASM backend is the runtime
+            # default; its build is validated by the Dockerfile's wasmbuilder stage in dh.yml.
             - name: Run tests
               run: npm test
+              env:
+                  OPUS_BACKEND: native
