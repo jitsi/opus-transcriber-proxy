@@ -52,6 +52,13 @@ export class TranslatorProxy extends EventEmitter {
 	/** Dev/replay path only: languages applied to every incoming source. */
 	private devLanguages: Set<string>;
 
+	/**
+	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
+	 * (i.e. this WebSocket, which carries every synthetic source). The per-source RTP sequence number
+	 * is the separate `chunk` field produced by each connection's RtpTimestamper.
+	 */
+	private envelopeSequenceNumber = 0;
+
 	constructor(ws: WebSocket, options: TranslatorProxyOptions) {
 		super({ captureRejections: true });
 		this.ws = ws;
@@ -292,8 +299,8 @@ export class TranslatorProxy extends EventEmitter {
 		conn.onTranscription = (transcript, targetLanguage, isInterim) => {
 			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName, isInterim });
 		};
-		conn.onAudioFrame = (_tag, chunk, timestamp, payload, sequenceNumber) => {
-			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber });
+		conn.onAudioFrame = (_tag, chunk, timestamp, payload) => {
+			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber: this.envelopeSequenceNumber++ });
 		};
 
 		byLanguage.set(language, conn);

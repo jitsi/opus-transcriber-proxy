@@ -123,13 +123,12 @@ export class TranslatorConnection {
 	private totalSamplesSent: number = 0;
 	private lastLoggedSecond: number = 0;
 
-	private static globalSequenceNumber: number = 0;
 	private readonly rtpTimestamper = new RtpTimestamper();
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
 	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
-	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string, sequenceNumber: number) => void = undefined;
+	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string) => void = undefined;
 
 	// Per-response latency measurement.
 	// firstInputToFirstOutput (TTFA — "time to first audio") = wall-clock from
@@ -656,11 +655,10 @@ export class TranslatorConnection {
 		// Conference.handleMediaMessage reinterprets `media.chunk` as that 16-bit RTP sequence number.
 		const { timestamp, sequenceNumber: rtpSequenceNumber } = this.rtpTimestamper.nextFrameTimestamp();
 
-		TranslatorConnection.globalSequenceNumber++;
-
 		const payload = Buffer.from(opusFrame).toString('base64');
 
-		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload, TranslatorConnection.globalSequenceNumber);
+		// The mediajson wire-envelope sequence number is assigned by the proxy (per-WebSocket), not here.
+		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);
 	}
 
 	close(): void {
