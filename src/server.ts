@@ -74,9 +74,20 @@ server.on('upgrade', (request, socket, head) => {
 
 	// Handle the /translate endpoint separately (speech-to-speech translation).
 	if (parameters.url.pathname.endsWith('/translate')) {
+		if (!config.enableTranslate) {
+			socket.write('HTTP/1.1 404 Not Found\r\n\r\nTranslation endpoint disabled');
+			socket.destroy();
+			return;
+		}
 		wss.handleUpgrade(request, socket, head, (ws) => {
 			handleTranslatorConnection(ws, parameters);
 		});
+		return;
+	}
+
+	if (!config.enableTranscribe) {
+		socket.write('HTTP/1.1 404 Not Found\r\n\r\nTranscription endpoint disabled');
+		socket.destroy();
 		return;
 	}
 

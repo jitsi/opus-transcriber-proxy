@@ -110,6 +110,10 @@ export const config = {
 		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 
+	// Endpoint enablement (per container/worker). Both default true.
+	enableTranscribe: process.env.ENABLE_TRANSCRIBE !== 'false',
+	enableTranslate: process.env.ENABLE_TRANSLATE !== 'false',
+
 	// Translation (/translate endpoint) configuration
 	translation: {
 		// Emit target-language transcript messages from the /translate path (to sendBack clients
