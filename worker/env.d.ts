@@ -59,6 +59,7 @@ export interface Env {
 	MIN_CONTAINERS?: string;
 	SCALE_DOWN_IDLE_TIME?: string;
 	TRANSLATE_TRANSCRIPTS?: string;
+	OPENAI_TRANSLATION_MODEL?: string;
 	ENABLE_TRANSCRIBE?: string;
 	ENABLE_TRANSLATE?: string;
 	ENABLE_OPENAI_CUSTOM_PROVIDER?: string;

@@ -6,11 +6,11 @@ import { MetricCache } from './MetricCache';
 import { config } from './config';
 import logger from './logger';
 
-// gpt-realtime-translate is the dedicated speech-to-speech translation model.
-// Lives at the /v1/realtime/translations endpoint.
-// Returns translated audio plus transcript deltas. Requires tier 1+ access.
-// Docs: https://developers.openai.com/api/docs/models/gpt-realtime-translate
-const OPENAI_WS_URL = 'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate';
+// The dedicated speech-to-speech translation endpoint. The model (default
+// gpt-realtime-translate, overridable via OPENAI_TRANSLATION_MODEL) is supplied
+// as a query param. Returns translated audio plus transcript deltas; requires
+// tier 1+ access. Docs: https://developers.openai.com/api/docs/models/gpt-realtime-translate
+const OPENAI_TRANSLATIONS_ENDPOINT = 'wss://api.openai.com/v1/realtime/translations';
 
 // The maximum number of bytes of audio OpenAI allows to be sent at a time.
 const MAX_AUDIO_BLOCK_BYTES = (15 * 1024 * 1024 * 3) / 4;
@@ -226,7 +226,8 @@ export class TranslatorConnection {
 	private initializeOpenAIWebSocket(): void {
 		try {
 			const apiKey = config.openai.apiKey;
-			const openaiWs = new WebSocket(OPENAI_WS_URL, ['realtime', `openai-insecure-api-key.${apiKey}`]);
+			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(config.translation.model)}`;
+			const openaiWs = new WebSocket(wsUrl, ['realtime', `openai-insecure-api-key.${apiKey}`]);
 
 			this.log(`Opening OpenAI WebSocket for translation to ${this.options.targetLanguage}`);
 

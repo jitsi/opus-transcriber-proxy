@@ -120,6 +120,8 @@ export const config = {
 		// and, when enabled, the dispatcher). Default true; set TRANSLATE_TRANSCRIPTS=false to
 		// produce translated audio only.
 		transcripts: process.env.TRANSLATE_TRANSCRIPTS !== 'false',
+		// OpenAI speech-to-speech translation model (the /v1/realtime/translations endpoint).
+		model: process.env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
 	},
 
 	server: {
