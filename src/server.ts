@@ -322,6 +322,9 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		logger.error(message);
 	});
 
+	// Monotonic per-connection counter for transcript message ids, so two events for the same tag within
+	// the same millisecond can't collide (Date.now() alone would).
+	let transcriptSeq = 0;
 	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string; isInterim: boolean }) => {
 		if (!sendBack) {
 			return;
@@ -335,7 +338,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 			transcript: [{ text: data.transcript }],
 			is_interim: data.isInterim,
 			language: data.targetLanguage,
-			message_id: `translation-${data.tag}-${Date.now()}`,
+			message_id: `translation-${data.tag}-${transcriptSeq++}`,
 			type: 'realtime-translation-result',
 			event: 'transcription-result',
 			participant: { id: data.tag },
