@@ -87,6 +87,20 @@ vi.mock('../../src/transcriberproxy', () => ({
 	})),
 }));
 
+// Mocked so server.ts's import graph does not pull in the real TranslatorConnection, which statically loads
+// the opus WASM (dist/*.cjs). Keeps this unit test independent of `build:wasm`.
+vi.mock('../../src/translatorproxy', () => ({
+	TranslatorProxy: vi.fn().mockImplementation(() => ({
+		on: vi.fn(),
+		close: vi.fn(),
+	})),
+}));
+
+vi.mock('../../src/TranslatorConnection', () => ({
+	// Plain function (not vi.fn) so mockReset doesn't clear the implementation.
+	normalizeTargetLanguage: (lang: string) => lang,
+}));
+
 // ── Import the function under test and mocked config ─────────────────────────
 
 import { handleWebSocketConnection } from '../../src/server';

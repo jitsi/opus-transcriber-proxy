@@ -108,6 +108,22 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
     Provider API (WebSocket or HTTP stream)
 ```
 
+The `/translate` endpoint runs a parallel pipeline for speech-to-speech translation:
+
+```
+Bridge WebSocket (/translate)
+    ↓
+TranslatorProxy (translatorproxy.ts)
+    ├─ One per WebSocket connection
+    ├─ Reconciles `sources` control events into per-(source, language) connections
+    └─ Routes media by tag to multiple TranslatorConnections
+        ↓
+TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
+    ├─ OpusDecoder - Decodes the speaker's Opus to PCM
+    ├─ OpenAI Realtime translations session - PCM in, translated PCM + transcript out
+    └─ OpusEncoder - Re-encodes the translated PCM to Opus for the return path
+```
+
 ### Key Components
 
 **TranscriberProxy** (`src/transcriberproxy.ts`)
@@ -160,6 +176,31 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 **OpusDecoder** (`src/OpusDecoder/OpusDecoder.ts`)
 - Low-level TypeScript wrapper around the WASM Opus decoder
 - Used by `OpusAudioDecoder`; not used directly by `OutgoingConnection`
+
+**TranslatorProxy** (`src/translatorproxy.ts`)
+- Manages a single `/translate` WebSocket connection (the bridge side)
+- Reconciles `sources` control events (`exports` = sender source names, `requests` = synthetic `<source>.<language>` names) into one `TranslatorConnection` per (source, language)
+- Routes incoming `media` events to the matching connection by tag; closes connections dropped from `requests`
+- Also supports a dev `?lang=` path that seeds the initial target languages
+- Sends the server `info` message on connect (via `buildServerInfo`, provider fixed to `openai`) and logs any inbound client `info` event, mirroring `TranscriberProxy`
+- Owns the monotonic mediajson wire-envelope `sequenceNumber` for outbound `media` (per-proxy = per-WebSocket, which carries all synthetic sources); the per-source RTP sequence number is the separate `chunk` field from each connection's `RtpTimestamper`
+- `emitTranscripts` (from `config.translation.transcripts`, default true) is threaded to each `TranslatorConnection`
+
+**TranslatorConnection** (`src/TranslatorConnection.ts`)
+- Manages one (source, language) translation stream
+- Decodes the speaker's Opus to PCM (`OpusDecoder`), forwards it to an OpenAI Realtime translations session (model `config.translation.model` / `OPENAI_TRANSLATION_MODEL`; key `config.translation.apiKey` = `OPENAI_TRANSLATION_API_KEY` ?? `OPENAI_API_KEY`), and re-encodes the returned translated PCM to Opus (`OpusEncoder`) for the return path
+- Emits translated Opus frames (`onAudioFrame(tag, chunk, timestamp, payload)`) and the translated (target-language) transcript (`onTranscription(transcript, targetLanguage, isInterim)`) — transcript **deltas** are `isInterim: true`, the transcript-**done** event is final. Both suppressed when `emitTranscripts === false`
+- RTP timing comes from `RtpTimestamper` (one continuous, monotonic timeline; see below) — there is no per-response timestamp reset
+- Latency instrumentation (the per-frame speech-RMS gate `pcmContainsSpeech` and the TTFA log) is debug-only (`measureLatency = config.debug`)
+- `doClose()` is idempotent (guarded by `isClosed`) and detaches callbacks before teardown, mirroring `OutgoingConnection`. The OpenAI WebSocket init is deferred to a microtask so the proxy's `onError`/`onClosed` are wired before a synchronous `new WebSocket` failure can fire; that path notifies `onError` and tears down
+
+**RtpTimestamper** (`src/RtpTimestamper.ts`)
+- Pure, clock-injectable generator of the RTP timestamp + uint16 sequence number for the 20ms translated-audio frames; used by `TranslatorConnection`
+- Maps OpenAI's bursty, faster-than-real-time output onto one continuous, **monotonic** RTP timeline using a media-playout clock: advances by media duration per frame and inserts a proportional silence gap only when the source idled longer than the buffered media (`gapThresholdMs`, default 100). Guarantees the timestamp never decreases across response boundaries or bursts
+
+**OpusEncoder** (`src/OpusEncoder/OpusEncoder.ts`)
+- Low-level TypeScript wrapper around the WASM Opus encoder (symmetric to `OpusDecoder`)
+- Accumulates PCM and emits one Opus frame per encode interval; used by `TranslatorConnection`
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers
@@ -420,6 +461,16 @@ See README.md for complete list. Key ones:
 - `DUMP_WEBSOCKET_MESSAGES` - Enable message dumping for debugging
 - `USE_DISPATCHER` - Enable dispatcher forwarding
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
+- `ENABLE_TRANSCRIBE` / `ENABLE_TRANSLATE` - Per-endpoint enablement (default: true each); a disabled endpoint's WS upgrade is rejected with 404
+- `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
+- `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
+- `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
+
+The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`.
+
+### `/translate` transcript messages
+
+`/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`.
 
 ## Keeping Documentation Current
 

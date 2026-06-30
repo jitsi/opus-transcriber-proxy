@@ -21,7 +21,7 @@ await esbuild.build({
 	outfile: 'dist/bundle/server.js',
 	sourcemap: true,
 	packages: 'external', // Keep all node_modules external
-	external: ['./dist/opus-decoder.cjs'], // Keep WASM module external
+	external: ['./dist/opus-decoder.cjs', './dist/opus-encoder.cjs'], // Keep WASM modules external
 	define: {
 		__GIT_HASH__: JSON.stringify(gitHash),
 	},

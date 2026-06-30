@@ -23,7 +23,7 @@ export interface TranscriptionDispatcher {
  * Transcription message from container
  */
 interface TranscriptionMessage {
-	type: 'transcription-result';
+	type: 'transcription-result' | 'realtime-translation-result';
 	is_interim: boolean;
 	participant: {
 		id?: string;
@@ -44,6 +44,13 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 	return {
 		OPENAI_API_KEY: env.OPENAI_API_KEY,
 		OPENAI_MODEL: env.OPENAI_MODEL || 'gpt-4o-transcribe',
+		// Only forwarded when explicitly set; otherwise the container defaults apply (endpoints/transcripts on).
+		...(env.OPENAI_TRANSLATION_MODEL && { OPENAI_TRANSLATION_MODEL: env.OPENAI_TRANSLATION_MODEL }),
+		// Optional separate key for translation; when unset the container falls back to OPENAI_API_KEY.
+		...(env.OPENAI_TRANSLATION_API_KEY && { OPENAI_TRANSLATION_API_KEY: env.OPENAI_TRANSLATION_API_KEY }),
+		...(env.ENABLE_TRANSCRIBE && { ENABLE_TRANSCRIBE: env.ENABLE_TRANSCRIBE }),
+		...(env.ENABLE_TRANSLATE && { ENABLE_TRANSLATE: env.ENABLE_TRANSLATE }),
+		...(env.TRANSLATE_TRANSCRIPTS && { TRANSLATE_TRANSCRIPTS: env.TRANSLATE_TRANSCRIPTS }),
 		GEMINI_API_KEY: env.GEMINI_API_KEY || '',
 		DEEPGRAM_API_KEY: env.DEEPGRAM_API_KEY || '',
 		DEEPGRAM_MODEL: env.DEEPGRAM_MODEL || 'nova-3-general',
@@ -82,7 +89,6 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		MAX_CONNECTIONS_PER_CONTAINER: env.MAX_CONNECTIONS_PER_CONTAINER || '10',
 		MIN_CONTAINERS: env.MIN_CONTAINERS || '2',
 		SCALE_DOWN_IDLE_TIME: env.SCALE_DOWN_IDLE_TIME || '600000',
-		TRANSLATION_MIXING_MODE: env.TRANSLATION_MIXING_MODE || 'true',
 		OTLP_ENDPOINT: env.OTLP_ENDPOINT || '',
 		OTLP_ENV: env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
@@ -477,7 +483,9 @@ async function handleWebSocketWithDispatcher(
 		if (typeof event.data === 'string') {
 			try {
 				const data = JSON.parse(event.data) as TranscriptionMessage;
-				if (data.type === 'transcription-result' && !data.is_interim) {
+				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
+				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
+				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
 					const dispatcherMessage: DispatcherTranscriptionMessage = {
 						sessionId,
 						endpointId: data.participant?.id || 'unknown',
