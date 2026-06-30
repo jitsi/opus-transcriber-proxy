@@ -1,6 +1,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import { EventEmitter } from 'node:events';
 import type { WebSocket } from 'ws';
+import { buildServerInfo } from './serverInfo';
 import logger from './logger';
 
 export interface TranslatorProxyOptions {
@@ -106,10 +107,31 @@ export class TranslatorProxy extends EventEmitter {
 				case 'stop-translation':
 					this.handleStopTranslation(parsedMessage.translation?.language);
 					break;
+				case 'info':
+					// Informational message from the client (e.g. JVB application/version/region). Log it.
+					logger.info(`Received info from client on /translate: ${JSON.stringify(parsedMessage)}`);
+					break;
 				default:
 					break;
 			}
 		});
+
+		this.sendServerInfo();
+	}
+
+	/**
+	 * Send the server `info` message to the connected client right after connect (mirrors the
+	 * transcription path). Carries git hash / runtime / deployment details; the CF Worker augments
+	 * it in-place with a `worker` block. Translation always runs on OpenAI, so the provider is fixed.
+	 */
+	private sendServerInfo(): void {
+		try {
+			const info = buildServerInfo({ provider: 'openai' });
+			logger.info(`Sending server info on /translate: ${JSON.stringify(info)}`);
+			this.ws.send(JSON.stringify(info));
+		} catch (error) {
+			logger.error('Failed to send server info on /translate:', error);
+		}
 	}
 
 	/**
