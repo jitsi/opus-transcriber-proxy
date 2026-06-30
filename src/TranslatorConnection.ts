@@ -164,7 +164,9 @@ export class TranslatorConnection {
 
 		this.initializeOpusDecoder();
 		this.initializeOpusEncoder();
-		this.initializeOpenAIWebSocket();
+		// Deferred to a microtask so the proxy has wired onError/onClosed by the time it runs — otherwise a
+		// synchronous failure in `new WebSocket` (e.g. a bad URL) would have no callback to report through.
+		queueMicrotask(() => this.initializeOpenAIWebSocket());
 	}
 
 	private log(message: string): void {
@@ -226,6 +228,10 @@ export class TranslatorConnection {
 	}
 
 	private initializeOpenAIWebSocket(): void {
+		// The connection may have been torn down (doClose) before this deferred init runs.
+		if (this.isClosed) {
+			return;
+		}
 		try {
 			const apiKey = config.translation.apiKey;
 			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(config.translation.model)}`;
@@ -293,7 +299,9 @@ export class TranslatorConnection {
 				errorType: 'connection_failed',
 			});
 			this.connectionStatus = 'failed';
+			// Notify before doClose() detaches the callbacks, then tear down so the proxy removes this session.
 			this.onError?.(this.localTag, `Failed to connect to OpenAI service: ${error instanceof Error ? error.message : String(error)}`);
+			this.doClose(true);
 		}
 	}
 
