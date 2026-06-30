@@ -20,12 +20,12 @@ const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
 // ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
 const MAX_PENDING_OPUS_FRAMES = 500;
 
+// Buffer.from over a view into a resizable ArrayBuffer can throw / read stale bytes if the buffer is
+// resized; copy into a fresh (non-resizable) array first in that case. Otherwise encode directly.
 function safeToBase64(array: Uint8Array): string {
-	if (!(array.buffer instanceof ArrayBuffer) || !(array.buffer as any).resizable) {
-		return Buffer.from(array).toString('base64');
-	}
-	const tmpArray = new Uint8Array(array);
-	return Buffer.from(tmpArray).toString('base64');
+	const isResizable = array.buffer instanceof ArrayBuffer && (array.buffer as any).resizable;
+	const safe = isResizable ? new Uint8Array(array) : array;
+	return Buffer.from(safe).toString('base64');
 }
 
 function fromBase64(str: string): Uint8Array {
