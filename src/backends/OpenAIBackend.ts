@@ -62,7 +62,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 				});
 
 				ws.addEventListener('error', (event) => {
-					const errorMessage = (event as ErrorEvent)?.message || 'WebSocket error';
+					const errorMessage = (event as { message?: string })?.message || 'WebSocket error';
 					logger.error(`OpenAI WebSocket error for tag ${this.tag}: ${errorMessage}`);
 					writeMetric(undefined, {
 						name: 'openai_api_error',
