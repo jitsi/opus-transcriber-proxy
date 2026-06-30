@@ -1,6 +1,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import { EventEmitter } from 'node:events';
 import type { WebSocket } from 'ws';
+import { buildServerInfo } from './serverInfo';
 import logger from './logger';
 
 export interface TranslatorProxyOptions {
@@ -11,6 +12,8 @@ export interface TranslatorProxyOptions {
 	 */
 	initialLanguages?: string[];
 	provider?: string;
+	/** Emit target-language transcripts from translation sessions. Default true. */
+	emitTranscripts?: boolean;
 }
 
 /**
@@ -49,6 +52,13 @@ export class TranslatorProxy extends EventEmitter {
 	/** Dev/replay path only: languages applied to every incoming source. */
 	private devLanguages: Set<string>;
 
+	/**
+	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
+	 * (i.e. this WebSocket, which carries every synthetic source). The per-source RTP sequence number
+	 * is the separate `chunk` field produced by each connection's RtpTimestamper.
+	 */
+	private envelopeSequenceNumber = 0;
+
 	constructor(ws: WebSocket, options: TranslatorProxyOptions) {
 		super({ captureRejections: true });
 		this.ws = ws;
@@ -64,6 +74,11 @@ export class TranslatorProxy extends EventEmitter {
 			}
 			this.connections.clear();
 			this.emit('closed');
+		});
+
+		this.ws.addEventListener('error', (event) => {
+			const message = (event as { message?: string; }).message ?? 'WebSocket error';
+			logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
 		});
 
 		this.ws.addEventListener('message', (event) => {
@@ -99,10 +114,31 @@ export class TranslatorProxy extends EventEmitter {
 				case 'stop-translation':
 					this.handleStopTranslation(parsedMessage.translation?.language);
 					break;
+				case 'info':
+					// Informational message from the client (e.g. JVB application/version/region). Log it.
+					logger.info(`Received info from client on /translate: ${JSON.stringify(parsedMessage)}`);
+					break;
 				default:
 					break;
 			}
 		});
+
+		this.sendServerInfo();
+	}
+
+	/**
+	 * Send the server `info` message to the connected client right after connect (mirrors the
+	 * transcription path). Carries git hash / runtime / deployment details; the CF Worker augments
+	 * it in-place with a `worker` block. Translation always runs on OpenAI, so the provider is fixed.
+	 */
+	private sendServerInfo(): void {
+		try {
+			const info = buildServerInfo({ provider: 'openai' });
+			logger.info(`Sending server info on /translate: ${JSON.stringify(info)}`);
+			this.ws.send(JSON.stringify(info));
+		} catch (error) {
+			logger.error('Failed to send server info on /translate:', error);
+		}
 	}
 
 	/**
@@ -243,7 +279,10 @@ export class TranslatorProxy extends EventEmitter {
 			return existing;
 		}
 
-		const conn = new TranslatorConnection(inputSourceName, { targetLanguage: language });
+		const conn = new TranslatorConnection(inputSourceName, {
+			targetLanguage: language,
+			emitTranscripts: this.options.emitTranscripts,
+		});
 
 		conn.onClosed = () => {
 			const map = this.connections.get(inputSourceName);
@@ -257,11 +296,11 @@ export class TranslatorProxy extends EventEmitter {
 		conn.onError = (_tag, error) => {
 			this.emit('error', outputTag, error);
 		};
-		conn.onTranscription = (transcript, targetLanguage) => {
-			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName });
+		conn.onTranscription = (transcript, targetLanguage, isInterim) => {
+			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName, isInterim });
 		};
-		conn.onAudioFrame = (_tag, chunk, timestamp, payload, sequenceNumber) => {
-			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber });
+		conn.onAudioFrame = (_tag, chunk, timestamp, payload) => {
+			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber: this.envelopeSequenceNumber++ });
 		};
 
 		byLanguage.set(language, conn);

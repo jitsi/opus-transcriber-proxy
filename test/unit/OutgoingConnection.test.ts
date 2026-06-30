@@ -125,7 +125,14 @@ describe('OutgoingConnection', () => {
 			expect(conn.participantId).toBe('test-tag-123');
 		});
 
-		it('should parse tag with ssrc format', () => {
+		it('should parse tag with sourceId format', () => {
+			const conn = new OutgoingConnection('abc123-a0', { encoding: 'opus' }, options);
+
+			expect(conn.tag).toBe('abc123-a0');
+			expect(conn.participantId).toBe('abc123');
+		});
+
+		it('should parse tag with numeric SSRC format (legacy)', () => {
 			const conn = new OutgoingConnection('abc123-456789', { encoding: 'opus' }, options);
 
 			expect(conn.tag).toBe('abc123-456789');
@@ -417,7 +424,7 @@ describe('OutgoingConnection', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
@@ -837,7 +844,7 @@ describe('OutgoingConnection', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
@@ -858,7 +865,7 @@ describe('OutgoingConnection', () => {
 				message_id: '456',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'test-tag' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			});
 
@@ -879,6 +886,131 @@ describe('OutgoingConnection', () => {
 
 			expect(onBackendErrorSpy).toHaveBeenCalledWith('api_error', 'Rate limit exceeded');
 			expect(onErrorSpy).toHaveBeenCalled();
+		});
+	});
+
+	describe('recoverable backend error (JIT-15901)', () => {
+		it('should reconnect the backend in place without closing the connection', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			const onErrorSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+			conn.onError = onErrorSpy;
+
+			expect(firstBackend.getConnectCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(0);
+
+			// Recoverable error (xAI "ASR stream timed out" on silence)
+			firstBackend.simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+
+			// Old backend closed, new backend connected — participant NOT dropped.
+			expect(firstBackend.getCloseCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(1);
+			expect(onClosedSpy).not.toHaveBeenCalled();
+			expect(onErrorSpy).not.toHaveBeenCalled();
+
+			// Audio now flows through the reconnected backend.
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: 1, timestamp: 0 } });
+			expect(secondBackend.getSentAudioCount()).toBeGreaterThan(0);
+		});
+
+		it('should tear down the connection if the recovery reconnect fails', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const secondBackend = new MockTranscriptionBackend({ status: 'failed' });
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onBackendErrorSpy = vi.fn();
+			const onClosedSpy = vi.fn();
+			conn.onBackendError = onBackendErrorSpy;
+			conn.onClosed = onClosedSpy;
+
+			firstBackend.simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+
+			expect(onBackendErrorSpy).toHaveBeenCalledWith('connection_failed', expect.any(String));
+			expect(onClosedSpy).toHaveBeenCalled();
+		});
+
+		it('should still tear down the connection on a non-recoverable error', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// recoverable omitted/false → fatal path (existing behaviour)
+			mockBackend.simulateError('api_error', 'invalid api key', false);
+
+			expect(onClosedSpy).toHaveBeenCalledWith('test-tag');
+		});
+
+		it('should give up after repeated recoverable errors with no audio in between (muted participant)', async () => {
+			const created: MockTranscriptionBackend[] = [];
+			vi.mocked(createBackend).mockImplementation(() => {
+				const b = new MockTranscriptionBackend({ autoConnect: true });
+				created.push(b);
+				return b;
+			});
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			// 3 recoverable errors (MAX_CONSECUTIVE_RECOVERIES) → 3 reconnects, alive.
+			for (let i = 0; i < 3; i++) {
+				created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+				await vi.runAllTimersAsync();
+				expect(onClosedSpy).not.toHaveBeenCalled();
+			}
+
+			// 4th recoverable error with still no audio → give up and tear down.
+			created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+			await vi.runAllTimersAsync();
+			expect(onClosedSpy).toHaveBeenCalledWith('test-tag');
+		});
+
+		it('should NOT give up while audio keeps flowing (counter resets on audio send)', async () => {
+			const created: MockTranscriptionBackend[] = [];
+			vi.mocked(createBackend).mockImplementation(() => {
+				const b = new MockTranscriptionBackend({ autoConnect: true });
+				created.push(b);
+				return b;
+			});
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+
+			const onClosedSpy = vi.fn();
+			conn.onClosed = onClosedSpy;
+
+			const opusFrame = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+
+			// 5 recover cycles (> MAX), but audio flows between each → counter resets,
+			// so an active participant reconnects without limit and is never dropped.
+			for (let i = 0; i < 5; i++) {
+				created[created.length - 1].simulateError('api_error', 'ASR stream timed out', true);
+				await vi.runAllTimersAsync();
+				expect(onClosedSpy).not.toHaveBeenCalled();
+
+				conn.handleMediaEvent({ media: { tag: 'test-tag', payload: opusFrame, chunk: i + 1, timestamp: i * 960 } });
+				await vi.runAllTimersAsync();
+			}
+
+			expect(onClosedSpy).not.toHaveBeenCalled();
+			expect(created[created.length - 1].getSentAudioCount()).toBeGreaterThan(0);
 		});
 	});
 });

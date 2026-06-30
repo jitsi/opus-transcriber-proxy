@@ -161,6 +161,52 @@ PROVIDERS_PRIORITY=deepgram,openai,gemini
   - Invalid tags will cause the WebSocket connection to be rejected with a descriptive error
   - Example: `ws://host/transcribe?sessionId=test&tag=production&tag=region-us&tag=customer-service`
 
+### xAI
+Uses xAI's WebSocket STT streaming API for real-time transcription.
+
+**Features:**
+- WebSocket-based streaming
+- Interim and final transcriptions
+- Smart turn detection (configurable confidence threshold + timeout)
+- Confidence scores (word-level, averaged per segment)
+- Diarization (speaker identification)
+- Language auto-detection (reported on final transcription)
+- One WebSocket connection per participant
+
+**Configuration:**
+```bash
+XAI_API_KEY=your-key-here
+XAI_LANGUAGE=                     # Language code (e.g. en, fr, de); omit for auto-detect
+XAI_INCLUDE_LANGUAGE=true         # Append language to transcript (e.g., "Hello [en]")
+XAI_DIARIZE=false                 # Enable speaker diarization
+XAI_ENDPOINTING=850               # Silence ms before a final (utterance segmentation); always sent; default 850
+XAI_SMART_TURN=                   # End-of-turn confidence (0.0–1.0); OPT-IN, unset = disabled (only for multi-speaker single streams; we run one stream per participant)
+XAI_SMART_TURN_TIMEOUT=500        # Max silence ms before forced speech_final; only sent when XAI_SMART_TURN is set; default 500
+XAI_GRANULAR_FINALS=false         # Roll-own granular finalization: commit a stable prefix incrementally instead of one final per turn (fixes long-turn-vs-acks ordering); default OFF
+XAI_GRANULAR_STABILITY_MS=1000    # Debounce: a word freezes after this many ms unchanged; default 1000
+XAI_GRANULAR_GUARD_WORDS=3        # Volatile words held back at the growing edge; default 3
+XAI_GRANULAR_MIN_WORDS=5          # Frozen words are batched into >= this many-word segments (or at a sentence end); default 5
+XAI_STT_URL=wss://api.x.ai/v1/stt  # Override STT endpoint (optional)
+
+# Make xAI the default provider
+PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
+```
+
+**Supported languages:** `en`, `fr`, `de`, `ja`, `zh`, `hi`, `ko`, `ru`, `ar-EG`, `ar-SA`, `ar-AE`, `bn`, `id`, `it`, `pt-BR`, `pt-PT`, `es-MX`, `es-ES`, `tr`, `vi`
+
+**Technical Details:**
+- Uses WebSocket API: `wss://api.x.ai/v1/stt`; all config via URL query parameters
+- Authentication via `Authorization: Bearer` header (passed using Node.js/CF Workers-specific third constructor argument)
+- Always receives signed 16-bit LE PCM at 16kHz (xAI's native rate; raw binary frames, not base64)
+- `transcript.partial` events → interim transcriptions; optionally split by speaker when `XAI_DIARIZE=true`
+- `transcript.done` event → final transcription; includes detected `language` field
+- Detected language is always set as the `language` property on final transcription events; `XAI_INCLUDE_LANGUAGE=true` additionally appends it as text suffix (e.g. `[en]`) — these are independent behaviours (same as Deepgram)
+- Diarization splits messages by consecutive speaker segments; each message carries a `speaker: number` field (same as Deepgram)
+- `forceCommit()` finalizes the trailing utterance when the stream goes idle **without closing the connection**, by injecting a short tail of digital silence (`endpointing` + 300ms). xAI has no flush/commit message — only `audio.done`, which closes the WS (code 1006) and forces a full teardown + cold-start of the next utterance. Since finals are driven by `endpointing` (VAD emits `speech_final` after that many ms of silence), and a paused/muted client sends no frames for the VAD to act on, we feed it silence so it finalizes the pending utterance while the WS stays open. (#94 made this a no-op → trailing utterance unfinalized; an `audio.done` iteration → stream torn down on every pause.) xAI's own `"ASR stream timed out"` on a long idle is handled by the recoverable-reconnect path
+- **Segmentation:** finals are driven by `endpointing` (silence ms; always sent, default `850` via `XAI_ENDPOINTING`). `smart_turn` (end-of-turn detection for a multi-speaker single stream) is **opt-in / disabled by default** — we run one stream per participant, so it has no turns to detect and only delays finals across mid-sentence pauses. `endpointing`, `smart_turn`, and `smart_turn_timeout` are also overridable **per-connection** via URL query params (resolved as `backendConfig.xaiX ?? config.xai.X`)
+- **Granular finalization (`XAI_GRANULAR_FINALS`, default OFF):** by default xAI emits one final per turn (only on end-of-turn `speech_final`, which re-emits the whole turn), so a long turn lands in the stored transcript after other speakers' short acks. When enabled, `XAIGranularSegmenter` reconstructs xAI's growing hypothesis from the interim stream and commits a **stable prefix** once it's been unchanged for `XAI_GRANULAR_STABILITY_MS` (default 1000), holding back `XAI_GRANULAR_GUARD_WORDS` (default 3) volatile words, batched into `XAI_GRANULAR_MIN_WORDS` (default 5)-word segments emitted as finals — so the long turn interleaves in order (Deepgram-style: the in-progress remainder is emitted as an interim). The end-of-turn `speech_final` is **reconciled** (only the uncommitted trailing remainder is flushed from its authoritative text — the whole-turn re-emit is never reprinted; reconciliation only appends). A non-empty `transcript.done` is deduped via `hasActiveTurn()`. Scoped to the **non-diarized** path; `forceCommit()` DTX silence-injection and the stream-timeout reconnect are unchanged. Flag + stability/guard knobs are per-connection overridable (`xai_granular_finals`/`xai_granular_stability_ms`/`xai_granular_guard_words`); `min_words` is global-only (`XAI_GRANULAR_MIN_WORDS`, a batching detail, not a correctness knob). Defaults tuned live (0 word-edits, first commit ~2.9s vs ~29s before); see `unreal-agents/experiments/xai-vs-deepgram-finalization/TUNING.md`
+- No model selection for the STT endpoint (model is inherent to the service)
+
 ## Architecture
 
 ### Backend Interface
@@ -190,7 +236,8 @@ interface TranscriptionBackend {
   sendAudio(audioBase64: string): Promise<void>;
   forceCommit(): void;
 
-  // Format negotiation — called once before the decoder is created
+  // Format negotiation — called on every reinitializeDecoder (initial setup, on updateInputFormat,
+  //   and again on any new backend instance created by reconnectBackend)
   getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat;
 
   // Configuration
@@ -199,7 +246,7 @@ interface TranscriptionBackend {
   // Callbacks
   onInterimTranscription?: (message: TranscriptionMessage) => void;
   onCompleteTranscription?: (message: TranscriptionMessage) => void;
-  onError?: (errorType: string, errorMessage: string) => void;
+  onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
   onClosed?: () => void;
 }
 ```
@@ -283,7 +330,7 @@ interface TranscriptionMessage {
   message_id: string;
   type: 'transcription-result';
   event: 'transcription-result';
-  participant: { id: string; ssrc?: string };
+  participant: { id: string; tag?: string };
   timestamp: number;
 }
 ```
@@ -308,7 +355,7 @@ export class YourBackend implements TranscriptionBackend {
 
   onInterimTranscription?: (message: TranscriptionMessage) => void;
   onCompleteTranscription?: (message: TranscriptionMessage) => void;
-  onError?: (errorType: string, errorMessage: string) => void;
+  onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 
   constructor(tag: string, participantInfo: any) {
     this.tag = tag;
@@ -523,7 +570,12 @@ node scripts/replay-dump.cjs standup-2026-01-14/recording/media.jsonl "ws://loca
 1. **Error Handling**
    - Call `onError` for connection failures
    - Handle API rate limits gracefully
-   - Retry transient errors
+   - For transient, stream-level errors that leave the participant active (e.g. xAI
+     closing the ASR stream with `"ASR stream timed out"` after silence), call
+     `onError(type, message, /* recoverable */ true)`. `OutgoingConnection` then
+     reopens the backend in place (preserving the decoder, transcript history and
+     negotiated format) instead of dropping the participant. Omit the third arg (or
+     pass `false`) for fatal errors that should tear the connection down.
 
 2. **Logging**
    - Use the logger from `src/logger.ts`

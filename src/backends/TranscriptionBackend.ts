@@ -23,6 +23,30 @@ export interface BackendConfig {
 	model?: string;
 	/** Tags to be sent to the backend (e.g., for Deepgram) */
 	tags?: string[];
+	/**
+	 * Per-connection override for Deepgram's Model Improvement Program opt-out.
+	 * undefined = use global config (DEEPGRAM_MIP_OPT_OUT); true/false overrides it.
+	 */
+	deepgramMipOptOut?: boolean;
+	/**
+	 * Per-connection xAI segmentation overrides (undefined = use global config).
+	 * `xaiEndpointing`: silence ms before a final. `xaiSmartTurn`: end-of-turn
+	 * confidence (0–1); when set, enables smart_turn. `xaiSmartTurnTimeout`: max
+	 * silence ms before forcing speech_final (only used when smart_turn is enabled).
+	 */
+	xaiEndpointing?: number;
+	xaiSmartTurn?: number;
+	xaiSmartTurnTimeout?: number;
+	/**
+	 * Per-connection overrides for xAI consumer-side roll-own granular finalization
+	 * (undefined = use global config). `xaiGranularFinals`: commit a stable prefix of the growing
+	 * hypothesis incrementally instead of only on end-of-turn speech_final (fixes long-turn vs
+	 * acks ordering). `xaiGranularStabilityMs`: debounce window before a word freezes.
+	 * `xaiGranularGuardWords`: volatile words held back at the growing edge.
+	 */
+	xaiGranularFinals?: boolean;
+	xaiGranularStabilityMs?: number;
+	xaiGranularGuardWords?: number;
 }
 
 export interface TranscriptionBackend {
@@ -74,6 +98,14 @@ export interface TranscriptionBackend {
 	// Event callbacks - set by OutgoingConnection
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
-	onError?: (errorType: string, errorMessage: string) => void;
+	/**
+	 * Reports a backend error.
+	 * @param recoverable - When true, the error is a transient stream-level
+	 *   condition (e.g. xAI's "ASR stream timed out" on silence) and the
+	 *   participant is still active; OutgoingConnection reconnects the backend
+	 *   in place instead of tearing down the whole connection. Defaults to false
+	 *   (fatal — close the connection).
+	 */
+	onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 	onClosed?: () => void;
 }

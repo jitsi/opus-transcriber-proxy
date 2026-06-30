@@ -16,7 +16,7 @@ export interface OpusEncoderConfig {
 	complexity?: number; // 0-10
 }
 
-export class OpusEncoder<SR extends SampleRate> {
+export class OpusEncoder {
 	private encoder: NativeOpusEncoder | null = null;
 	private config: Required<OpusEncoderConfig>;
 	private frameSize: number = 0;

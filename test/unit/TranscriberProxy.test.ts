@@ -48,7 +48,7 @@ vi.mock('../../src/config', () => ({
 vi.mock('../../src/OutgoingConnection', () => ({
 	OutgoingConnection: vi.fn(function (this: any, tag: string, inputFormat: unknown) {
 		this.localTag = tag;
-		this.participantId = tag.split('-')[0]; // Extract participant ID from tag like "participant1-ssrc123"
+		this.participantId = tag.split('-')[0]; // Extract participant ID from sourceId tag like "abc123-a0"
 		this.handleMediaEvent = vi.fn();
 		this.addTranscriptContext = vi.fn();
 		this.updateInputFormat = vi.fn();
@@ -199,7 +199,7 @@ describe('TranscriberProxy', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'tag1' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			};
 
@@ -220,7 +220,7 @@ describe('TranscriberProxy', () => {
 				message_id: '123',
 				type: 'transcription-result',
 				event: 'transcription-result',
-				participant: { id: 'tag1' },
+				participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
 				timestamp: Date.now(),
 			};
 
@@ -674,9 +674,9 @@ describe('TranscriberProxy', () => {
 			proxy.handleMediaEvent({ event: 'media', media: { tag: 'tag1', payload: OGG_PAYLOAD, chunk: 2, timestamp: 0 } });
 
 			// 2 interims + 1 final via the connection callbacks
-			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'a', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
-			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'b', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
-			conn.onCompleteTranscription({ transcript: [{ text: 'hi' }], is_interim: false, message_id: 'c', type: 'transcription-result', event: 'transcription-result', participant: { id: 'tag1' }, timestamp: 0 });
+			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'a', type: 'transcription-result', event: 'transcription-result', participant: { id: 'endpoint1', tag: 'endpoint1-a0' }, timestamp: 0 });
+			conn.onInterimTranscription({ transcript: [], is_interim: true, message_id: 'b', type: 'transcription-result', event: 'transcription-result', participant: { id: 'endpoint1', tag: 'endpoint1-a0' }, timestamp: 0 });
+			conn.onCompleteTranscription({ transcript: [{ text: 'hi' }], is_interim: false, message_id: 'c', type: 'transcription-result', event: 'transcription-result', participant: { id: 'endpoint1', tag: 'endpoint1-a0' }, timestamp: 0 });
 
 			vi.mocked(logger.info).mockClear();
 			proxy.close();

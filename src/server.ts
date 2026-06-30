@@ -30,6 +30,15 @@ const server = http.createServer((req, res) => {
 		res.end('OK');
 		return;
 	}
+	// Live session counts, used by the container's Durable Object (onActivityExpired)
+	// to decide whether to keep the container alive or let it sleep. WebSocket frames
+	// bypass the Container class so its activity timer doesn't see them; this lets the
+	// DO renew the timer only while a call is actually in progress.
+	if (req.url === '/status') {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(sessionManager.getStats()));
+		return;
+	}
 	res.writeHead(426, { 'Content-Type': 'text/plain' });
 	res.end('Upgrade Required: Expected WebSocket connection');
 });
@@ -65,9 +74,20 @@ server.on('upgrade', (request, socket, head) => {
 
 	// Handle the /translate endpoint separately (speech-to-speech translation).
 	if (parameters.url.pathname.endsWith('/translate')) {
+		if (!config.enableTranslate) {
+			socket.write('HTTP/1.1 404 Not Found\r\n\r\nTranslation endpoint disabled');
+			socket.destroy();
+			return;
+		}
 		wss.handleUpgrade(request, socket, head, (ws) => {
 			handleTranslatorConnection(ws, parameters);
 		});
+		return;
+	}
+
+	if (!config.enableTranscribe) {
+		socket.write('HTTP/1.1 404 Not Found\r\n\r\nTranscription endpoint disabled');
+		socket.destroy();
 		return;
 	}
 
@@ -237,9 +257,29 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
+/**
+ * A /translate transcript message. The inner `type` is `realtime-translation-result` (not
+ * `transcription-result`) so jitsi-meet recognizes it as a translation stream and does not render it
+ * in the CC panel like a normal transcription. The outer `event` stays `transcription-result` because
+ * JVB dispatches on `event` (via jicoco-mediajson) and only forwards payloads it recognizes — it
+ * passes the inner `type` through to the client verbatim.
+ */
+interface TranslationTranscriptMessage extends Omit<TranscriptionMessage, 'type'> {
+	type: 'realtime-translation-result';
+}
+
 function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
+
+	// Translation always uses the OpenAI Realtime endpoint; without a key every TranslatorConnection would fail
+	// immediately, so reject the upgrade with a clear signal for operators. (config.translation.apiKey falls
+	// back to OPENAI_API_KEY when OPENAI_TRANSLATION_API_KEY is unset.)
+	if (!config.translation.apiKey) {
+		logger.error('Rejecting /translate connection: OpenAI API key not configured');
+		ws.close(1011, 'OpenAI API key not configured');
+		return;
+	}
 
 	// Seed the initially-active target languages from `?lang=` for the dev/replay path only.
 	// The JVB connects without `lang` and drives synthetic sources via `sources` control events.
@@ -255,7 +295,9 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error(`Rejecting /translate connection: ${msg}`);
-			ws.close(1002, msg);
+			// WebSocket close reasons are capped at 123 bytes; a longer reason makes ws.close throw and leaves
+			// the socket open. The full detail is already logged above.
+			ws.close(1002, msg.slice(0, 123));
 			return;
 		}
 	}
@@ -263,6 +305,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	const translateSession = new TranslatorProxy(ws, {
 		initialLanguages,
 		provider: parameters.provider,
+		emitTranscripts: config.translation.transcripts,
 	});
 
 	translateSession.on('closed', () => {
@@ -272,26 +315,31 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	});
 
 	translateSession.on('error', (tag: string, error: any) => {
-		const message = `Error in translation session ${tag}: ${error instanceof Error ? error.message : String(error)}`;
+		// A single (source, language) connection failing must not tear down the whole /translate session, which
+		// carries every speaker/language. The failed connection self-removes from the proxy and the next
+		// `sources` event reconciles it back open, so just log here.
+		const message = `Error in translation connection ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 		logger.error(message);
-		try {
-			ws.close(1011, message);
-		} catch {
-			// ignore
-		}
 	});
 
-	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
+	// Monotonic per-connection counter for transcript message ids, so two events for the same tag within
+	// the same millisecond can't collide (Date.now() alone would).
+	let transcriptSeq = 0;
+	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string; isInterim: boolean }) => {
 		if (!sendBack) {
 			return;
 		}
+		// Interim (delta) transcripts only when interim output is requested; finals always (under sendBack).
+		if (data.isInterim && !parameters.sendBackInterim) {
+			return;
+		}
 		// participant.id is the input (export) source name the translation was produced from.
-		const msg: TranscriptionMessage = {
+		const msg: TranslationTranscriptMessage = {
 			transcript: [{ text: data.transcript }],
-			is_interim: false,
+			is_interim: data.isInterim,
 			language: data.targetLanguage,
-			message_id: `translation-${data.tag}-${Date.now()}`,
-			type: 'transcription-result',
+			message_id: `translation-${data.tag}-${transcriptSeq++}`,
+			type: 'realtime-translation-result',
 			event: 'transcription-result',
 			participant: { id: data.tag },
 			timestamp: Date.now(),
@@ -313,11 +361,13 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 			// bridge's findSyntheticAudioSource(tag) matches the colibri2-signaled synthetic source.
 			const audioMessage = {
 				event: 'media',
-				sequenceNumber: data.sequenceNumber.toString(),
+				// Numeric per the mediajson protocol (matches the inbound media events); the bridge/JVB parser
+				// expects numbers, not strings, for these fields.
+				sequenceNumber: data.sequenceNumber,
 				media: {
 					tag: data.tag,
-					chunk: data.chunk.toString(),
-					timestamp: data.timestamp.toString(),
+					chunk: data.chunk,
+					timestamp: data.timestamp,
 					payload: data.payload,
 				},
 			};
@@ -331,7 +381,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -424,7 +474,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);

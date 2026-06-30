@@ -11,7 +11,19 @@ import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
-const tagMatcher = /^([0-9a-fA-F]+)-([0-9]+)$/;
+const tagMatcher = /^([0-9a-fA-F]+)-/;
+
+/**
+ * Max number of consecutive recoverable backend errors (e.g. xAI "ASR stream
+ * timed out") tolerated without any audio being sent in between. A muted
+ * participant sends no audio, so the stream times out, we reconnect, it times
+ * out again — without a bound this loops for the entire mute. After this many
+ * consecutive recoveries we give up and tear the connection down; the next
+ * media event (unmute) recreates it cleanly. The counter resets whenever audio
+ * is actually sent, so an active (e.g. open-mic-but-silent) participant keeps
+ * reconnecting as intended.
+ */
+const MAX_CONSECUTIVE_RECOVERIES = 3;
 
 function audioFormatsDiffer(a: AudioFormat, b: AudioFormat): boolean {
 	return a.encoding !== b.encoding || a.sampleRate !== b.sampleRate || a.channels !== b.channels;
@@ -26,10 +38,10 @@ export class OutgoingConnection {
 	private setServerAcknowledgedTag(newTag: string) {
 		this.serverAcknowledgedTag = newTag;
 		const match = tagMatcher.exec(newTag);
-		if (match !== null && match.length === 3) {
-			this.participant = { id: match[1], ssrc: match[2] };
+		if (match !== null && match.length === 2) {
+			this.participant = { id: match[1], tag: newTag };
 		} else {
-			this.participant = { id: newTag };
+			this.participant = { id: newTag, tag: newTag };
 		}
 	}
 	private participant: any;
@@ -39,6 +51,8 @@ export class OutgoingConnection {
 	private decoderStatus: 'pending' | 'ready' | 'failed' | 'closed' = 'pending';
 	private decoder?: AudioDecoder;
 	private reinitGeneration = 0;
+	/** Consecutive recoverable backend errors with no audio sent since; reset on each audio send. */
+	private consecutiveRecoveries = 0;
 	private isClosed = false;
 	private backend?: TranscriptionBackend;
 	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
@@ -144,6 +158,13 @@ export class OutgoingConnection {
 			const backendConfig = getBackendConfig(this.options.provider);
 			backendConfig.language = this.options.language;
 			backendConfig.tags = this.options.tags;
+			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -195,8 +216,45 @@ export class OutgoingConnection {
 			this.onCompleteTranscription?.(message);
 		};
 
-		backend.onError = (errorType, errorMessage) => {
+		backend.onError = (errorType, errorMessage, recoverable) => {
 			getInstruments().backendErrorsTotal.add(1, { provider: this.options.provider || 'unknown', type: errorType });
+
+			// Transient stream-level errors (e.g. xAI's "ASR stream timed out" on
+			// silence) leave the participant active. Reopen the backend in place
+			// instead of dropping the participant — keeps the decoder, transcript
+			// history and negotiated format, and restores transcription within the
+			// reconnect latency rather than waiting for coarse recovery (JIT-15901).
+			//
+			// Bound the reconnect loop: a muted participant sends no audio, so a fresh
+			// stream just times out again. After MAX_CONSECUTIVE_RECOVERIES reconnects
+			// without any audio in between, give up and tear down; the next media event
+			// (unmute) recreates the connection cleanly. The counter resets on each
+			// audio send, so an active participant reconnects without limit.
+			if (recoverable && !this.isClosed && this.consecutiveRecoveries < MAX_CONSECUTIVE_RECOVERIES) {
+				this.consecutiveRecoveries++;
+				logger.warn(
+					`Recoverable backend error for tag ${this.localTag} (${errorType}: ${errorMessage}); reconnecting backend in place (attempt ${this.consecutiveRecoveries}/${MAX_CONSECUTIVE_RECOVERIES})`,
+				);
+				this.recoverBackend(errorType, errorMessage).catch((error) => {
+					// reconnectBackend handles its own connect failures (onBackendError +
+					// doClose) and resolves false, so reaching here means an unexpected
+					// throw during recovery. Report the actual cause, not the original
+					// timeout that triggered the recovery, so metrics/logs aren't misleading.
+					const cause = error instanceof Error ? error.message : String(error);
+					logger.error(`Unexpected error during backend recovery for tag ${this.localTag}:`, error);
+					this.onBackendError?.('recovery_failed', cause);
+					this.doClose(true);
+					this.onError?.(this.localTag, `Transcription backend error: ${cause}`);
+				});
+				return;
+			}
+
+			if (recoverable && this.consecutiveRecoveries >= MAX_CONSECUTIVE_RECOVERIES) {
+				logger.warn(
+					`Tag ${this.localTag}: ${this.consecutiveRecoveries} consecutive recoverable errors with no audio in between; giving up — connection will be recreated on the next media event`,
+				);
+			}
+
 			this.onBackendError?.(errorType, errorMessage);
 			this.doClose(true);
 			this.onError?.(this.localTag, `Transcription backend error: ${errorMessage}`);
@@ -287,7 +345,7 @@ export class OutgoingConnection {
 	 * successfully and the generation is still current; false if the call is
 	 * stale (a newer reinitializeDecoder took over) or a fatal error occurred.
 	 */
-	private async reconnectBackend(generation: number): Promise<boolean> {
+	private async reconnectBackend(generation: number, reason?: string): Promise<boolean> {
 		// Detach all handlers from the old backend before closing it so that its
 		// onClosed / onError callbacks don't trigger OutgoingConnection teardown
 		// while we're replacing it.
@@ -304,7 +362,7 @@ export class OutgoingConnection {
 			getInstruments().backendConnectionsActive.add(-1);
 		}
 
-		logger.info(`Reconnecting backend for tag ${this.localTag} (format changed to: ${this.activeDesiredFormat?.encoding})`);
+		logger.info(`Reconnecting backend for tag ${this.localTag} (${reason ?? `format changed to: ${this.activeDesiredFormat?.encoding}`})`);
 
 		const newBackend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
 		this.setupBackendHandlers(newBackend);
@@ -318,6 +376,13 @@ export class OutgoingConnection {
 		const backendConfig = getBackendConfig(this.options.provider);
 		backendConfig.language = this.options.language;
 		backendConfig.tags = this.options.tags;
+		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
 
 		try {
 			const connectStartTime = Date.now();
@@ -361,6 +426,41 @@ export class OutgoingConnection {
 			this.doClose(true);
 			this.onError?.(this.localTag, `Error reconnecting backend: ${error instanceof Error ? error.message : String(error)}`);
 			return false;
+		}
+	}
+
+	/**
+	 * Reopen the transcription backend in place after a recoverable (transient)
+	 * backend error, without tearing down the OutgoingConnection. The decoder,
+	 * transcript history and negotiated audio format are preserved; only the
+	 * backend connection is replaced. Used for e.g. xAI's "ASR stream timed out"
+	 * on silence (JIT-15901).
+	 */
+	private async recoverBackend(errorType: string, errorMessage: string): Promise<void> {
+		if (this.isClosed || !this.backend) return;
+
+		// Bump the generation so any in-flight reinitializeDecoder/reconnectBackend
+		// call detects it has been superseded; reconnectBackend uses this token to
+		// discard stale work after its awaits.
+		const generation = ++this.reinitGeneration;
+
+		const reconnected = await this.reconnectBackend(generation, `recovering after ${errorType}: ${errorMessage}`);
+		if (!reconnected) {
+			// Either a newer call took over, the connection was closed, or
+			// reconnectBackend already handled a fatal connect failure (doClose).
+			return;
+		}
+
+		// Defensive: a concurrent doClose() may have run while reconnectBackend was
+		// awaiting. reconnectBackend returns false if isClosed was set by its exit,
+		// but re-check here so we never flush into a torn-down connection.
+		if (this.isClosed) return;
+
+		// The decoder was left untouched, so it is still ready for the same input
+		// format. Flush anything buffered during the reconnect gap.
+		if (this.decoderStatus === 'ready') {
+			this.processPendingInputFrames();
+			this.processPendingAudioData();
 		}
 	}
 
@@ -502,6 +602,10 @@ export class OutgoingConnection {
 
 		try {
 			this.backend.sendAudio(encodedAudio);
+			// Audio is flowing → the participant is active, so any earlier recoverable
+			// errors were transient. Reset the consecutive-recovery guard so an active
+			// participant can reconnect without limit (only silent ones get bounded).
+			this.consecutiveRecoveries = 0;
 			this.resetIdleCommitTimeout();
 			this.metricCache.increment({
 				name: 'backend_audio_sent',
