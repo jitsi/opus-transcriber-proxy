@@ -9,6 +9,9 @@ const wasmPath = path.join(__dirname, '../../dist/opus-encoder.wasm');
 const wasmBuffer = fs.readFileSync(wasmPath);
 const wasm = new WebAssembly.Module(wasmBuffer);
 
+// Shared zero-length buffer for "no leftover input" — never written to, so sharing is safe.
+const EMPTY_INPUT = new Uint8Array(0);
+
 type SampleRate = 8000 | 12000 | 16000 | 24000 | 48000;
 
 export interface OpusEncoderConfig {
@@ -101,19 +104,24 @@ export class OpusEncoder {
 			throw new Error('Encoder not ready');
 		}
 
-		// Append to input buffer
-		const newBuffer = new Uint8Array(this.inputBuffer.length + pcmData.length);
-		newBuffer.set(this.inputBuffer);
-		newBuffer.set(pcmData, this.inputBuffer.length);
-		this.inputBuffer = newBuffer;
+		// Combine any unconsumed remainder from the previous call with the new input. In the common case
+		// (nothing left over) we encode straight out of pcmData with no concat allocation.
+		let input: Uint8Array;
+		if (this.inputBuffer.length === 0) {
+			input = pcmData;
+		} else {
+			input = new Uint8Array(this.inputBuffer.length + pcmData.length);
+			input.set(this.inputBuffer);
+			input.set(pcmData, this.inputBuffer.length);
+		}
 
 		const frameSizeBytes = this.getFrameSizeBytes();
 		const encodedFrames: Uint8Array[] = [];
+		let offset = 0;
 
-		while (this.inputBuffer.length >= frameSizeBytes) {
-			const frameData = this.inputBuffer.subarray(0, frameSizeBytes);
-
-			this.pcmBuffer.set(frameData);
+		while (input.length - offset >= frameSizeBytes) {
+			// subarray is a view (no copy); the copy into the WASM heap is the .set below.
+			this.pcmBuffer.set(input.subarray(offset, offset + frameSizeBytes));
 
 			const encodedBytes = this.module._opus_frame_encode(
 				this.ctx,
@@ -133,14 +141,15 @@ export class OpusEncoder {
 				throw new Error(`Opus encoding failed: ${errorMsg}`);
 			}
 
+			// Must copy: outputBuffer is the reused WASM-heap view, overwritten on the next iteration/call.
 			encodedFrames.push(new Uint8Array(this.outputBuffer.subarray(0, encodedBytes)));
 
-			this.inputBuffer = this.inputBuffer.subarray(frameSizeBytes);
+			offset += frameSizeBytes;
 		}
 
-		// inputBuffer is a subarray view into newBuffer; copy the remainder into its own backing store so the
-		// full appended allocation can be released instead of staying alive until the next call.
-		this.inputBuffer = new Uint8Array(this.inputBuffer);
+		// Retain only the unconsumed tail, in its own backing store (decoupled from pcmData / the merged
+		// buffer so neither is kept alive). Empty when fully consumed — the common case.
+		this.inputBuffer = offset < input.length ? input.slice(offset) : EMPTY_INPUT;
 
 		return encodedFrames;
 	}
