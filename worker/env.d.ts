@@ -58,7 +58,6 @@ export interface Env {
 	MAX_CONNECTIONS_PER_CONTAINER?: string;
 	MIN_CONTAINERS?: string;
 	SCALE_DOWN_IDLE_TIME?: string;
-	TRANSLATION_MIXING_MODE?: string;
 	TRANSLATE_TRANSCRIPTS?: string;
 	ENABLE_TRANSCRIBE?: string;
 	ENABLE_TRANSLATE?: string;
