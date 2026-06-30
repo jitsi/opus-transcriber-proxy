@@ -110,6 +110,14 @@ export const config = {
 		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 
+	// Translation (/translate endpoint) configuration
+	translation: {
+		// Emit target-language transcript messages from the /translate path (to sendBack clients
+		// and, when enabled, the dispatcher). Default true; set TRANSLATE_TRANSCRIPTS=false to
+		// produce translated audio only.
+		transcripts: process.env.TRANSLATE_TRANSCRIPTS !== 'false',
+	},
+
 	server: {
 		port: parseIntOrDefault(process.env.PORT, 8080),
 		host: process.env.HOST || '0.0.0.0',

@@ -11,6 +11,8 @@ export interface TranslatorProxyOptions {
 	 */
 	initialLanguages?: string[];
 	provider?: string;
+	/** Emit target-language transcripts from translation sessions. Default true. */
+	emitTranscripts?: boolean;
 }
 
 /**
@@ -248,7 +250,10 @@ export class TranslatorProxy extends EventEmitter {
 			return existing;
 		}
 
-		const conn = new TranslatorConnection(inputSourceName, { targetLanguage: language });
+		const conn = new TranslatorConnection(inputSourceName, {
+			targetLanguage: language,
+			emitTranscripts: this.options.emitTranscripts,
+		});
 
 		conn.onClosed = () => {
 			const map = this.connections.get(inputSourceName);

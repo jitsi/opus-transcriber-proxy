@@ -87,6 +87,8 @@ export function normalizeTargetLanguage(input: string): string {
 export interface TranslatorConnectionOptions {
 	/** ISO 2-letter target language code (e.g. "en", "es"). */
 	targetLanguage: string;
+	/** Emit transcript callbacks (target-language text). When false, only translated audio is produced. Default true. */
+	emitTranscripts?: boolean;
 }
 
 export class TranslatorConnection {
@@ -585,9 +587,9 @@ export class TranslatorConnection {
 			parsedMessage.type === 'session.output_transcript.delta'
 			|| parsedMessage.type === 'response.output_audio_transcript.delta'
 		) {
-			// Emit deltas as transcription callbacks; the consumer (server.ts)
-			// gates on `sendBack` and forwards to the client.
-			if (typeof parsedMessage.delta === 'string' && parsedMessage.delta) {
+			// Emit deltas as transcription callbacks; the consumer (server.ts) gates on `sendBack` /
+			// dispatcher and forwards to the client. Suppressed entirely when transcripts are disabled.
+			if (this.options.emitTranscripts !== false && typeof parsedMessage.delta === 'string' && parsedMessage.delta) {
 				this.onTranscription?.(parsedMessage.delta, this.options.targetLanguage);
 			}
 			return;
@@ -606,7 +608,9 @@ export class TranslatorConnection {
 				|| parsedMessage.output?.[0]?.content?.[0]?.transcript;
 			if (typeof transcript === 'string' && transcript) {
 				this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}: ${transcript}`);
-				this.onTranscription?.(transcript, this.options.targetLanguage);
+				if (this.options.emitTranscripts !== false) {
+					this.onTranscription?.(transcript, this.options.targetLanguage);
+				}
 			} else {
 				this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}`);
 			}

@@ -44,6 +44,8 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 	return {
 		OPENAI_API_KEY: env.OPENAI_API_KEY,
 		OPENAI_MODEL: env.OPENAI_MODEL || 'gpt-4o-transcribe',
+		// Only forwarded when explicitly set; otherwise the container default (transcripts on) applies.
+		...(env.TRANSLATE_TRANSCRIPTS && { TRANSLATE_TRANSCRIPTS: env.TRANSLATE_TRANSCRIPTS }),
 		GEMINI_API_KEY: env.GEMINI_API_KEY || '',
 		DEEPGRAM_API_KEY: env.DEEPGRAM_API_KEY || '',
 		DEEPGRAM_MODEL: env.DEEPGRAM_MODEL || 'nova-3-general',

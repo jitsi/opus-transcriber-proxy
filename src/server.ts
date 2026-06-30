@@ -282,6 +282,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	const translateSession = new TranslatorProxy(ws, {
 		initialLanguages,
 		provider: parameters.provider,
+		emitTranscripts: config.translation.transcripts,
 	});
 
 	translateSession.on('closed', () => {
