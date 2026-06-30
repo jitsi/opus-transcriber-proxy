@@ -149,6 +149,9 @@ export class TranslatorConnection {
 	private lastInputAppendAt: number | null = null;
 	private firstOutputAt: number | null = null;
 	private responseIndex: number = 0;
+	// Latency instrumentation (incl. the per-frame speech-RMS gate) is debug-only — it is a diagnostic,
+	// not a production metric, so it adds no per-frame work on the hot path unless DEBUG is enabled.
+	private readonly measureLatency: boolean = config.debug;
 
 	private options: TranslatorConnectionOptions;
 	private metricCache: MetricCache;
@@ -417,9 +420,9 @@ export class TranslatorConnection {
 			this.lastLoggedSecond = currentSecond;
 		}
 
-		// Latency measurement: only update timestamps on speech chunks (RMS
-		// gate). Silence padding doesn't count.
-		if (pcmContainsSpeech(audioData)) {
+		// Latency measurement (debug-only): only update timestamps on speech chunks (RMS gate). Silence
+		// padding doesn't count. The RMS scan runs only when latency instrumentation is enabled.
+		if (this.measureLatency && pcmContainsSpeech(audioData)) {
 			const now = Date.now();
 			if (this.firstInputAt === null) {
 				this.firstInputAt = now;
@@ -547,7 +550,7 @@ export class TranslatorConnection {
 				// Latency: capture both TTFA and ongoing-lag on the first
 				// audio.delta of this response window. For a simultaneous
 				// translator the headline metric is TTFA.
-				if (this.firstOutputAt === null) {
+				if (this.measureLatency && this.firstOutputAt === null) {
 					this.firstOutputAt = Date.now();
 					this.responseIndex++;
 					const ttfa = this.firstInputAt !== null
