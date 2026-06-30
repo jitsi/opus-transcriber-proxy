@@ -1,5 +1,6 @@
 import { OpusDecoder } from './OpusDecoder/OpusDecoder';
 import { OpusEncoder } from './OpusEncoder/OpusEncoder';
+import { RtpTimestamper } from './RtpTimestamper';
 import { writeMetric } from './metrics';
 import { MetricCache } from './MetricCache';
 import { config } from './config';
@@ -121,10 +122,7 @@ export class TranslatorConnection {
 	private lastLoggedSecond: number = 0;
 
 	private static globalSequenceNumber: number = 0;
-	private chunkCounter: number = 0;
-	private timestamp48kHz: number = 0;
-	private startWallClockTime?: number = undefined;
-	private isFirstFrameOfResponse: boolean = true;
+	private readonly rtpTimestamper = new RtpTimestamper();
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
@@ -615,15 +613,15 @@ export class TranslatorConnection {
 			return;
 		}
 
-		// End-of-utterance markers (audio-stream end / response complete). Reset wall-clock so the next response
-		// starts a fresh RTP timestamp window and its latency is measured from its own input window. These do not
-		// carry the transcript — that is emitted above — so response.done is used here only for the reset.
+		// End-of-utterance markers (audio-stream end / response complete). Reset the per-response latency
+		// window so the next response is measured from its own input. The RTP timeline is NOT reset here —
+		// RtpTimestamper keeps one continuous, monotonic timeline across responses and inserts the real
+		// silence gap on the next frame. These events do not carry the transcript (emitted above).
 		if (
 			parsedMessage.type === 'session.output_audio.done'
 			|| parsedMessage.type === 'response.output_audio.done'
 			|| parsedMessage.type === 'response.done'
 		) {
-			this.isFirstFrameOfResponse = true;
 			this.firstOutputAt = null;
 			this.firstInputAt = null;
 			this.lastInputAppendAt = null;
@@ -647,29 +645,16 @@ export class TranslatorConnection {
 	}
 
 	private sendAudioFrame(opusFrame: Uint8Array): void {
-		if (this.startWallClockTime === undefined) {
-			this.startWallClockTime = Date.now();
-			this.timestamp48kHz = 0;
-			this.isFirstFrameOfResponse = false;
-		} else if (this.isFirstFrameOfResponse) {
-			const now = Date.now();
-			const elapsedMs = now - this.startWallClockTime;
-			this.timestamp48kHz = Math.round((elapsedMs / 1000) * 48000);
-			this.isFirstFrameOfResponse = false;
-		}
+		// The RtpTimestamper produces a monotonic RTP timestamp (inserting a real-silence gap when the
+		// source idled longer than the buffered media) and a uint16 RTP sequence number. JVB's
+		// Conference.handleMediaMessage reinterprets `media.chunk` as that 16-bit RTP sequence number.
+		const { timestamp, sequenceNumber: rtpSequenceNumber } = this.rtpTimestamper.nextFrameTimestamp();
 
-		// JVB's Conference.handleMediaMessage reinterprets `media.chunk` as a
-		// 16-bit RTP sequence number, so we wrap to uint16 to avoid feeding it
-		// values that overflow at ~22 minutes of continuous frames.
-		this.chunkCounter = (this.chunkCounter + 1) & 0xffff;
 		TranslatorConnection.globalSequenceNumber++;
 
 		const payload = Buffer.from(opusFrame).toString('base64');
 
-		this.onAudioFrame?.(this.localTag, this.chunkCounter, this.timestamp48kHz, payload, TranslatorConnection.globalSequenceNumber);
-
-		// 480 samples at 24kHz = 20ms; at 48kHz that's 960 ticks
-		this.timestamp48kHz += 960;
+		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload, TranslatorConnection.globalSequenceNumber);
 	}
 
 	close(): void {
