@@ -225,7 +225,7 @@ export class TranslatorConnection {
 
 	private initializeOpenAIWebSocket(): void {
 		try {
-			const apiKey = config.openai.apiKey;
+			const apiKey = config.translation.apiKey;
 			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(config.translation.model)}`;
 			const openaiWs = new WebSocket(wsUrl, ['realtime', `openai-insecure-api-key.${apiKey}`]);
 

@@ -273,8 +273,9 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	const sendBack = parameters.sendBack;
 
 	// Translation always uses the OpenAI Realtime endpoint; without a key every TranslatorConnection would fail
-	// immediately, so reject the upgrade with a clear signal for operators.
-	if (!config.openai.apiKey) {
+	// immediately, so reject the upgrade with a clear signal for operators. (config.translation.apiKey falls
+	// back to OPENAI_API_KEY when OPENAI_TRANSLATION_API_KEY is unset.)
+	if (!config.translation.apiKey) {
 		logger.error('Rejecting /translate connection: OpenAI API key not configured');
 		ws.close(1011, 'OpenAI API key not configured');
 		return;

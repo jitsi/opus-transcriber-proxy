@@ -122,6 +122,9 @@ export const config = {
 		transcripts: process.env.TRANSLATE_TRANSCRIPTS !== 'false',
 		// OpenAI speech-to-speech translation model (the /v1/realtime/translations endpoint).
 		model: process.env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
+		// API key for translation. Defaults to OPENAI_API_KEY; set OPENAI_TRANSLATION_API_KEY to use a
+		// separate key/quota for translation (the realtime translate endpoint can be billed separately).
+		apiKey: process.env.OPENAI_TRANSLATION_API_KEY || process.env.OPENAI_API_KEY || '',
 	},
 
 	server: {
