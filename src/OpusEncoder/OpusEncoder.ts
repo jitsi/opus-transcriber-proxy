@@ -2,6 +2,7 @@ import OpusEncoderModuleFactory from '../../dist/opus-encoder.cjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import logger from '../logger';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,13 +68,9 @@ export class OpusEncoder {
 	private async init(): Promise<void> {
 		this.module = (await OpusEncoderModuleFactory({
 			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				try {
-					const instance = new WebAssembly.Instance(wasm, info);
-					receive(instance);
-					return instance.exports;
-				} catch (error) {
-					throw error;
-				}
+				const instance = new WebAssembly.Instance(wasm, info);
+				receive(instance);
+				return instance.exports;
 			},
 		})) as OpusEncoderModule;
 
@@ -87,8 +84,12 @@ export class OpusEncoder {
 
 		this.frameSize = this.module._opus_frame_encoder_get_frame_size(this.ctx);
 
-		this.module._opus_frame_encoder_set_bitrate(this.ctx, this.config.bitrate);
-		this.module._opus_frame_encoder_set_complexity(this.ctx, this.config.complexity);
+		// opus_encoder_ctl returns OPUS_OK (0) on success, negative on error. A failure here means the
+		// encoder silently keeps the codec default, so log it rather than swallowing it.
+		const bitrateRet = this.module._opus_frame_encoder_set_bitrate(this.ctx, this.config.bitrate);
+		if (bitrateRet < 0) logger.warn(`OpusEncoder: set_bitrate(${this.config.bitrate}) failed (${bitrateRet})`);
+		const complexityRet = this.module._opus_frame_encoder_set_complexity(this.ctx, this.config.complexity);
+		if (complexityRet < 0) logger.warn(`OpusEncoder: set_complexity(${this.config.complexity}) failed (${complexityRet})`);
 
 		const maxPcmBytes = this.frameSize * this.config.channels * 2; // 16-bit samples
 		this.pcmBuffer = new Uint8Array(this.module.HEAPU8.buffer, this.module._malloc(maxPcmBytes), maxPcmBytes);
