@@ -310,14 +310,18 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		logger.error(message);
 	});
 
-	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string }) => {
+	translateSession.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string; isInterim: boolean }) => {
 		if (!sendBack) {
+			return;
+		}
+		// Interim (delta) transcripts only when interim output is requested; finals always (under sendBack).
+		if (data.isInterim && !parameters.sendBackInterim) {
 			return;
 		}
 		// participant.id is the input (export) source name the translation was produced from.
 		const msg: TranslationTranscriptMessage = {
 			transcript: [{ text: data.transcript }],
-			is_interim: false,
+			is_interim: data.isInterim,
 			language: data.targetLanguage,
 			message_id: `translation-${data.tag}-${Date.now()}`,
 			type: 'realtime-translation-result',

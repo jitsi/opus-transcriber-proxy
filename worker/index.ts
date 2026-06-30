@@ -23,7 +23,7 @@ export interface TranscriptionDispatcher {
  * Transcription message from container
  */
 interface TranscriptionMessage {
-	type: 'transcription-result';
+	type: 'transcription-result' | 'realtime-translation-result';
 	is_interim: boolean;
 	participant: {
 		id?: string;
@@ -479,7 +479,9 @@ async function handleWebSocketWithDispatcher(
 		if (typeof event.data === 'string') {
 			try {
 				const data = JSON.parse(event.data) as TranscriptionMessage;
-				if (data.type === 'transcription-result' && !data.is_interim) {
+				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
+				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
+				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
 					const dispatcherMessage: DispatcherTranscriptionMessage = {
 						sessionId,
 						endpointId: data.participant?.id || 'unknown',

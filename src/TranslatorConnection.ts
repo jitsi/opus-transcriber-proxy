@@ -128,7 +128,7 @@ export class TranslatorConnection {
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
-	onTranscription?: (transcript: string, targetLanguage: string) => void = undefined;
+	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
 	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string, sequenceNumber: number) => void = undefined;
 
 	// Per-response latency measurement.
@@ -587,10 +587,10 @@ export class TranslatorConnection {
 			parsedMessage.type === 'session.output_transcript.delta'
 			|| parsedMessage.type === 'response.output_audio_transcript.delta'
 		) {
-			// Emit deltas as transcription callbacks; the consumer (server.ts) gates on `sendBack` /
-			// dispatcher and forwards to the client. Suppressed entirely when transcripts are disabled.
+			// Deltas are the growing hypothesis → interim. The consumer (server.ts) gates on
+			// `sendBack`/`sendBackInterim` and forwards to the client. Suppressed when transcripts disabled.
 			if (this.options.emitTranscripts !== false && typeof parsedMessage.delta === 'string' && parsedMessage.delta) {
-				this.onTranscription?.(parsedMessage.delta, this.options.targetLanguage);
+				this.onTranscription?.(parsedMessage.delta, this.options.targetLanguage, /* isInterim */ true);
 			}
 			return;
 		}
@@ -609,7 +609,8 @@ export class TranslatorConnection {
 			if (typeof transcript === 'string' && transcript) {
 				this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}: ${transcript}`);
 				if (this.options.emitTranscripts !== false) {
-					this.onTranscription?.(transcript, this.options.targetLanguage);
+					// The transcript-done event is the authoritative full utterance → final.
+					this.onTranscription?.(transcript, this.options.targetLanguage, /* isInterim */ false);
 				}
 			} else {
 				this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}`);

@@ -267,8 +267,8 @@ export class TranslatorProxy extends EventEmitter {
 		conn.onError = (_tag, error) => {
 			this.emit('error', outputTag, error);
 		};
-		conn.onTranscription = (transcript, targetLanguage) => {
-			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName });
+		conn.onTranscription = (transcript, targetLanguage, isInterim) => {
+			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName, isInterim });
 		};
 		conn.onAudioFrame = (_tag, chunk, timestamp, payload, sequenceNumber) => {
 			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber });
