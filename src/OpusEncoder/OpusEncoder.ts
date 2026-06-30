@@ -1,95 +1,55 @@
-// Low-level Opus encoder. Wraps the native libopus addon (opus_native.node).
+// Low-level Opus encoder facade. Selects the native (libopus N-API addon) or WASM (Emscripten)
+// backend at runtime via config.opus.backend (OPUS_BACKEND), keeping the historical public API
+// (`new OpusEncoder(config)`, `ready`, `encodeFrame`, `getFrameSize`, `getFrameSizeBytes`, `free`).
 //
-// Historically this was an Emscripten/WASM wrapper; it now binds directly to
-// native libopus via N-API. The public surface (constructor config, `ready`,
-// `encodeFrame`, `getFrameSize`, `getFrameSizeBytes`, `free`) is unchanged.
+// The chosen backend is loaded with a dynamic import() so the other one is never evaluated — a
+// native deployment never runs OpusEncoderWasm's top-level WASM file read, and vice versa. Init is
+// therefore asynchronous; callers already await `ready` before encoding, so behaviour is unchanged.
 
-import { nativeOpus, OPUS_APPLICATION, type NativeOpusEncoder } from '../OpusDecoder/nativeOpus';
+import { config } from '../config';
+import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
-type SampleRate = 8000 | 12000 | 16000 | 24000 | 48000;
+export type { OpusEncoderConfig, OpusEncoderSampleRate } from './opusEncoderTypes';
 
-export interface OpusEncoderConfig {
-	sampleRate: SampleRate;
-	channels: 1 | 2;
-	application?: 'voip' | 'audio' | 'restricted_lowdelay';
-	bitrate?: number;
-	complexity?: number; // 0-10
-}
+export class OpusEncoder implements IOpusEncoder {
+	private impl: IOpusEncoder | undefined;
+	public readonly ready: Promise<void>;
 
-export class OpusEncoder {
-	private encoder: NativeOpusEncoder | null = null;
-	private config: Required<OpusEncoderConfig>;
-	private frameSize: number = 0;
-	private isReady: boolean = false;
-	private inputBuffer: Uint8Array = new Uint8Array(0);
-
-	public ready: Promise<void>;
-
-	constructor(config: OpusEncoderConfig) {
-		this.config = {
-			sampleRate: config.sampleRate,
-			channels: config.channels,
-			application: config.application || 'voip',
-			bitrate: config.bitrate || 64000,
-			complexity: config.complexity || 5,
-		};
-
-		this.ready = this.init();
+	constructor(config_: OpusEncoderConfig) {
+		this.ready = this.init(config_);
 	}
 
-	private async init(): Promise<void> {
-		const application = OPUS_APPLICATION[this.config.application];
+	private async init(config_: OpusEncoderConfig): Promise<void> {
+		if (config.opus.backend === 'native') {
+			const { OpusEncoderNative } = await import('./OpusEncoderNative');
+			this.impl = new OpusEncoderNative(config_);
+		} else {
+			const { OpusEncoderWasm } = await import('./OpusEncoderWasm');
+			this.impl = new OpusEncoderWasm(config_);
+		}
+		await this.impl.ready;
+	}
 
-		this.encoder = new nativeOpus.OpusEncoder(this.config.sampleRate, this.config.channels, application);
-
-		// 20ms frames at the configured sample rate.
-		this.frameSize = this.config.sampleRate / 50;
-
-		this.encoder.setBitrate(this.config.bitrate);
-		this.encoder.setComplexity(this.config.complexity);
-
-		this.isReady = true;
+	private require(): IOpusEncoder {
+		if (this.impl === undefined) {
+			throw new Error('OpusEncoder used before ready resolved');
+		}
+		return this.impl;
 	}
 
 	encodeFrame(pcmData: Uint8Array): Uint8Array[] {
-		if (!this.isReady || !this.encoder) {
-			throw new Error('Encoder not ready');
-		}
-
-		// Append to input buffer
-		const newBuffer = new Uint8Array(this.inputBuffer.length + pcmData.length);
-		newBuffer.set(this.inputBuffer);
-		newBuffer.set(pcmData, this.inputBuffer.length);
-		this.inputBuffer = newBuffer;
-
-		const frameSizeBytes = this.getFrameSizeBytes();
-		const encodedFrames: Uint8Array[] = [];
-
-		while (this.inputBuffer.length >= frameSizeBytes) {
-			const frameData = this.inputBuffer.subarray(0, frameSizeBytes);
-
-			const encoded = this.encoder.encode(Buffer.from(frameData), this.frameSize);
-			encodedFrames.push(new Uint8Array(encoded));
-
-			this.inputBuffer = this.inputBuffer.subarray(frameSizeBytes);
-		}
-
-		return encodedFrames;
-	}
-
-	free(): void {
-		if (this.encoder) {
-			this.encoder.destroy();
-			this.encoder = null;
-			this.isReady = false;
-		}
+		return this.require().encodeFrame(pcmData);
 	}
 
 	getFrameSize(): number {
-		return this.frameSize;
+		return this.require().getFrameSize();
 	}
 
 	getFrameSizeBytes(): number {
-		return this.frameSize * this.config.channels * 2; // 16-bit samples
+		return this.require().getFrameSizeBytes();
+	}
+
+	free(): void {
+		this.impl?.free();
 	}
 }

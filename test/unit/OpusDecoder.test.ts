@@ -49,7 +49,9 @@ vi.mock('../../src/OpusDecoder/nativeOpus', () => ({
 	OPUS_APPLICATION: { voip: 2048, audio: 2049, restricted_lowdelay: 2051 },
 }));
 
-import { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
+// Test the native backend directly: it mocks the addon and asserts the wrapper's synchronous
+// construct/throw behaviour, which the runtime-selecting OpusDecoder facade defers behind `ready`.
+import { OpusDecoderNative as OpusDecoder } from '../../src/OpusDecoder/OpusDecoderNative';
 
 /** Build a PCM Buffer representing `samples` mono int16 samples. */
 function pcmBuffer(samples: number, channels = 1): Buffer {

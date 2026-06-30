@@ -21,9 +21,11 @@ await esbuild.build({
 	outfile: 'dist/bundle/server.js',
 	sourcemap: true,
 	packages: 'external', // Keep all node_modules external
-	// The native Opus addon (build/Release/opus_native.node) is loaded at runtime
-	// via a dynamic require in src/OpusDecoder/nativeOpus.ts, so esbuild leaves it
-	// alone — nothing extra to mark external here.
+	// The native Opus addon (build/Release/opus_native.node) is loaded at runtime via a dynamic
+	// require in src/OpusDecoder/nativeOpus.ts. The WASM backend's Emscripten glue (dist/opus-*.cjs)
+	// is kept external so esbuild doesn't try to bundle it. Which backend loads is chosen at runtime
+	// (OPUS_BACKEND) via dynamic import; the other is never evaluated.
+	external: ['./dist/opus-decoder.cjs', './dist/opus-encoder.cjs'],
 	define: {
 		__GIT_HASH__: JSON.stringify(gitHash),
 	},
