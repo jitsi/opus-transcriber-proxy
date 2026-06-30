@@ -8,6 +8,7 @@ import { normalizeTargetLanguage } from './TranslatorConnection';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
+import { flushTranslationUsage } from './usage-reporter';
 import { initTelemetry, initTelemetryLogs, shutdownTelemetry, shutdownTelemetryLogs, isTelemetryEnabled } from './telemetry';
 import { getInstruments } from './telemetry/instruments';
 
@@ -72,6 +73,11 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
+	// Translation usage token, forwarded by the JVB as an HTTP header on the connect
+	// (originating from prosody room metadata). Used only to attribute reported
+	// translation usage; absent on the dev/replay path.
+	const translationToken = request.headers['x-translation-token'] as string | undefined;
+
 	// Handle the /translate endpoint separately (speech-to-speech translation).
 	if (parameters.url.pathname.endsWith('/translate')) {
 		if (!config.enableTranslate) {
@@ -80,7 +86,7 @@ server.on('upgrade', (request, socket, head) => {
 			return;
 		}
 		wss.handleUpgrade(request, socket, head, (ws) => {
-			handleTranslatorConnection(ws, parameters);
+			handleTranslatorConnection(ws, parameters, translationToken);
 		});
 		return;
 	}
@@ -268,7 +274,7 @@ interface TranslationTranscriptMessage extends Omit<TranscriptionMessage, 'type'
 	type: 'realtime-translation-result';
 }
 
-function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
+function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters, translationToken?: string) {
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
 
@@ -306,6 +312,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		initialLanguages,
 		provider: parameters.provider,
 		emitTranscripts: config.translation.transcripts,
+		translationToken,
 	});
 
 	translateSession.on('closed', () => {
@@ -568,11 +575,12 @@ server.listen(PORT, HOST, () => {
 process.on('SIGTERM', async () => {
 	logger.info('SIGTERM received, closing server...');
 
-	// Shutdown SessionManager first (cleanup detached sessions)
+	// Shutdown SessionManager first (cleanup detached sessions). Closing sessions
+	// drains each TranslatorConnection's final usage report into the buffer.
 	sessionManager.shutdown();
 
-	// Shutdown telemetry (flush pending metrics and logs)
-	await Promise.all([shutdownTelemetry(), shutdownTelemetryLogs()]);
+	// Flush any buffered translation usage, then shutdown telemetry.
+	await Promise.all([flushTranslationUsage(), shutdownTelemetry(), shutdownTelemetryLogs()]);
 
 	server.close(() => {
 		logger.info('Server closed');

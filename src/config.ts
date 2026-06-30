@@ -147,6 +147,13 @@ export const config = {
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
 	},
 
+	// Translation usage reporting. When url is set, each translated direction's audio
+	// duration is POSTed there on close, authenticated with the bearer token the JVB
+	// forwarded on the connection (X-Translation-Token). Unset = reporting off.
+	translationUsage: {
+		url: process.env.TRANSLATION_USAGE_URL || '', // usage-reporting endpoint
+	},
+
 	// Session resumption configuration
 	sessionResumeEnabled: process.env.SESSION_RESUME_ENABLED !== 'false', // Default true
 	sessionResumeGracePeriod: parseIntOrDefault(process.env.SESSION_RESUME_GRACE_PERIOD, 15), // seconds
