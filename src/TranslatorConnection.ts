@@ -12,8 +12,13 @@ import logger from './logger';
 // tier 1+ access. Docs: https://developers.openai.com/api/docs/models/gpt-realtime-translate
 const OPENAI_TRANSLATIONS_ENDPOINT = 'wss://api.openai.com/v1/realtime/translations';
 
-// The maximum number of bytes of audio OpenAI allows to be sent at a time.
-const MAX_AUDIO_BLOCK_BYTES = (15 * 1024 * 1024 * 3) / 4;
+// Caps on audio buffered before the decoder/OpenAI socket are ready. These bound per-connection
+// memory if init stalls; with N (source, language) pairs the worst case is N times these values.
+// 10 s of 24 kHz 16-bit mono PCM (~480 KB) before the OpenAI socket opens — connect is normally
+// sub-second, so hitting this means the socket is stuck and the buffered audio is stale anyway.
+const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
+// ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
+const MAX_PENDING_OPUS_FRAMES = 500;
 
 function safeToBase64(array: Uint8Array): string {
 	if (!(array.buffer instanceof ArrayBuffer) || !(array.buffer as any).resizable) {
@@ -109,6 +114,7 @@ export class TranslatorConnection {
 	private opusEncoder?: OpusEncoder;
 	private openaiWebSocket?: WebSocket;
 	private pendingOpusFrames: Uint8Array[] = [];
+	private pendingFramesOverflowed = false;
 	private pendingAudioData: Uint8Array = new Uint8Array(0);
 
 	private _lastMediaTime: number = -1;
@@ -355,7 +361,15 @@ export class TranslatorConnection {
 		if (this.decoderStatus === 'ready' && this.opusDecoder) {
 			this.processOpusFrame(opusFrame);
 		} else if (this.decoderStatus === 'pending') {
-			this.pendingOpusFrames.push(opusFrame);
+			if (this.pendingOpusFrames.length >= MAX_PENDING_OPUS_FRAMES) {
+				// Decoder init has not completed in ~10 s of audio — drop rather than grow without bound.
+				if (!this.pendingFramesOverflowed) {
+					this.pendingFramesOverflowed = true;
+					logger.warn(`[${this.connectionId}] Dropping queued opus frames for tag ${this.localTag}: decoder still initialising after ${MAX_PENDING_OPUS_FRAMES} frames`);
+				}
+			} else {
+				this.pendingOpusFrames.push(opusFrame);
+			}
 		} else {
 			this.log(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}`);
 		}
@@ -442,16 +456,16 @@ export class TranslatorConnection {
 			const encodedAudio = safeToBase64(audioData);
 			this.sendAudioToOpenAI(encodedAudio);
 		} else if (this.connectionStatus === 'pending') {
-			if (this.pendingAudioData.length + audioData.length <= MAX_AUDIO_BLOCK_BYTES) {
+			if (this.pendingAudioData.length + audioData.length <= MAX_PENDING_PCM_BYTES) {
 				const merged = new Uint8Array(this.pendingAudioData.length + audioData.length);
 				merged.set(this.pendingAudioData);
 				merged.set(audioData, this.pendingAudioData.length);
 				this.pendingAudioData = merged;
 			} else {
-				// Connection still pending and the buffer is full (~234 s of audio) — drop the accumulated
-				// audio rather than send on a socket that has not opened yet. processPendingAudioData flushes
-				// the buffer once the connection opens.
-				this.log(`Dropping buffered audio for tag ${this.localTag}: pending buffer full before connect`);
+				// Connection still pending and the buffer is full — drop the accumulated audio rather than
+				// send on a socket that has not opened yet (and keep memory bounded). processPendingAudioData
+				// flushes the buffer once the connection opens.
+				logger.warn(`[${this.connectionId}] Dropping buffered audio for tag ${this.localTag}: pending PCM buffer full (>${MAX_PENDING_PCM_BYTES} bytes) before connect`);
 				this.pendingAudioData = new Uint8Array(audioData);
 			}
 		} else {
