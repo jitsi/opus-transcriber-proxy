@@ -42,6 +42,12 @@ export const config = {
 	// Require wss:// for openai_custom provider URL (default true; set to false to allow ws://)
 	openaiCustomRequireWss: process.env.OPENAI_CUSTOM_REQUIRE_WSS !== 'false',
 
+	// Opus codec backend: 'wasm' (Emscripten, default; required when running in a Worker) or
+	// 'native' (libopus N-API addon, container-only — faster, needs the compiled .node addon).
+	opus: {
+		backend: (process.env.OPUS_BACKEND === 'native' ? 'native' : 'wasm') as 'native' | 'wasm',
+	},
+
 	// OpenAI configuration
 	openai: {
 		apiKey: process.env.OPENAI_API_KEY || '',

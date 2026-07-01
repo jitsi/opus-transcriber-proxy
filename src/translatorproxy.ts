@@ -1,8 +1,6 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
-import { EventEmitter } from 'node:events';
-import type { WebSocket } from 'ws';
-import { buildServerInfo } from './serverInfo';
-import logger from './logger';
+import { Emitter } from './translate/emitter';
+import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 
 export interface TranslatorProxyOptions {
 	/**
@@ -12,8 +10,6 @@ export interface TranslatorProxyOptions {
 	 */
 	initialLanguages?: string[];
 	provider?: string;
-	/** Emit target-language transcripts from translation sessions. Default true. */
-	emitTranscripts?: boolean;
 }
 
 /**
@@ -38,9 +34,10 @@ export interface TranslatorProxyOptions {
  * language to every incoming source (conference-wide) and tag returned audio as
  * `{inputSource}.{language}`.
  */
-export class TranslatorProxy extends EventEmitter {
-	private readonly ws: WebSocket;
+export class TranslatorProxy extends Emitter {
+	private readonly ws: IWebSocket;
 	private options: TranslatorProxyOptions;
+	private readonly runtime: TranslationRuntime;
 
 	/**
 	 * input source name -> (language -> connection). Connections created from `sources`
@@ -59,10 +56,11 @@ export class TranslatorProxy extends EventEmitter {
 	 */
 	private envelopeSequenceNumber = 0;
 
-	constructor(ws: WebSocket, options: TranslatorProxyOptions) {
-		super({ captureRejections: true });
+	constructor(ws: IWebSocket, options: TranslatorProxyOptions, runtime: TranslationRuntime) {
+		super();
 		this.ws = ws;
 		this.options = options;
+		this.runtime = runtime;
 		this.connections = new Map<string, Map<string, TranslatorConnection>>();
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 
@@ -78,7 +76,7 @@ export class TranslatorProxy extends EventEmitter {
 
 		this.ws.addEventListener('error', (event) => {
 			const message = (event as { message?: string; }).message ?? 'WebSocket error';
-			logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
+			this.runtime.logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
 		});
 
 		this.ws.addEventListener('message', (event) => {
@@ -116,7 +114,7 @@ export class TranslatorProxy extends EventEmitter {
 					break;
 				case 'info':
 					// Informational message from the client (e.g. JVB application/version/region). Log it.
-					logger.info(`Received info from client on /translate: ${JSON.stringify(parsedMessage)}`);
+					this.runtime.logger.info(`Received info from client on /translate: ${JSON.stringify(parsedMessage)}`);
 					break;
 				default:
 					break;
@@ -133,11 +131,14 @@ export class TranslatorProxy extends EventEmitter {
 	 */
 	private sendServerInfo(): void {
 		try {
-			const info = buildServerInfo({ provider: 'openai' });
-			logger.info(`Sending server info on /translate: ${JSON.stringify(info)}`);
+			const info = this.runtime.buildServerInfo();
+			if (info === undefined) {
+				return;
+			}
+			this.runtime.logger.info(`Sending server info on /translate: ${JSON.stringify(info)}`);
 			this.ws.send(JSON.stringify(info));
 		} catch (error) {
-			logger.error('Failed to send server info on /translate:', error);
+			this.runtime.logger.error('Failed to send server info on /translate:', error);
 		}
 	}
 
@@ -159,7 +160,7 @@ export class TranslatorProxy extends EventEmitter {
 			}
 			const { inputSourceName, language } = parsed;
 			if (exportList.length > 0 && !exportList.includes(inputSourceName)) {
-				logger.warn(`sources: request "${request}" references input source "${inputSourceName}" not in exports`);
+				this.runtime.logger.warn(`sources: request "${request}" references input source "${inputSourceName}" not in exports`);
 			}
 			let byLanguage = desired.get(inputSourceName);
 			if (byLanguage === undefined) {
@@ -190,7 +191,7 @@ export class TranslatorProxy extends EventEmitter {
 			}
 		}
 
-		logger.info(
+		this.runtime.logger.info(
 			`sources: reconciled exports=${exportList.length} requests=${requestList.length} active=${this.activeConnectionCount()}`,
 		);
 	}
@@ -203,7 +204,7 @@ export class TranslatorProxy extends EventEmitter {
 	private parseRequest(request: string): { inputSourceName: string; language: string } | undefined {
 		const dot = request.lastIndexOf('.');
 		if (dot <= 0 || dot === request.length - 1) {
-			logger.warn(`sources: cannot parse language from request "${request}"`);
+			this.runtime.logger.warn(`sources: cannot parse language from request "${request}"`);
 			return undefined;
 		}
 		const inputSourceName = request.slice(0, dot);
@@ -224,7 +225,7 @@ export class TranslatorProxy extends EventEmitter {
 			return;
 		}
 		this.devLanguages.add(normalized);
-		logger.info(`start-translation: now translating every source into ${normalized}`);
+		this.runtime.logger.info(`start-translation: now translating every source into ${normalized}`);
 		// Connections are created lazily on the next media event for each source.
 	}
 
@@ -245,19 +246,19 @@ export class TranslatorProxy extends EventEmitter {
 				this.connections.delete(inputSourceName);
 			}
 		}
-		logger.info(`stop-translation: stopped translating into ${normalized}`);
+		this.runtime.logger.info(`stop-translation: stopped translating into ${normalized}`);
 	}
 
 	private normalize(language: unknown): string | undefined {
 		if (typeof language !== 'string' || language.length === 0) {
-			logger.warn(`Ignoring translation request with missing/invalid language: ${String(language)}`);
+			this.runtime.logger.warn(`Ignoring translation request with missing/invalid language: ${String(language)}`);
 			return undefined;
 		}
 		try {
 			return normalizeTargetLanguage(language);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			logger.warn(`Ignoring translation request with unsupported language "${language}": ${msg}`);
+			this.runtime.logger.warn(`Ignoring translation request with unsupported language "${language}": ${msg}`);
 			return undefined;
 		}
 	}
@@ -279,10 +280,7 @@ export class TranslatorProxy extends EventEmitter {
 			return existing;
 		}
 
-		const conn = new TranslatorConnection(inputSourceName, {
-			targetLanguage: language,
-			emitTranscripts: this.options.emitTranscripts,
-		});
+		const conn = new TranslatorConnection(inputSourceName, { targetLanguage: language }, this.runtime);
 
 		conn.onClosed = () => {
 			const map = this.connections.get(inputSourceName);

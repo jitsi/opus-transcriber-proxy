@@ -1,5 +1,6 @@
 import { Container, getContainer } from '@cloudflare/containers';
 import type { Env } from './env';
+import { handleTranslate } from './handleTranslate';
 
 /**
  * Dispatcher message format for transcription events
@@ -599,6 +600,13 @@ async function handleWebSocketWithDispatcher(
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
+
+		// Handle /translate entirely in this Worker (no container). The accepted WebSocket keeps the
+		// Worker alive for the session; the bridge's pings keep it active. Transcribe stays on the
+		// container path below (Worker outbound-connection limits — translate's fan-out is bounded).
+		if (url.pathname.endsWith('/translate')) {
+			return handleTranslate(request, env);
+		}
 
 		// Handle stats endpoint for monitoring
 		if (url.pathname === '/stats' && request.method === 'GET') {

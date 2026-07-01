@@ -49,6 +49,13 @@ vi.mock('../../src/TranslatorConnection', () => ({
 
 const MockedConnection = vi.mocked(TranslatorConnection);
 
+// Minimal runtime stub. TranslatorConnection is mocked, so the proxy only touches logger and
+// buildServerInfo (returning undefined skips the server-info send). Cast to satisfy the type.
+const mockRuntime: any = {
+	logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+	buildServerInfo: () => undefined,
+};
+
 function mediaMessage(tag: string) {
 	return JSON.stringify({
 		event: 'media',
@@ -89,13 +96,13 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('responds to ping with pong (preserving id)', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'ping', id: 7 }) });
 		expect(mockWebSocket.send).toHaveBeenCalledWith(JSON.stringify({ event: 'pong', id: 7 }));
 	});
 
 	it('opens one connection per request, keyed by input source name + language', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', {
 			data: sourcesMessage(['523834112-a0'], ['523834112-a0.en', '523834112-a0.de']),
 		});
@@ -108,14 +115,14 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('parses the language from the LAST dot, preserving the input source name', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage([], ['523834112-a0.en']) });
 
-		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', { targetLanguage: 'en' });
+		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', { targetLanguage: 'en' }, mockRuntime);
 	});
 
 	it('fans media (keyed by input source name) to every language for that source', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', {
 			data: sourcesMessage(['523834112-a0'], ['523834112-a0.en', '523834112-a0.de']),
 		});
@@ -127,7 +134,7 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('ignores media for a source with no requested translations', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
 		mockWebSocket.emit('message', { data: mediaMessage('other-a0') });
 
@@ -137,7 +144,7 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('reconciles: re-sending sources with fewer requests closes removed sessions', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', {
 			data: sourcesMessage(['523834112-a0'], ['523834112-a0.en', '523834112-a0.de']),
 		});
@@ -157,7 +164,7 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('reconciles: an empty requests list closes everything', () => {
-		new TranslatorProxy(mockWebSocket, {});
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
 		const conn = MockedConnection.mock.instances[0] as any;
 
@@ -166,7 +173,7 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('tags returned audio with the request name verbatim', () => {
-		const proxy = new TranslatorProxy(mockWebSocket, {});
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
 		const conn = MockedConnection.mock.instances[0] as any;
 
@@ -181,7 +188,7 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('attributes transcription to the input source name', () => {
-		const proxy = new TranslatorProxy(mockWebSocket, {});
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
 		const conn = MockedConnection.mock.instances[0] as any;
 
@@ -193,11 +200,11 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('dev path: start-translation + media lazily creates a connection tagged {src}.{lang}', () => {
-		const proxy = new TranslatorProxy(mockWebSocket, {});
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'start-translation', translation: { language: 'en' } }) });
 		mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
 
-		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' });
+		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' }, mockRuntime);
 
 		const conn = MockedConnection.mock.instances[0] as any;
 		const frames: any[] = [];
@@ -207,10 +214,10 @@ describe('TranslatorProxy (sources model)', () => {
 	});
 
 	it('dev path: languages seeded from initialLanguages translate every source', () => {
-		new TranslatorProxy(mockWebSocket, { initialLanguages: ['en'] });
+		new TranslatorProxy(mockWebSocket, { initialLanguages: ['en'] }, mockRuntime);
 		mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
 
 		expect(MockedConnection).toHaveBeenCalledTimes(1);
-		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' });
+		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' }, mockRuntime);
 	});
 });

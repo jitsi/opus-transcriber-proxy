@@ -10,7 +10,7 @@ import { OpusAudioDecoder } from '../../src/OpusDecoder/OpusAudioDecoder';
 import { OggOpusDecapsulator } from '../../src/OggOpusDecapsulator';
 import { CascadedDecoder } from '../../src/CascadedDecoder';
 
-// Mock the WASM-backed OpusDecoder so tests don't require a compiled WASM module
+// Mock the native-backed OpusDecoder so tests don't require the compiled addon
 vi.mock('../../src/OpusDecoder/OpusDecoder', () => {
 	class MockOpusDecoder {
 		ready = Promise.resolve();
