@@ -2,10 +2,18 @@
 node_modules/
 worker/node_modules/
 
-# Source files (we only need the compiled output in dist/)
-src/
-
-# Other build artifacts
+# Build artifacts. The native addon + server bundle are produced inside the image
+# (src/ is intentionally NOT ignored — the builder compiles the addon from the
+# libopus submodule in-container, since a host .node can't run on Linux).
+# The WASM artifacts are architecture-independent, so they are built on the host/CI
+# (build:wasm) and copied in — building them in-container would require Emscripten
+# under QEMU emulation (emscripten/emsdk is amd64-only), which is far too slow.
+build/
+dist/
+!dist/opus-decoder.cjs
+!dist/opus-decoder.wasm
+!dist/opus-encoder.cjs
+!dist/opus-encoder.wasm
 dist-node/
 
 # Development files

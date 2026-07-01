@@ -5,8 +5,8 @@ This guide walks you through deploying the Opus Transcriber Proxy as a Cloudflar
 ## Quick Start (TL;DR)
 
 ```bash
-# 1. Configure WASM build tools (one-time)
-npm run configure
+# 1. Check out the libopus submodule (one-time; the Docker image builds it)
+git submodule update --init src/OpusDecoder/opus
 
 # 2. Install worker dependencies and authenticate
 cd worker
@@ -31,10 +31,9 @@ npm run cf:deploy
    docker info  # Verify Docker is running
    ```
 
-2. **Node.js Build Tools**: Required to build WASM modules locally
-   - Node.js 18+ (you already have this)
-   - Make, GCC, Python (for WASM compilation)
-   - Emscripten (installed via `npm run configure`)
+2. **Build Tools**: The Docker image compiles the native Opus addon itself, so
+   you only need Docker to build the image. (If you build outside Docker, you
+   need Node.js 22+, a C/C++ compiler, Make, and Python 3 for node-gyp.)
 
 3. **Cloudflare Account**: You need a Workers Paid plan ($5/month minimum)
 
@@ -51,16 +50,17 @@ npm run cf:deploy
 
 ## Build Process
 
-The Docker image uses a **pre-built approach**:
-1. WASM modules are compiled on your local machine (requires Emscripten)
-2. TypeScript is compiled to JavaScript locally
-3. Docker copies the compiled artifacts into a minimal runtime container
+The Docker image is **self-contained** and multi-stage:
+1. The builder stage compiles the native Opus addon (libopus + N-API) from the
+   `src/OpusDecoder/opus` submodule and bundles the server with esbuild
+2. The runtime stage copies only the compiled `.node` addon, the bundle, and
+   production dependencies into a minimal image
 
 This approach:
-- ✅ Creates smaller Docker images
-- ✅ Faster builds (no compilation in Docker)
-- ✅ Avoids Emscripten installation issues in Alpine
-- ✅ More reliable for CI/CD pipelines
+- ✅ Needs no host toolchain — only Docker
+- ✅ Builds correct per-architecture binaries (linux/amd64 and linux/arm64)
+- ✅ Keeps the runtime image small (build tools stay in the builder stage)
+- ✅ Reproducible in CI/CD pipelines
 
 ## Setup Steps
 
@@ -83,17 +83,18 @@ npx wrangler secret put OPENAI_MODEL --config ../wrangler-container.jsonc
 
 ### 2. Build and Deploy
 
-First, ensure you have WASM tools configured (one-time setup):
+First, ensure the libopus submodule is checked out (one-time setup):
 
 ```bash
 # From project root
-npm run configure
+git submodule update --init src/OpusDecoder/opus
 ```
 
 Deploy the container (this will take 5-10 minutes):
 
 ```bash
-# From project root - this builds WASM, compiles TS, builds Docker, and deploys
+# From project root - the Docker image compiles the native addon and bundles the
+# server itself, then deploys to Cloudflare
 npm run cf:deploy
 ```
 
@@ -109,12 +110,10 @@ npm run deploy
 ```
 
 This deployment process:
-1. Compiles WASM modules locally (Opus decoder)
-2. Compiles TypeScript to JavaScript
-3. Builds Docker image with compiled artifacts
-4. Pushes image to Cloudflare's Container Registry
-5. Deploys your Worker
-6. Configures the network
+1. Builds the Docker image (compiles the native Opus addon + bundles the server)
+2. Pushes image to Cloudflare's Container Registry
+3. Deploys your Worker
+4. Configures the network
 
 **Important**: After first deployment, wait 3-5 minutes for the container to be fully provisioned before making requests.
 
@@ -302,22 +301,18 @@ Check current pricing at: https://developers.cloudflare.com/containers/platform/
 
 If `npm run docker:build` fails:
 
-1. **Ensure code is built first**:
+1. **Ensure the libopus submodule is checked out** (the builder stage compiles
+   it from source):
    ```bash
-   npm run configure  # One-time setup
-   npm run build      # Build WASM and TypeScript
+   git submodule update --init src/OpusDecoder/opus
    ```
 
-2. **Verify dist/ directory exists with required files**:
-   ```bash
-   ls -la dist/
-   # Should see: opus-decoder.js, opus-decoder.wasm, opus-decoder.wasm.map
+2. **Check the builder stage logs** — the native addon (`opus_native.node`) is
+   compiled by node-gyp inside the image; failures here usually mean the
+   submodule is missing or the toolchain layer (`apk add python3 make g++`) did
+   not install.
 
-   ls -la dist/src/
-   # Should see: server.js and other compiled .js files
-   ```
-
-3. **Test Docker build manually**:
+3. **Test the Docker build manually**:
    ```bash
    docker build -t test-transcriber .
    ```

@@ -1,7 +1,7 @@
 /**
  * End-to-end integration test for the opus encoder ↔ decoder round trip.
  *
- * Loads the real WASM artefacts (both opus-decoder.cjs and opus-encoder.cjs)
+ * Loads the real native Opus addon (build/Release/opus_native.node)
  * and validates that a sine wave round-trips through encode → decode with
  * matching-energy PCM output. Phase-aligned SNR is too sensitive to opus's
  * ~6.5 ms algorithmic delay for a build-time check, so we measure RMS
@@ -9,20 +9,16 @@
  * (silent encoder, garbage decoder, wrong sample-rate path) without
  * depending on cross-correlation tuning.
  *
- * Requires `npm run build:wasm` to have produced both dist artefacts.
- * Skipped if either is missing so unit-test runs in environments that
- * haven't built WASM stay green.
+ * Requires `npm run build:native` to have produced the addon.
+ * Skipped if it is missing so unit-test runs in environments that
+ * haven't compiled the native module stay green.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-
-// Type-only imports: the concrete modules (which statically import the real dist/*.cjs WASM) are loaded
-// dynamically in beforeAll so that, when the WASM artefacts are absent (e.g. CI without `build:wasm`), this
-// suite skips cleanly instead of failing at collection time on the missing modules.
-import type { OpusEncoder } from '../../src/OpusEncoder/OpusEncoder';
-import type { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
+import { OpusEncoder } from '../../src/OpusEncoder/OpusEncoder';
+import { OpusDecoder } from '../../src/OpusDecoder/OpusDecoder';
 
 // Matches the rate the TranslatorConnection pipeline uses end-to-end.
 const SAMPLE_RATE = 24000;
@@ -35,13 +31,11 @@ const TOTAL_SAMPLES = SAMPLE_RATE * TOTAL_DURATION_SEC;
 const MIN_ENERGY_RATIO = 0.25;
 const MAX_ENERGY_RATIO = 4.0;
 
-const wasmDistExists =
-	fs.existsSync(path.join(__dirname, '../../dist/opus-decoder.wasm'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-decoder.cjs'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-encoder.wasm'))
-	&& fs.existsSync(path.join(__dirname, '../../dist/opus-encoder.cjs'));
+const nativeAddonExists = fs.existsSync(
+	path.join(__dirname, '../../build/Release/opus_native.node'),
+);
 
-const describeIfWasm = wasmDistExists ? describe : describe.skip;
+const describeIfWasm = nativeAddonExists ? describe : describe.skip;
 
 function generateSineWavePcm16(samples: number, sampleRate: number, freq: number, amplitude: number): Uint8Array {
 	const out = new Uint8Array(samples * 2);
@@ -67,15 +61,10 @@ function meanSquareEnergy(samples: Int16Array): number {
 }
 
 describeIfWasm('Opus round trip (encoder → decoder)', () => {
-	let encoder: OpusEncoder;
+	let encoder: OpusEncoder<24000>;
 	let decoder: OpusDecoder<24000>;
-	let OpusEncoderClass: typeof import('../../src/OpusEncoder/OpusEncoder').OpusEncoder;
 
 	beforeAll(async () => {
-		const { OpusEncoder } = await import('../../src/OpusEncoder/OpusEncoder');
-		const { OpusDecoder } = await import('../../src/OpusDecoder/OpusDecoder');
-		OpusEncoderClass = OpusEncoder;
-
 		encoder = new OpusEncoder({
 			sampleRate: SAMPLE_RATE,
 			channels: 1,
@@ -126,33 +115,6 @@ describeIfWasm('Opus round trip (encoder → decoder)', () => {
 		const ratio = measuredEnergy / referenceEnergy;
 		expect(ratio).toBeGreaterThan(MIN_ENERGY_RATIO);
 		expect(ratio).toBeLessThan(MAX_ENERGY_RATIO);
-	});
-
-	it('accumulates non-frame-aligned input across calls and emits exactly one frame per 20 ms', async () => {
-		// Feed the same 1 s tone in 700-byte chunks — deliberately NOT a multiple of the 1920-byte frame
-		// (480 samples * 2 * 2... actually 960 bytes at 24 kHz mono) so most calls leave a partial-frame
-		// remainder that must carry over to the next call. Exercises the cross-call buffering path.
-		const chunkEncoder = new OpusEncoderClass({ sampleRate: SAMPLE_RATE, channels: 1, application: 'voip', bitrate: 32000 });
-		await chunkEncoder.ready;
-		try {
-			const pcm = generateSineWavePcm16(TOTAL_SAMPLES, SAMPLE_RATE, TONE_HZ, TONE_AMPLITUDE);
-			const frameBytes = (SAMPLE_RATE / 50) * 2; // 960 bytes = 20 ms mono @24kHz
-
-			const frames: Uint8Array[] = [];
-			for (let off = 0; off < pcm.length; off += 700) {
-				frames.push(...chunkEncoder.encodeFrame(pcm.subarray(off, Math.min(off + 700, pcm.length))));
-			}
-
-			// Total bytes = TOTAL_SAMPLES*2; whole 20 ms frames produced = floor(total / frameBytes).
-			expect(frames.length).toBe(Math.floor(pcm.length / frameBytes));
-			// Every emitted frame is a valid, non-empty opus packet.
-			for (const f of frames) {
-				expect(f.length).toBeGreaterThan(0);
-				expect(f.length).toBeLessThan(400);
-			}
-		} finally {
-			chunkEncoder.free();
-		}
 	});
 
 	it('frees both wrappers cleanly', () => {

@@ -18,7 +18,7 @@ Understanding initialization times is critical for choosing the right routing st
 - Container image pull: ~3-5 seconds (first time only)
 - Container startup: ~1-2 seconds
 - Node.js server initialization: ~1-2 seconds
-- WASM module loading (Opus decoder): ~1-2 seconds
+- Native Opus addon loading: near-instant
 
 **Key Insight:** Cold starts are expensive! Choose a routing strategy that minimizes them.
 

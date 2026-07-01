@@ -10,7 +10,6 @@ export default defineConfig({
 			include: ['src/**/*.ts'],
 			exclude: [
 				'src/**/*.d.ts',
-				'src/OpusDecoder/opus-decoder.d.ts',
 				'src/server.ts', // Entry point, tested via integration
 				'src/index.ts', // Cloudflare worker entry
 			],

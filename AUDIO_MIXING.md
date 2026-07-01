@@ -62,10 +62,10 @@ node scripts/mix-audio.mjs /tmp/session123/media.jsonl recording.wav
 
 ## Prerequisites
 
-The WASM module must be built before running this script:
+The native Opus addon must be built before running this script:
 
 ```bash
-npm run build:wasm
+npm run build:native
 ```
 
 ## Example Session
@@ -110,8 +110,8 @@ Done! Output file size: 0.19 MB
 
 ## Troubleshooting
 
-**Error: "Failed to load OpusDecoder module"**
-- Make sure to build the WASM module: `npm run build:wasm`
+**Error: "Failed to load the native Opus addon"**
+- Make sure to build the native addon: `npm run build:native`
 
 **Error: "No media packets found in input file"**
 - Check that the input file contains media events with the `event: "media"` field

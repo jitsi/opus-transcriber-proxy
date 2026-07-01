@@ -14,57 +14,46 @@ on:
                 description: Custom tag to add (optional)
                 type: string
                 required: false
-            emsdk_version:
-                description: Emscripten SDK version, defaults to 4.0.20
-                type: string
-                required: false
-                default: "4.0.20"
 
 jobs:
     build:
         runs-on: "ubuntu-latest"
         steps:
+            # submodules: 'true' is required — the Dockerfile builds the native
+            # Opus addon from the libopus submodule (src/OpusDecoder/opus) inside
+            # the image, so it must be present in the build context. The image is
+            # self-contained: it compiles the addon and bundles the server itself,
+            # for both linux/amd64 and linux/arm64, so no host-side build is needed.
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
               with:
                   ref: ${{ inputs.branch || github.ref }}
                   submodules: 'true'
 
-            - name: Install Linux deps
-              run: |
-                sudo apt update
-                sudo apt -y install wget unzip
-
+            # The WASM Opus artifacts are architecture-independent and are built on the runner
+            # (native amd64, no emulation) and copied into the image; the native addon is compiled
+            # per-arch inside the Dockerfile. See the Dockerfile header for why WASM isn't built in-image.
             - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
               with:
                   node-version: 22
-                  cache: npm
 
-            - name: Install Node Dependencies
-              run: |
-                  npm ci
+            - name: Install autotools (for libopus autogen under Emscripten)
+              run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool make
 
             - name: Setup Emscripten SDK
               run: |
-                EMSDK_VERSION="${{ inputs.emsdk_version || '4.0.20' }}"
-                wget https://github.com/emscripten-core/emsdk/archive/main.zip
-                unzip main.zip
-                cd emsdk-main
-                ./emsdk install $EMSDK_VERSION
-                ./emsdk activate $EMSDK_VERSION
-                source ./emsdk_env.sh
-                echo "EMSDK=$EMSDK" >> $GITHUB_ENV
-                echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
-                echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
+                  wget -q https://github.com/emscripten-core/emsdk/archive/main.zip
+                  unzip -q main.zip
+                  cd emsdk-main
+                  ./emsdk install 4.0.20
+                  ./emsdk activate 4.0.20
+                  echo "EMSDK=$PWD" >> $GITHUB_ENV
 
-            - name: Build WASM modules
+            - name: Build WASM Opus modules
               run: |
-                source "$EMSDK/emsdk_env.sh"
-                npm run build:wasm
-
-            - name: Build main worker bundle
-              run: |
-                  npm run build:bundle
+                  source "$EMSDK/emsdk_env.sh"
+                  npm run configure
+                  npm run build:wasm
 
             - name: Login to Docker Hub
               uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
