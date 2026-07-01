@@ -34,6 +34,7 @@ const WebSocket = require('ws');
 // Counters for messages received back from the server.
 let mediaPacketsReceived = 0; // translated `media` (Opus) frames — the /translate audio return path
 let finalTranscripts = 0;
+let interimTranscripts = 0;
 // tag -> array of Opus packets (Buffers) received for that synthetic source (for --save-audio).
 const audioByTag = new Map();
 
@@ -138,7 +139,7 @@ function formatTime(seconds) {
 function updateStatusLine(current, total, remainingSec) {
     const percent = Math.floor((current / total) * 100);
     const bar = '='.repeat(Math.floor(percent / 2)) + ' '.repeat(50 - Math.floor(percent / 2));
-    const status = `Progress: [${current}/${total}] |${bar}| ${percent}% | Remaining: ${formatTime(remainingSec)} | media rx: ${mediaPacketsReceived} | finals: ${finalTranscripts}`;
+    const status = `Progress: [${current}/${total}] |${bar}| ${percent}% | Remaining: ${formatTime(remainingSec)} | media rx: ${mediaPacketsReceived} | interim: ${interimTranscripts} | finals: ${finalTranscripts}`;
     process.stdout.write('\r' + status);
 }
 
@@ -330,19 +331,18 @@ ws.on('message', (data) => {
             return;
         }
 
-        // Check if this is a transcription result
-        if (parsed.type === 'transcription-result' || parsed.event === 'transcription-result') {
-            // Only show final transcripts (skip interim)
-            if (!parsed.is_interim) {
-                finalTranscripts++;
-                const text = parsed.transcript?.map(t => t.text).join(' ') || '';
-                const participantId = parsed.participant?.id || 'unknown';
-                const speakerPrefix = parsed.speaker !== undefined ? `[Speaker ${parsed.speaker}] ` : '';
+        // Check if this is a transcription result (transcription-result or realtime-translation-result)
+        if (parsed.type === 'transcription-result' || parsed.type === 'realtime-translation-result' || parsed.event === 'transcription-result') {
+            const text = parsed.transcript?.map(t => t.text).join(' ') || '';
+            const participantId = parsed.participant?.id || 'unknown';
+            const speakerPrefix = parsed.speaker !== undefined ? `[Speaker ${parsed.speaker}] ` : '';
+            const lang = parsed.language ? ` (${parsed.language})` : '';
+            const marker = parsed.is_interim ? ' [interim]' : '';
+            if (parsed.is_interim) interimTranscripts++; else finalTranscripts++;
 
-                // Clear status line, print transcript, redraw status
-                process.stdout.write('\r' + ' '.repeat(120) + '\r');
-                console.log(`[${participantId}] ${speakerPrefix}${text}`);
-            }
+            // Clear status line, print transcript, redraw status
+            process.stdout.write('\r' + ' '.repeat(120) + '\r');
+            console.log(`[${participantId}]${lang}${marker} ${speakerPrefix}${text}`);
         }
     } catch (error) {
         // Not JSON or different format, ignore
@@ -356,7 +356,7 @@ ws.on('error', (error) => {
 
 ws.on('close', () => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
-    console.log(`Connection closed. Received ${mediaPacketsReceived} media packet(s), ${finalTranscripts} final transcript(s).`);
+    console.log(`Connection closed. Received ${mediaPacketsReceived} media packet(s), ${interimTranscripts} interim + ${finalTranscripts} final transcript(s).`);
 
     if (saveAudioDir && audioByTag.size > 0) {
         fs.mkdirSync(saveAudioDir, { recursive: true });
