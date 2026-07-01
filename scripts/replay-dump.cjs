@@ -11,17 +11,26 @@
  *                  - speed=0.5 plays at half speed (double the delays)
  *                  - speed=0 plays with no delay at all
  *   -H / --header - Add a custom HTTP header (can be repeated)
+ *   --translate[=<lang>] - For the /translate endpoint: on connect, send the control message that
+ *                  enables a target language (`start-translation`), so every source is translated
+ *                  into <lang> (default "es"). The endpoint returns translated `media` (Opus) plus
+ *                  `realtime-translation-result` transcripts. Received media packets are counted.
  *
  * Example:
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 0
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://..." -H "Authorization: Bearer token" -H "X-Tenant: foo"
+ *   node scripts/replay-dump.cjs resources/sample.jsonl "wss://host/translate?sendBack=true" 1 --translate=es
  *   OPENAI_CUSTOM_API_KEY=sk-... node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."
  */
 
 const fs = require('fs');
 const WebSocket = require('ws');
+
+// Counters for messages received back from the server.
+let mediaPacketsReceived = 0; // translated `media` (Opus) frames — the /translate audio return path
+let finalTranscripts = 0;
 
 // Helper function to format time as MM:SS or HH:MM:SS
 function formatTime(seconds) {
@@ -42,7 +51,7 @@ function formatTime(seconds) {
 function updateStatusLine(current, total, remainingSec) {
     const percent = Math.floor((current / total) * 100);
     const bar = '='.repeat(Math.floor(percent / 2)) + ' '.repeat(50 - Math.floor(percent / 2));
-    const status = `Progress: [${current}/${total}] |${bar}| ${percent}% | Remaining: ${formatTime(remainingSec)}`;
+    const status = `Progress: [${current}/${total}] |${bar}| ${percent}% | Remaining: ${formatTime(remainingSec)} | media rx: ${mediaPacketsReceived} | finals: ${finalTranscripts}`;
     process.stdout.write('\r' + status);
 }
 
@@ -54,10 +63,18 @@ const wsUrl = process.argv[3];
 const extraArgs = process.argv.slice(4);
 let speed = 1.0;
 const extraHeaders = {};
+let translateLang = null; // when set, send `start-translation` signaling for this target language
 
 for (let i = 0; i < extraArgs.length; i++) {
     const arg = extraArgs[i];
-    if (arg === '-H' || arg === '--header') {
+    if (arg === '--translate' || arg.startsWith('--translate=')) {
+        const eq = arg.indexOf('=');
+        translateLang = eq !== -1 ? arg.slice(eq + 1).trim() : 'es';
+        if (!translateLang) {
+            console.error('Error: --translate=<lang> requires a language (e.g. --translate=es)');
+            process.exit(1);
+        }
+    } else if (arg === '-H' || arg === '--header') {
         const header = extraArgs[++i];
         if (!header) {
             console.error(`Error: ${arg} requires a value`);
@@ -136,6 +153,15 @@ const ws = new WebSocket(wsUrl, wsOptions);
 
 ws.on('open', () => {
     console.log('Connected! Starting replay...');
+
+    // For /translate: enable a target language before sending media. `start-translation` applies the
+    // language to every source (the dev/replay path); the JVB uses `sources` events instead.
+    if (translateLang) {
+        const signaling = { event: 'start-translation', translation: { language: translateLang } };
+        ws.send(JSON.stringify(signaling));
+        console.log(`Enabled translation → ${translateLang}: ${JSON.stringify(signaling)}`);
+    }
+
     console.log(''); // Blank line for transcripts to appear above status
 
     // Calculate timing for replay
@@ -200,10 +226,17 @@ ws.on('message', (data) => {
     try {
         const parsed = JSON.parse(data.toString());
 
+        // Translated audio frames returned by /translate — count them (not printed individually).
+        if (parsed.event === 'media') {
+            mediaPacketsReceived++;
+            return;
+        }
+
         // Check if this is a transcription result
         if (parsed.type === 'transcription-result' || parsed.event === 'transcription-result') {
             // Only show final transcripts (skip interim)
             if (!parsed.is_interim) {
+                finalTranscripts++;
                 const text = parsed.transcript?.map(t => t.text).join(' ') || '';
                 const participantId = parsed.participant?.id || 'unknown';
                 const speakerPrefix = parsed.speaker !== undefined ? `[Speaker ${parsed.speaker}] ` : '';
@@ -225,5 +258,5 @@ ws.on('error', (error) => {
 
 ws.on('close', () => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
-    console.log('Connection closed');
+    console.log(`Connection closed. Received ${mediaPacketsReceived} media packet(s), ${finalTranscripts} final transcript(s).`);
 });
