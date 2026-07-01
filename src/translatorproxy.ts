@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { WebSocket } from 'ws';
 import { buildServerInfo } from './serverInfo';
 import logger from './logger';
+import { reportTranslationUsage } from './usage-reporter';
 
 export interface TranslatorProxyOptions {
 	/**
@@ -14,6 +15,12 @@ export interface TranslatorProxyOptions {
 	provider?: string;
 	/** Emit target-language transcripts from translation sessions. Default true. */
 	emitTranscripts?: boolean;
+	/**
+	 * Translation usage token (the JVB-forwarded `X-Translation-Token`). Threaded to
+	 * the usage reporter so reported translation usage can be attributed downstream.
+	 * Absent on the dev/replay `?lang=` path — usage is then not reported.
+	 */
+	translationToken?: string;
 }
 
 /**
@@ -282,6 +289,11 @@ export class TranslatorProxy extends EventEmitter {
 		const conn = new TranslatorConnection(inputSourceName, {
 			targetLanguage: language,
 			emitTranscripts: this.options.emitTranscripts,
+			onUsageReport: (durationSeconds, targetLanguage) => {
+				const token = this.options.translationToken;
+				if (!token) return;
+				reportTranslationUsage({ token, durationSeconds, targetLanguage });
+			},
 		});
 
 		conn.onClosed = () => {
