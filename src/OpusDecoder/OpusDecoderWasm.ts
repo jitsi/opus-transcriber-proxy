@@ -5,15 +5,16 @@
 // submodules and compiled into the dist files, may have different
 // licensing terms."
 
-// Provide Node.js globals for emscripten module.  HACK.
-if (typeof globalThis.__filename === 'undefined') {
-	globalThis.__filename = './opus-decoder.js';
+// Provide Node.js globals the emscripten glue may reference. HACK. Cast because these aren't in the
+// lib typings (and don't exist in a Worker); harmless where already defined.
+const g = globalThis as any;
+if (typeof g.__filename === 'undefined') {
+	g.__filename = './opus-decoder.js';
 }
-if (typeof globalThis.__dirname === 'undefined') {
-	globalThis.__dirname = '.';
+if (typeof g.__dirname === 'undefined') {
+	g.__dirname = '.';
 }
 
-import logger from '../logger';
 import type { DecodeError } from '../AudioDecoder';
 import type {
 	IOpusDecoder,
@@ -172,7 +173,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		const wasmInstance = await OpusDecoderWasm.getOpusModule();
 		this.wasm = wasmInstance;
 
-		logger.debug('OpusDecoder WASM module loaded');
+		console.debug('OpusDecoder WASM module loaded');
 
 		this._input = this.allocateTypedArray(this._inputSize, Uint8Array);
 
@@ -182,7 +183,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder < 0) {
 			const error = `libopus opus_decoder_create failed: ${OpusDecoderWasm.errors.get(this._decoder) || 'Unknown Error'}`;
-			logger.error(error);
+			console.error(error);
 			throw Error(error);
 		}
 	}
@@ -243,7 +244,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder === undefined) {
 			this.addError(errors, 'Decoder freed or not initialized', 0, 0, 0, 0);
-			logger.error('Decoder freed or not initialized');
+			console.error('Decoder freed or not initialized');
 			return {
 				errors,
 				audioData: new Uint8Array(0),
@@ -267,7 +268,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		if (samplesDecoded < 0) {
 			const error = `libopus ${samplesDecoded} ${OpusDecoderWasm.errors.get(samplesDecoded) || 'Unknown Error'}`;
 
-			logger.error(error);
+			console.error(error);
 
 			this.addError(errors, error, opusFrame.length, this._frameNumber, this._inputBytes, this._outputSamples);
 
@@ -298,7 +299,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder === undefined) {
 			this.addError(errors, 'Decoder freed or not initialized', 0, 0, 0, 0);
-			logger.error('Decoder freed or not initialized');
+			console.error('Decoder freed or not initialized');
 			return {
 				errors,
 				audioData: new Uint8Array(0),
@@ -327,7 +328,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		if (samplesDecoded < 0) {
 			const error = `libopus ${samplesDecoded} ${OpusDecoderWasm.errors.get(samplesDecoded) || 'Unknown Error'}`;
 
-			logger.error(error);
+			console.error(error);
 
 			this.addError(errors, error, inLength, this._frameNumber, this._inputBytes, this._outputSamples);
 

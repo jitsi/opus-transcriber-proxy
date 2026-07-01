@@ -1,4 +1,5 @@
 import { RtpTimestamper } from './RtpTimestamper';
+import { bytesToBase64, base64ToBytes } from './translate/base64';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
@@ -17,16 +18,12 @@ const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
 // ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
 const MAX_PENDING_OPUS_FRAMES = 500;
 
-// Buffer.from over a view into a resizable ArrayBuffer can throw / read stale bytes if the buffer is
-// resized; copy into a fresh (non-resizable) array first in that case. Otherwise encode directly.
 function safeToBase64(array: Uint8Array): string {
-	const isResizable = array.buffer instanceof ArrayBuffer && (array.buffer as any).resizable;
-	const safe = isResizable ? new Uint8Array(array) : array;
-	return Buffer.from(safe).toString('base64');
+	return bytesToBase64(array);
 }
 
 function fromBase64(str: string): Uint8Array {
-	return Buffer.from(str, 'base64');
+	return base64ToBytes(str);
 }
 
 // Threshold for "this PCM chunk contains speech, not silence". Int16 PCM
@@ -239,11 +236,11 @@ export class TranslatorConnection {
 		try {
 			const apiKey = this.runtime.config.openaiApiKey;
 			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(this.runtime.config.translationModel)}`;
-			// Provide both auth forms; each runtime uses what it supports — Node uses the OpenAI
-			// subprotocol, a Worker (fetch-upgrade) can set the Authorization header instead.
+			// The runtime applies the bearer token the way its transport allows (Node → subprotocol,
+			// Worker → Authorization header); only one form is sent (OpenAI rejects both).
 			const openaiWs = this.runtime.createOutboundWebSocket(wsUrl, {
-				protocols: ['realtime', `openai-insecure-api-key.${apiKey}`],
-				headers: { Authorization: `Bearer ${apiKey}` },
+				protocols: ['realtime'],
+				bearerToken: apiKey,
 			});
 
 			this.log(`Opening OpenAI WebSocket for translation to ${this.options.targetLanguage}`);
@@ -687,7 +684,7 @@ export class TranslatorConnection {
 		// Conference.handleMediaMessage reinterprets `media.chunk` as that 16-bit RTP sequence number.
 		const { timestamp, sequenceNumber: rtpSequenceNumber } = this.rtpTimestamper.nextFrameTimestamp();
 
-		const payload = Buffer.from(opusFrame).toString('base64');
+		const payload = bytesToBase64(opusFrame);
 
 		// The mediajson wire-envelope sequence number is assigned by the proxy (per-WebSocket), not here.
 		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);

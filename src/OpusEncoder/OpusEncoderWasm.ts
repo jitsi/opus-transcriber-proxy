@@ -1,4 +1,3 @@
-import logger from '../logger';
 import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
 /**
@@ -89,9 +88,9 @@ export class OpusEncoderWasm implements IOpusEncoder {
 		// opus_encoder_ctl returns OPUS_OK (0) on success, negative on error. A failure here means the
 		// encoder silently keeps the codec default, so log it rather than swallowing it.
 		const bitrateRet = this.module._opus_frame_encoder_set_bitrate(this.ctx, this.config.bitrate);
-		if (bitrateRet < 0) logger.warn(`OpusEncoder: set_bitrate(${this.config.bitrate}) failed (${bitrateRet})`);
+		if (bitrateRet < 0) console.warn(`OpusEncoder: set_bitrate(${this.config.bitrate}) failed (${bitrateRet})`);
 		const complexityRet = this.module._opus_frame_encoder_set_complexity(this.ctx, this.config.complexity);
-		if (complexityRet < 0) logger.warn(`OpusEncoder: set_complexity(${this.config.complexity}) failed (${complexityRet})`);
+		if (complexityRet < 0) console.warn(`OpusEncoder: set_complexity(${this.config.complexity}) failed (${complexityRet})`);
 
 		const maxPcmBytes = this.frameSize * this.config.channels * 2; // 16-bit samples
 		this.pcmBuffer = new Uint8Array(this.module.HEAPU8.buffer, this.module._malloc(maxPcmBytes), maxPcmBytes);

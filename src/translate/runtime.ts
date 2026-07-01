@@ -33,10 +33,15 @@ export interface IWebSocket {
 
 /** Options for opening the outbound WebSocket to the OpenAI realtime endpoint. */
 export interface OutboundWebSocketOptions {
-	/** Subprotocols (Node path uses these for the OpenAI auth subprotocol). */
+	/** Required subprotocols (e.g. `realtime`), NOT including any auth. */
 	protocols?: string[];
-	/** Request headers (Worker path can set Authorization directly instead of the subprotocol hack). */
-	headers?: Record<string, string>;
+	/**
+	 * Bearer token for auth. Each runtime applies it the way its transport allows — Node via the
+	 * `openai-insecure-api-key.<token>` subprotocol (the global WebSocket can't set headers), a Worker
+	 * via the `Authorization: Bearer` header on its fetch-upgrade. Only one form is sent, never both
+	 * (OpenAI rejects receiving both).
+	 */
+	bearerToken?: string;
 }
 
 /** Effective translation configuration, resolved by each runtime from its own environment. */

@@ -2,10 +2,14 @@
 
 import type { TranscriberContainer, TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
 import type { ContainerCoordinator } from './ContainerCoordinator';
+import type { TranslatorDO } from './TranslatorDO';
 
 export interface Env {
 	// Durable Object binding for the container
 	TRANSCRIBER: DurableObjectNamespace<TranscriberContainer>;
+
+	// Durable Object hosting the /translate pipeline in the Worker.
+	TRANSLATOR_DO: DurableObjectNamespace<TranslatorDO>;
 
 	// Dispatcher Durable Object (for WebSocket connection - preferred)
 	// This avoids the 1000 subrequest limit by using WebSocket messages

@@ -600,6 +600,17 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 
+		// Route /translate entirely to the Worker-hosted TranslatorDO (no container). Transcribe stays
+		// on the container path below. One DO per session (sessionId), else a per-connection id.
+		if (url.pathname.endsWith('/translate')) {
+			if (request.headers.get('Upgrade') !== 'websocket') {
+				return new Response('Expected WebSocket upgrade', { status: 426 });
+			}
+			const sessionId = url.searchParams.get('sessionId') || crypto.randomUUID();
+			const id = env.TRANSLATOR_DO.idFromName(sessionId);
+			return env.TRANSLATOR_DO.get(id).fetch(request);
+		}
+
 		// Handle stats endpoint for monitoring
 		if (url.pathname === '/stats' && request.method === 'GET') {
 			if (env.ROUTING_MODE === 'autoscale') {
@@ -708,3 +719,4 @@ export default {
 
 // Export the ContainerCoordinator Durable Object for auto-scaling
 export { ContainerCoordinator } from './ContainerCoordinator';
+export { TranslatorDO } from './TranslatorDO';
