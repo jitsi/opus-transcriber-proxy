@@ -48,7 +48,6 @@ export interface TranslatorProxyOptions {
 export class TranslatorProxy extends EventEmitter {
 	private readonly ws: WebSocket;
 	private options: TranslatorProxyOptions;
-	private readonly translationToken?: string;
 
 	/**
 	 * input source name -> (language -> connection). Connections created from `sources`
@@ -71,7 +70,6 @@ export class TranslatorProxy extends EventEmitter {
 		super({ captureRejections: true });
 		this.ws = ws;
 		this.options = options;
-		this.translationToken = options.translationToken;
 		this.connections = new Map<string, Map<string, TranslatorConnection>>();
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 
@@ -292,8 +290,9 @@ export class TranslatorProxy extends EventEmitter {
 			targetLanguage: language,
 			emitTranscripts: this.options.emitTranscripts,
 			onUsageReport: (durationSeconds, targetLanguage) => {
-				if (!this.translationToken) return;
-				reportTranslationUsage({ token: this.translationToken, durationSeconds, targetLanguage });
+				const token = this.options.translationToken;
+				if (!token) return;
+				reportTranslationUsage({ token, durationSeconds, targetLanguage });
 			},
 		});
 

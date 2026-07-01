@@ -465,8 +465,9 @@ See README.md for complete list. Key ones:
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
+- `TRANSLATION_USAGE_URL` - Endpoint for reporting `/translate` audio duration usage (disabled if empty). Each translated direction's duration is POSTed on close (`src/usage-reporter.ts`), batched 50 events / 1000 ms, authenticated with the connection's forwarded `X-Translation-Token` bearer.
 
-The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`.
+The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_USAGE_URL` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`.
 
 ### `/translate` transcript messages
 

@@ -75,8 +75,10 @@ server.on('upgrade', (request, socket, head) => {
 
 	// Translation usage token, forwarded by the JVB as an HTTP header on the connect
 	// (originating from prosody room metadata). Used only to attribute reported
-	// translation usage; absent on the dev/replay path.
-	const translationToken = request.headers['x-translation-token'] as string | undefined;
+	// translation usage; absent on the dev/replay path. Node types headers as
+	// string | string[] | undefined; collapse the (unused here) repeated-header case.
+	const rawTranslationToken = request.headers['x-translation-token'];
+	const translationToken = Array.isArray(rawTranslationToken) ? rawTranslationToken[0] : rawTranslationToken;
 
 	// Handle the /translate endpoint separately (speech-to-speech translation).
 	if (parameters.url.pathname.endsWith('/translate')) {

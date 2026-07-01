@@ -24,7 +24,7 @@ export interface TranslationUsageEvent {
 	token: string;
 	/** Seconds of audio translated for this direction. */
 	durationSeconds: number;
-	/** ISO target language (for logging only; the endpoint bills on duration). */
+	/** ISO target language — local logging only; NOT included in the POST body. */
 	targetLanguage: string;
 }
 
@@ -37,8 +37,9 @@ let warnedUnconfigured = false;
 
 /**
  * Queue one direction's translated duration for reporting. Cheap and synchronous;
- * the actual POST happens on the next flush. Silently ignores events with no token
- * (e.g. the dev/replay `?lang=` path) or non-positive duration.
+ * the actual POST happens on the next flush. Events with no token (e.g. the
+ * dev/replay `?lang=` path) or non-positive duration are dropped silently. When a
+ * token IS present but TRANSLATION_USAGE_URL is unset, we warn once and drop.
  */
 export function reportTranslationUsage(event: TranslationUsageEvent): void {
 	if (!config.translationUsage.url) {
@@ -59,6 +60,16 @@ export function reportTranslationUsage(event: TranslationUsageEvent): void {
 		// Don't keep the process alive solely for a pending flush.
 		flushTimer.unref?.();
 	}
+}
+
+/** Test-only: clear module-level state between cases. */
+export function _resetForTesting(): void {
+	if (flushTimer) {
+		clearTimeout(flushTimer);
+		flushTimer = null;
+	}
+	buffer = [];
+	warnedUnconfigured = false;
 }
 
 /** Flush all buffered events now (used on a timer and at shutdown). */
@@ -83,15 +94,23 @@ export async function flushTranslationUsage(): Promise<void> {
 	await Promise.all([...byToken].map(([token, events]) => postBatch(token, events)));
 }
 
+// Bound each POST so a slow/unreachable endpoint can't stall the process — notably
+// at SIGTERM, where flushTranslationUsage() is awaited during shutdown.
+const POST_TIMEOUT_MS = 5000;
+
 async function postBatch(token: string, events: TranslationUsageEvent[]): Promise<void> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
 	try {
 		const response = await fetch(config.translationUsage.url, {
 			method: 'POST',
+			signal: controller.signal,
 			headers: {
 				'Content-Type': 'application/json',
 				Authorization: `Bearer ${token}`,
 			},
 			body: JSON.stringify({
+				// Only duration_seconds is sent; targetLanguage is local-only (see the interface).
 				events: events.map((e) => ({ duration_seconds: e.durationSeconds })),
 			}),
 		});
@@ -103,5 +122,7 @@ async function postBatch(token: string, events: TranslationUsageEvent[]): Promis
 		logger.debug(`reported ${events.length} translation usage event(s), ${totalSeconds.toFixed(1)}s total`);
 	} catch (err) {
 		logger.error('translation usage report error:', err instanceof Error ? err.message : String(err));
+	} finally {
+		clearTimeout(timeout);
 	}
 }

@@ -127,6 +127,7 @@ See [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) for details.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OTLP_ENDPOINT` | (empty) | OTLP HTTP endpoint (disabled if empty) |
+| `TRANSLATION_USAGE_URL` | (empty) | Endpoint for reporting `/translate` audio duration usage (disabled if empty) |
 | `OTLP_ENV` | (empty) | Environment label |
 | `OTLP_RESOURCE_ATTRIBUTES` | `{}` | Additional resource attributes (JSON) |
 | `OTLP_HEADERS` | `{}` | Auth headers (JSON) |

@@ -93,6 +93,8 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		OTLP_ENV: env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
 		OTLP_HEADERS: env.OTLP_HEADERS || '',
+		// Only forwarded when set; unset disables translation usage reporting in the container.
+		...(env.TRANSLATION_USAGE_URL && { TRANSLATION_USAGE_URL: env.TRANSLATION_USAGE_URL }),
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};
