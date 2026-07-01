@@ -32,8 +32,12 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			};
 		},
 		createOutboundWebSocket(url: string, options?: OutboundWebSocketOptions): IWebSocket {
-			// Node uses the OpenAI auth subprotocol (the global WebSocket can't set request headers).
-			return new WebSocket(url, options?.protocols) as unknown as IWebSocket;
+			// Node authenticates via the OpenAI subprotocol (the global WebSocket can't set headers).
+			const protocols = [...(options?.protocols ?? [])];
+			if (options?.bearerToken) {
+				protocols.push(`openai-insecure-api-key.${options.bearerToken}`);
+			}
+			return new WebSocket(url, protocols) as unknown as IWebSocket;
 		},
 		createOpusDecoder(options) {
 			return new OpusDecoder<24000>(options);

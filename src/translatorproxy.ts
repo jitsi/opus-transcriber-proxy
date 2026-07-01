@@ -1,5 +1,5 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
-import { EventEmitter } from 'node:events';
+import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 
 export interface TranslatorProxyOptions {
@@ -34,7 +34,7 @@ export interface TranslatorProxyOptions {
  * language to every incoming source (conference-wide) and tag returned audio as
  * `{inputSource}.{language}`.
  */
-export class TranslatorProxy extends EventEmitter {
+export class TranslatorProxy extends Emitter {
 	private readonly ws: IWebSocket;
 	private options: TranslatorProxyOptions;
 	private readonly runtime: TranslationRuntime;
@@ -57,7 +57,7 @@ export class TranslatorProxy extends EventEmitter {
 	private envelopeSequenceNumber = 0;
 
 	constructor(ws: IWebSocket, options: TranslatorProxyOptions, runtime: TranslationRuntime) {
-		super({ captureRejections: true });
+		super();
 		this.ws = ws;
 		this.options = options;
 		this.runtime = runtime;
