@@ -1,5 +1,6 @@
 import { Container, getContainer } from '@cloudflare/containers';
 import type { Env } from './env';
+import { handleTranslate } from './handleTranslate';
 
 /**
  * Dispatcher message format for transcription events
@@ -600,15 +601,11 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 
-		// Route /translate entirely to the Worker-hosted TranslatorDO (no container). Transcribe stays
-		// on the container path below. One DO per session (sessionId), else a per-connection id.
+		// Handle /translate entirely in this Worker (no container). The accepted WebSocket keeps the
+		// Worker alive for the session; the bridge's pings keep it active. Transcribe stays on the
+		// container path below (Worker outbound-connection limits — translate's fan-out is bounded).
 		if (url.pathname.endsWith('/translate')) {
-			if (request.headers.get('Upgrade') !== 'websocket') {
-				return new Response('Expected WebSocket upgrade', { status: 426 });
-			}
-			const sessionId = url.searchParams.get('sessionId') || crypto.randomUUID();
-			const id = env.TRANSLATOR_DO.idFromName(sessionId);
-			return env.TRANSLATOR_DO.get(id).fetch(request);
+			return handleTranslate(request, env);
 		}
 
 		// Handle stats endpoint for monitoring
@@ -719,4 +716,3 @@ export default {
 
 // Export the ContainerCoordinator Durable Object for auto-scaling
 export { ContainerCoordinator } from './ContainerCoordinator';
-export { TranslatorDO } from './TranslatorDO';

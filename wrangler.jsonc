@@ -2,8 +2,8 @@
 	"name": "opus-transcriber-proxy",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-01-09",
-	// nodejs_compat: the Worker-hosted /translate path (TranslatorDO) runs the Emscripten Opus glue,
-	// which expects some Node globals.
+	// nodejs_compat: the Worker-hosted /translate path runs the Emscripten Opus glue, which expects
+	// some Node globals.
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"enabled": true
@@ -27,10 +27,6 @@
 			{
 				"class_name": "TranscriberContainer",
 				"name": "TRANSCRIBER"
-			},
-			{
-				"class_name": "TranslatorDO",
-				"name": "TRANSLATOR_DO"
 			}
 			// Uncomment to enable WebSocket connection to Dispatcher DO (avoids subrequest limit)
 			// {
@@ -49,10 +45,6 @@
 			"tag": "v2",
 			"deleted_classes": ["Transcriptionator"],
 			"new_sqlite_classes": ["TranscriberContainer"]
-		},
-		{
-			"tag": "v3",
-			"new_sqlite_classes": ["TranslatorDO"]
 		}
 	],
 	// Environment variables - add your secrets using wrangler secret put
