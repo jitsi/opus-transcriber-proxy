@@ -5,6 +5,8 @@ import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
 import { normalizeTargetLanguage } from './TranslatorConnection';
+import { createNodeTranslationRuntime } from './translate/nodeRuntime';
+import type { IWebSocket } from './translate/runtime';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -302,11 +304,11 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		}
 	}
 
-	const translateSession = new TranslatorProxy(ws, {
-		initialLanguages,
-		provider: parameters.provider,
-		emitTranscripts: config.translation.transcripts,
-	});
+	const translateSession = new TranslatorProxy(
+		ws as unknown as IWebSocket,
+		{ initialLanguages, provider: parameters.provider },
+		createNodeTranslationRuntime(),
+	);
 
 	translateSession.on('closed', () => {
 		if (ws.readyState === ws.OPEN) {
