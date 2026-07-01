@@ -10,6 +10,8 @@
 		"build:wasm": "make -j$(node -e 'console.log(require(\"os\").cpus().length)')  && mv dist/opus-decoder.js dist/opus-decoder.cjs && mv dist/opus-encoder.js dist/opus-encoder.cjs",
 		"build:native": "node-gyp rebuild",
 		"build:ts": "tsc",
+		"typecheck:worker": "tsc --noEmit --project worker/tsconfig.json",
+		"check:worker-safe": "node scripts/check-worker-safe.mjs",
 		"build:bundle": "node build.mjs",
 		"build": "npm run build:wasm && npm run build:native && npm run build:bundle",
 		"dev": "npm run build:wasm && tsx watch src/server.ts",
