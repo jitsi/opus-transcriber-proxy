@@ -44,6 +44,10 @@ export class OpusDecoder<SampleRate extends OpusDecoderSampleRate | undefined = 
 			this.impl = new OpusDecoderNative<SampleRate>(options);
 		} else {
 			const { OpusDecoderWasm } = await import('./OpusDecoderWasm');
+			// Register the Node (fs-loaded) WASM binding; kept in a separate dynamically-imported module
+			// so a native deployment never pulls `fs`/the glue into its graph.
+			const { registerNodeOpusWasm } = await import('./wasmSourceNode');
+			registerNodeOpusWasm();
 			this.impl = new OpusDecoderWasm<SampleRate>(options);
 		}
 		await this.impl.ready;
