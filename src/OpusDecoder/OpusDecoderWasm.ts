@@ -13,10 +13,6 @@ if (typeof globalThis.__dirname === 'undefined') {
 	globalThis.__dirname = '.';
 }
 
-import OpusDecoderModule from '../../dist/opus-decoder.cjs';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import logger from '../logger';
 import type { DecodeError } from '../AudioDecoder';
 import type {
@@ -26,12 +22,23 @@ import type {
 	OpusDecoderSampleRate,
 } from './opusTypes';
 
-// Load WASM module from file system for Node.js
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const wasmPath = path.join(__dirname, '../../dist/opus-decoder.wasm');
-const wasmBuffer = fs.readFileSync(wasmPath);
-const wasm = new WebAssembly.Module(wasmBuffer);
+/**
+ * The Emscripten module factory (the generated `opus-decoder.cjs` glue) and the compiled
+ * `WebAssembly.Module`. How these are obtained is host-specific (Node reads them from the filesystem,
+ * a Worker imports them), so they are injected via {@link provideDecoderWasm} rather than loaded here
+ * — this keeps the shared decode logic free of `fs` and runnable in a Cloudflare Worker.
+ */
+export type EmscriptenModuleFactory = (opts: {
+	instantiateWasm: (info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => WebAssembly.Exports;
+}) => Promise<any>;
+
+let glueFactory: EmscriptenModuleFactory | undefined;
+let wasm: WebAssembly.Module | undefined;
+
+export function provideDecoderWasm(factory: EmscriptenModuleFactory, module: WebAssembly.Module): void {
+	glueFactory = factory;
+	wasm = module;
+}
 
 interface OpusWasmInstance {
 	opus_frame_decoder_create: (sampleRate: number, channels: number) => number;
@@ -72,35 +79,48 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		[-7, 'OPUS_ALLOC_FAIL: Memory allocation has failed'],
 	]);
 
-	static opusModule = new Promise<OpusWasmInstance>((resolve, reject) => {
-		OpusDecoderModule({
-			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				try {
-					let instance = new WebAssembly.Instance(wasm, info);
-					receive(instance);
-					return instance.exports;
-				} catch (error) {
-					reject(error);
-					throw error;
-				}
-			},
-		})
-			.then((module: any) => {
-				resolve({
-					opus_frame_decoder_create: module._opus_frame_decoder_create,
-					opus_frame_decoder_destroy: module._opus_frame_decoder_destroy,
-					opus_frame_decoder_reset: module._opus_frame_decoder_reset,
-					opus_frame_decode: module._opus_frame_decode,
-					malloc: module._malloc,
-					free: module._free,
-					HEAP: module.wasmMemory.buffer,
-					module,
-				});
-			})
-			.catch((error) => {
-				reject(error);
+	// Built lazily on first decoder creation from the injected binding (see provideDecoderWasm), so
+	// importing this module has no side effects and doesn't require the binding until it's actually used.
+	private static _opusModule?: Promise<OpusWasmInstance>;
+
+	static getOpusModule(): Promise<OpusWasmInstance> {
+		if (this._opusModule === undefined) {
+			if (glueFactory === undefined || wasm === undefined) {
+				return Promise.reject(new Error('Opus WASM decoder binding not provided (call provideDecoderWasm)'));
+			}
+			const module = wasm;
+			this._opusModule = new Promise<OpusWasmInstance>((resolve, reject) => {
+				glueFactory!({
+					instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
+						try {
+							let instance = new WebAssembly.Instance(module, info);
+							receive(instance);
+							return instance.exports;
+						} catch (error) {
+							reject(error);
+							throw error;
+						}
+					},
+				})
+					.then((m: any) => {
+						resolve({
+							opus_frame_decoder_create: m._opus_frame_decoder_create,
+							opus_frame_decoder_destroy: m._opus_frame_decoder_destroy,
+							opus_frame_decoder_reset: m._opus_frame_decoder_reset,
+							opus_frame_decode: m._opus_frame_decode,
+							malloc: m._malloc,
+							free: m._free,
+							HEAP: m.wasmMemory.buffer,
+							module: m,
+						});
+					})
+					.catch((error) => {
+						reject(error);
+					});
 			});
-	});
+		}
+		return this._opusModule;
+	}
 
 	private _sampleRate: OpusDecoderSampleRate;
 	private _channels: number;
@@ -149,7 +169,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 	}
 
 	async _init(): Promise<void> {
-		const wasmInstance = await OpusDecoderWasm.opusModule;
+		const wasmInstance = await OpusDecoderWasm.getOpusModule();
 		this.wasm = wasmInstance;
 
 		logger.debug('OpusDecoder WASM module loaded');

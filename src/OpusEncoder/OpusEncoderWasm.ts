@@ -1,15 +1,22 @@
-import OpusEncoderModuleFactory from '../../dist/opus-encoder.cjs';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import logger from '../logger';
 import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const wasmPath = path.join(__dirname, '../../dist/opus-encoder.wasm');
-const wasmBuffer = fs.readFileSync(wasmPath);
-const wasm = new WebAssembly.Module(wasmBuffer);
+/**
+ * The Emscripten module factory (`opus-encoder.cjs` glue) + compiled `WebAssembly.Module`, injected
+ * via {@link provideEncoderWasm} — Node reads them from disk, a Worker imports them. Keeps this
+ * shared encode logic free of `fs` so it can run in a Cloudflare Worker.
+ */
+export type EmscriptenModuleFactory = (opts: {
+	instantiateWasm: (info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => WebAssembly.Exports;
+}) => Promise<any>;
+
+let glueFactory: EmscriptenModuleFactory | undefined;
+let wasm: WebAssembly.Module | undefined;
+
+export function provideEncoderWasm(factory: EmscriptenModuleFactory, module: WebAssembly.Module): void {
+	glueFactory = factory;
+	wasm = module;
+}
 
 // Shared zero-length buffer for "no leftover input" — never written to, so sharing is safe.
 const EMPTY_INPUT = new Uint8Array(0);
@@ -57,9 +64,13 @@ export class OpusEncoderWasm implements IOpusEncoder {
 	}
 
 	private async init(): Promise<void> {
-		this.module = (await OpusEncoderModuleFactory({
+		if (glueFactory === undefined || wasm === undefined) {
+			throw new Error('Opus WASM encoder binding not provided (call provideEncoderWasm)');
+		}
+		const module = wasm;
+		this.module = (await glueFactory({
 			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				const instance = new WebAssembly.Instance(wasm, info);
+				const instance = new WebAssembly.Instance(module, info);
 				receive(instance);
 				return instance.exports;
 			},
