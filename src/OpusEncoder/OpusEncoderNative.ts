@@ -1,8 +1,9 @@
-// Low-level Opus encoder. Wraps the native libopus addon (opus_native.node).
-//
-// Historically this was an Emscripten/WASM wrapper; it now binds directly to
-// native libopus via N-API. The public surface (constructor config, `ready`,
-// `encodeFrame`, `getFrameSize`, `getFrameSizeBytes`, `free`) is unchanged.
+// Low-level Opus encoder. Binds directly to native libopus via N-API
+// (opus_native.node). This is the `native` backend; OpusEncoderWasm is the
+// Emscripten/WASM sibling. Both implement IOpusEncoder, and OpusEncoder picks
+// one at runtime via OPUS_BACKEND. The public surface (constructor config,
+// `ready`, `encodeFrame`, `getFrameSize`, `getFrameSizeBytes`, `free`) is
+// identical across the two so callers are backend-agnostic.
 
 import { nativeOpus, OPUS_APPLICATION, type NativeOpusEncoder } from '../OpusDecoder/nativeOpus';
 import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';

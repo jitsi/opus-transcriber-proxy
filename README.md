@@ -284,7 +284,7 @@ node scripts/replay-dump.cjs media.jsonl "ws://localhost:8080/transcribe?sendBac
 ### Mix Recorded Audio
 
 ```bash
-npm run mix-audio /tmp/session123/media.jsonl output.wav
+npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 ```
 
 See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md).

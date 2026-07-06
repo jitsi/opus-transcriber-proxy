@@ -3,35 +3,24 @@
 /**
  * Decode opus audio from media.jsonl and mix into a WAV file
  *
- * Usage: node scripts/mix-audio.mjs [input.jsonl] [output.wav]
+ * Usage: npm run mix-audio -- [input.jsonl] [output.wav]
  *
  * Reads media.jsonl containing base64-encoded opus packets,
  * decodes them, mixes multiple streams, and outputs a WAV file.
  */
 
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
+// Decode via the OpusDecoder facade, which selects the native (libopus addon) or
+// WASM backend at runtime per OPUS_BACKEND (config.opus.backend). This script must
+// therefore run under tsx (see the `mix-audio` npm script) so the TS facade and the
+// selected backend load. Build the backend you use first: `npm run build:native`
+// (OPUS_BACKEND=native) or `npm run build:wasm` (default).
+import { OpusDecoder } from '../src/OpusDecoder/OpusDecoder.ts';
 
-// Load the native Opus addon (compiled by `npm run build:native`). The actual
-// run is deferred to a microtask so the top-level consts below are initialized
-// before main() executes.
-let nativeOpus;
-try {
-	nativeOpus = require(path.join(__dirname, '../build/Release/opus_native.node'));
-} catch (error) {
-	console.error('Failed to load the native Opus addon:', error);
-	console.error('\nBuild it first:');
-	console.error('  npm run build:native');
-	process.exit(1);
-}
-
-Promise.resolve().then(() => main(nativeOpus)).catch((error) => {
+// Deferred to a microtask so the module-level consts below are initialized
+// before main() runs.
+Promise.resolve().then(main).catch((error) => {
 	console.error('mix-audio failed:', error);
 	process.exit(1);
 });
@@ -42,7 +31,7 @@ const BYTES_PER_SAMPLE = 2; // 16-bit PCM
 const MS_PER_PACKET = 20;
 const SAMPLES_PER_PACKET = (SAMPLE_RATE * MS_PER_PACKET) / 1000; // 480 samples at 24kHz
 
-async function main(nativeOpus) {
+async function main() {
 	const inputFile = process.argv[2] || 'media.jsonl';
 	const outputFile = process.argv[3] || 'output.wav';
 
@@ -109,9 +98,10 @@ async function main(nativeOpus) {
 		stream.packets.sort((a, b) => a.timestamp - b.timestamp);
 	}
 
-	// Create opus decoder using the native addon
-	console.log('Initializing Opus decoder...');
-	const decoder = createOpusDecoder(nativeOpus, SAMPLE_RATE, CHANNELS);
+	// Create opus decoder via the OPUS_BACKEND-selected backend.
+	console.log(`Initializing Opus decoder (backend: ${process.env.OPUS_BACKEND || 'wasm'})...`);
+	const decoder = new OpusDecoder({ sampleRate: SAMPLE_RATE, channels: CHANNELS });
+	await decoder.ready;
 
 	// Decode all packets
 	console.log('Decoding audio packets...');
@@ -147,7 +137,7 @@ async function main(nativeOpus) {
 	}
 
 	// Free decoder
-	freeOpusDecoder(decoder);
+	decoder.free();
 
 	// Find global min/max timestamps
 	let globalMinTimestamp = Infinity;
@@ -214,23 +204,12 @@ async function main(nativeOpus) {
 	console.log(`Done! Output file size: ${fileSizeMB} MB`);
 }
 
-function createOpusDecoder(nativeOpus, sampleRate, channels) {
-	const native = new nativeOpus.OpusDecoder(sampleRate, channels);
-	// Max output samples per channel for a single packet: 120 ms at the output rate.
-	const maxFrameSize = Math.round(0.12 * sampleRate);
-	return { native, channels, sampleRate, maxFrameSize };
-}
-
 function decodeOpusFrame(decoder, opusData) {
-	// Native decode returns a Buffer of little-endian interleaved int16 PCM.
-	const pcm = decoder.native.decode(Buffer.from(opusData), decoder.maxFrameSize, false);
-	const samples = Math.floor(pcm.length / 2);
-	// Copy into a standalone Int16Array (don't alias the addon-owned buffer).
-	return Int16Array.from(new Int16Array(pcm.buffer, pcm.byteOffset, samples));
-}
-
-function freeOpusDecoder(decoder) {
-	decoder.native.destroy();
+	// decodeFrame returns audioData as little-endian interleaved int16 PCM bytes.
+	const { audioData } = decoder.decodeFrame(opusData);
+	const samples = Math.floor(audioData.byteLength / 2);
+	// Copy into a standalone Int16Array (don't alias the backend-owned buffer).
+	return Int16Array.from(new Int16Array(audioData.buffer, audioData.byteOffset, samples));
 }
 
 function writeWavFile(filename, pcmData, sampleRate, channels) {

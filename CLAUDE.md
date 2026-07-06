@@ -420,8 +420,9 @@ node scripts/replay-dump.cjs /tmp/session123/media.jsonl "ws://localhost:8080/tr
 
 ### Mix Audio from Session
 ```bash
-npm run mix-audio /tmp/session123/media.jsonl output.wav
+npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 # Mixes all participant audio streams into a single WAV file
+# Decodes via the OPUS_BACKEND-selected backend (default wasm); prefix OPUS_BACKEND=native to use the addon
 ```
 
 ## WebSocket Protocol

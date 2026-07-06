@@ -1,9 +1,9 @@
-// Low-level Opus decoder. Wraps the native libopus addon (opus_native.node).
-//
-// Historically this was an Emscripten/WASM wrapper; it now binds directly to
-// native libopus via N-API. The public surface (constructor options, `ready`,
-// `decodeFrame`, `conceal`, `reset`, `free` and the `OpusDecodedAudio` shape)
-// is unchanged so OpusAudioDecoder and TranslatorConnection are unaffected.
+// Low-level Opus decoder. Binds directly to native libopus via N-API
+// (opus_native.node). This is the `native` backend; OpusDecoderWasm is the
+// Emscripten/WASM sibling. Both implement IOpusDecoder, and OpusDecoder picks
+// one at runtime via OPUS_BACKEND. The public surface (constructor options,
+// `ready`, `decodeFrame`, `conceal`, `reset`, `free` and the `OpusDecodedAudio`
+// shape) is identical across the two so callers are backend-agnostic.
 
 import logger from '../logger';
 import type { DecodeError } from '../AudioDecoder';
