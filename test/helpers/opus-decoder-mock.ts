@@ -1,6 +1,6 @@
 /**
  * OpusDecoder mock for testing
- * Mocks the WASM-based OpusDecoder without loading the actual WASM module
+ * Mocks the native-backed OpusDecoder without loading the compiled addon
  */
 
 import type {

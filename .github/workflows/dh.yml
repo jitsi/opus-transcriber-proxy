@@ -24,6 +24,8 @@ jobs:
     build:
         runs-on: "ubuntu-latest"
         steps:
+            # submodules are required: the WASM build (below) and the in-image
+            # native addon build both compile libopus from src/OpusDecoder/opus.
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
               with:
@@ -57,14 +59,15 @@ jobs:
                 echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
                 echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
 
+            # The WASM artifacts are architecture-independent and are built here on the
+            # runner (native amd64, no emulation), then copied into the image. The native
+            # addon and the server bundle are built per-arch inside the Dockerfile, so
+            # there is no host-side bundle step. See the Dockerfile header for why WASM
+            # isn't built in-image.
             - name: Build WASM modules
               run: |
                 source "$EMSDK/emsdk_env.sh"
                 npm run build:wasm
-
-            - name: Build main worker bundle
-              run: |
-                  npm run build:bundle
 
             - name: Login to Docker Hub
               uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3

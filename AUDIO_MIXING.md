@@ -5,8 +5,10 @@ The `mix-audio.mjs` script decodes Opus-encoded audio from `media.jsonl` dump fi
 ## Usage
 
 ```bash
-node scripts/mix-audio.mjs [input.jsonl] [output.wav]
+npm run mix-audio -- [input.jsonl] [output.wav]
 ```
+
+(Runs under `tsx` so it can load the `OpusDecoder` facade and the `OPUS_BACKEND`-selected backend.)
 
 **Arguments:**
 - `input.jsonl` - Path to media.jsonl dump file (default: `media.jsonl`)
@@ -15,7 +17,7 @@ node scripts/mix-audio.mjs [input.jsonl] [output.wav]
 **Example:**
 ```bash
 # Mix audio from a session dump
-node scripts/mix-audio.mjs /tmp/session123/media.jsonl recording.wav
+npm run mix-audio -- /tmp/session123/media.jsonl recording.wav
 ```
 
 ## How It Works
@@ -62,10 +64,18 @@ node scripts/mix-audio.mjs /tmp/session123/media.jsonl recording.wav
 
 ## Prerequisites
 
-The WASM module must be built before running this script:
+The script decodes via the `OpusDecoder` facade, which selects its backend at runtime from
+`OPUS_BACKEND` (`wasm` default, or `native`). Build the backend you intend to use first:
 
 ```bash
-npm run build:wasm
+npm run build:wasm      # default (OPUS_BACKEND unset or =wasm)
+npm run build:native    # OPUS_BACKEND=native
+```
+
+Then run, e.g. with the native backend:
+
+```bash
+OPUS_BACKEND=native npm run mix-audio -- session.jsonl output.wav
 ```
 
 ## Example Session
@@ -78,7 +88,7 @@ DUMP_WEBSOCKET_MESSAGES=true
 npm start
 
 # Mix the recorded audio
-node scripts/mix-audio.mjs /tmp/abc123/media.jsonl conference-call.wav
+npm run mix-audio -- /tmp/abc123/media.jsonl conference-call.wav
 
 # Play the result
 afplay conference-call.wav  # macOS
@@ -110,8 +120,8 @@ Done! Output file size: 0.19 MB
 
 ## Troubleshooting
 
-**Error: "Failed to load OpusDecoder module"**
-- Make sure to build the WASM module: `npm run build:wasm`
+**Error loading the Opus backend**
+- Build the backend selected by `OPUS_BACKEND`: `npm run build:wasm` (default) or `npm run build:native`
 
 **Error: "No media packets found in input file"**
 - Check that the input file contains media events with the `event: "media"` field
@@ -142,7 +152,7 @@ Done! Output file size: 0.19 MB
 ### Convert to MP3
 ```bash
 # Mix to WAV first
-node scripts/mix-audio.mjs session.jsonl output.wav
+npm run mix-audio -- session.jsonl output.wav
 
 # Convert to MP3
 ffmpeg -i output.wav -codec:a libmp3lame -qscale:a 2 output.mp3
@@ -156,7 +166,7 @@ To extract a single participant's audio without mixing, you can filter the media
 grep '"tag":"participant-id-123"' /tmp/session123/media.jsonl > participant-123.jsonl
 
 # Mix just that participant
-node scripts/mix-audio.mjs participant-123.jsonl participant-123.wav
+npm run mix-audio -- participant-123.jsonl participant-123.wav
 ```
 
 Or modify the script to filter by tag during the reading phase.

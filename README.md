@@ -18,9 +18,9 @@ Real-time WebSocket transcription proxy supporting multiple speech-to-text backe
 # Install dependencies
 npm install
 
-# Build WASM decoder (first time only)
-npm run configure  # Install Emscripten
-npm run build:wasm
+# Build the native Opus addon (first time only)
+git submodule update --init src/OpusDecoder/opus
+npm run build:native
 
 # Set API key(s)
 export OPENAI_API_KEY=sk-...
@@ -46,14 +46,19 @@ ws://localhost:8080/transcribe?sessionId=test&sendBack=true&tag=production&tag=r
 ### Prerequisites
 
 - Node.js 22+
-- Emscripten (for WASM compilation)
+- A C/C++ toolchain for the native Opus addon: a C/C++ compiler, `make`, and
+  `python3` (node-gyp). macOS: `xcode-select --install`. Debian/Ubuntu:
+  `apt-get install build-essential python3`.
+- The libopus submodule: `git submodule update --init src/OpusDecoder/opus`.
+
+(No Emscripten — Opus is compiled natively, not to WebAssembly.)
 
 ### Build
 
 ```bash
 npm install
-npm run configure   # Setup Emscripten (one-time)
-npm run build       # Build WASM + TypeScript + bundle
+git submodule update --init src/OpusDecoder/opus
+npm run build       # Build the native Opus addon + esbuild bundle
 ```
 
 ### Docker
@@ -246,7 +251,9 @@ src/
 │   ├── OpenAIBackend.ts
 │   ├── DeepgramBackend.ts
 │   └── GeminiBackend.ts
-└── OpusDecoder/           # WASM Opus decoder
+├── OpusDecoder/           # Native Opus decoder wrapper + addon loader
+└── OpusEncoder/           # Native Opus encoder wrapper
+native/                    # Native Opus N-API addon (libopus, built by node-gyp)
 worker/
 └── index.ts               # Cloudflare Worker entry
 ```
@@ -277,7 +284,7 @@ node scripts/replay-dump.cjs media.jsonl "ws://localhost:8080/transcribe?sendBac
 ### Mix Recorded Audio
 
 ```bash
-npm run mix-audio /tmp/session123/media.jsonl output.wav
+npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 ```
 
 See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md).
