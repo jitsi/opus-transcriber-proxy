@@ -169,7 +169,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		return this._ready;
 	}
 
-	async _init(): Promise<void> {
+	private async _init(): Promise<void> {
 		const wasmInstance = await OpusDecoderWasm.getOpusModule();
 		this.wasm = wasmInstance;
 

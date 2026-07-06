@@ -23,8 +23,10 @@ export class Emitter {
 		for (const handler of [...list]) {
 			try {
 				handler(...args);
-			} catch {
-				// A throwing handler must not prevent the others from running.
+			} catch (err) {
+				// A throwing handler must not prevent the others from running, but log it so the
+				// failure is traceable rather than silently swallowed.
+				console.error(`Emitter handler for "${event}" threw:`, err);
 			}
 		}
 	}

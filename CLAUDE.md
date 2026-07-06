@@ -67,7 +67,7 @@ hand-written libopus build config.
 
 ### Development
 ```bash
-npm run dev        # Builds the native addon once, then runs tsx with watch mode
+npm run dev        # Builds the WASM artifacts once, then runs tsx (src/server.ts) with watch mode
 npm run typecheck  # Type check without emitting files
 ```
 

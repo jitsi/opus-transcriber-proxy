@@ -1,5 +1,9 @@
 // Runtime-neutral base64, so the translation core doesn't depend on Node's Buffer (unavailable in a
 // Worker without nodejs_compat). Uses atob/btoa, which exist in both Node and workerd.
+//
+// The newer Uint8Array.toBase64/fromBase64 would be cleaner, but the container runtime (node:22-alpine,
+// currently v22.23) does not implement them yet — only workerd and Node >= 24 do — so we keep atob/btoa
+// for portability across all three runtimes.
 
 export function bytesToBase64(bytes: Uint8Array): string {
 	let binary = '';

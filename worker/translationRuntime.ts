@@ -48,7 +48,10 @@ class WorkerOutboundWebSocket implements IWebSocket {
 			this.ws = ws;
 			this.readyState = 1; // OPEN
 			ws.addEventListener('message', (e) => this.dispatch('message', e));
-			ws.addEventListener('close', (e) => this.dispatch('close', e));
+			ws.addEventListener('close', (e) => {
+				this.readyState = 3; // CLOSED
+				this.dispatch('close', e);
+			});
 			ws.addEventListener('error', (e) => this.dispatch('error', e));
 			for (const msg of this.sendQueue) ws.send(msg);
 			this.sendQueue = [];
@@ -59,6 +62,7 @@ class WorkerOutboundWebSocket implements IWebSocket {
 			this.dispatch('open', {});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
+			this.readyState = 3; // CLOSED
 			this.dispatch('error', { message });
 			this.dispatch('close', { code: 1006, reason: message.slice(0, 123), wasClean: false });
 		}
@@ -74,6 +78,7 @@ class WorkerOutboundWebSocket implements IWebSocket {
 
 	close(code?: number, reason?: string): void {
 		this.closedByCaller = true;
+		if (this.readyState < 2) this.readyState = 2; // CLOSING (→ CLOSED on the close event)
 		this.ws?.close(code, reason);
 	}
 
