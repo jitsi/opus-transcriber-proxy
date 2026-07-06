@@ -27,7 +27,7 @@ export class OpusEncoder implements IOpusEncoder {
 			const { OpusEncoderWasm } = await import('./OpusEncoderWasm');
 			// Register the Node (fs-loaded) WASM binding (see OpusDecoder.ts).
 			const { registerNodeOpusWasm } = await import('../OpusDecoder/wasmSourceNode');
-			registerNodeOpusWasm();
+			await registerNodeOpusWasm();
 			this.impl = new OpusEncoderWasm(config_);
 		}
 		await this.impl.ready;
