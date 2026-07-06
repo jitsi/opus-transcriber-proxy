@@ -605,6 +605,11 @@ export default {
 		// Worker alive for the session; the bridge's pings keep it active. Transcribe stays on the
 		// container path below (Worker outbound-connection limits — translate's fan-out is bounded).
 		if (url.pathname.endsWith('/translate')) {
+			// Same gate the container applies (ENABLE_TRANSLATE defaults to enabled): a disabled
+			// deployment must not accept bridges and open paid OpenAI sessions.
+			if (env.ENABLE_TRANSLATE === 'false') {
+				return new Response('Translation endpoint disabled', { status: 404 });
+			}
 			return handleTranslate(request, env);
 		}
 

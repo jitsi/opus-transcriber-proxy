@@ -15,6 +15,7 @@ const CORE_FILES = [
 	'src/translate/runtime.ts',
 	'src/translate/emitter.ts',
 	'src/translate/base64.ts',
+	'src/translate/messages.ts',
 	'src/OpusDecoder/OpusDecoderWasm.ts',
 	'src/OpusDecoder/opusTypes.ts',
 	'src/OpusEncoder/OpusEncoderWasm.ts',
@@ -38,8 +39,12 @@ for (const rel of CORE_FILES) {
 	lines.forEach((line, i) => {
 		const trimmed = line.trimStart();
 		if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return;
+		// Strip a trailing inline comment so e.g. `const x = 1; // Buffer note` doesn't false-positive.
+		// (Crude — also cuts `//` inside string literals — but that only removes potential matches, and
+		// none of the forbidden patterns plausibly appear inside a legitimate string.)
+		const code = line.replace(/\/\/.*$/, '');
 		for (const { re, msg } of FORBIDDEN) {
-			if (re.test(line)) {
+			if (re.test(code)) {
 				console.error(`${rel}:${i + 1}: not Worker-safe: ${msg}\n    ${line.trim()}`);
 				failed = true;
 			}
