@@ -122,3 +122,37 @@ describeIfWasm('Opus round trip (encoder → decoder)', () => {
 		decoder.free();
 	});
 });
+
+describeIfWasm('native encoder frame accumulation', () => {
+	it('accumulates non-frame-aligned input across calls', async () => {
+		// Instantiate the native backend directly (not via the OPUS_BACKEND facade) so this covers
+		// the native addon's accumulation path regardless of the test environment's env vars.
+		const { OpusEncoderNative } = await import('../../src/OpusEncoder/OpusEncoderNative');
+		const enc = new OpusEncoderNative({
+			sampleRate: SAMPLE_RATE,
+			channels: 1,
+			application: 'voip',
+			bitrate: 32000,
+		});
+		await enc.ready;
+		try {
+			const frameBytes = enc.getFrameSizeBytes(); // 20 ms @ 24 kHz mono s16 = 960 bytes
+			const pcm = generateSineWavePcm16(TOTAL_SAMPLES, SAMPLE_RATE, TONE_HZ, TONE_AMPLITUDE);
+
+			// Feed in chunks deliberately not aligned to the frame size.
+			const chunkBytes = Math.floor(frameBytes * 0.73) & ~1; // even (whole samples), non-aligned
+			let framesOut = 0;
+			let fedBytes = 0;
+			for (let off = 0; off < pcm.length; off += chunkBytes) {
+				const chunk = pcm.subarray(off, Math.min(off + chunkBytes, pcm.length));
+				fedBytes += chunk.length;
+				framesOut += enc.encodeFrame(chunk).length;
+				// The encoder may only emit complete frames; whatever remains stays accumulated.
+				expect(framesOut).toBe(Math.floor(fedBytes / frameBytes));
+			}
+			expect(framesOut).toBe(Math.floor(pcm.length / frameBytes));
+		} finally {
+			enc.free();
+		}
+	});
+});

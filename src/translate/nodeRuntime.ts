@@ -10,7 +10,18 @@ import { MetricCache } from '../MetricCache';
 import { buildServerInfo } from '../serverInfo';
 import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
+import { provideBase64 } from './base64';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
+
+// Buffer-based base64 for the per-frame hot path: 20-100x faster than the portable atob/btoa
+// fallback, and available on every Node the container runs (node:22 lacks Uint8Array.toBase64).
+provideBase64(
+	(bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64'),
+	(b64) => {
+		const buf = Buffer.from(b64, 'base64');
+		return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+	},
+);
 
 export function createNodeTranslationRuntime(): TranslationRuntime {
 	return {

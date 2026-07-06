@@ -218,7 +218,7 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 - Also supports a dev `?lang=` path that seeds the initial target languages
 - Sends the server `info` message on connect (via `buildServerInfo`, provider fixed to `openai`) and logs any inbound client `info` event, mirroring `TranscriberProxy`
 - Owns the monotonic mediajson wire-envelope `sequenceNumber` for outbound `media` (per-proxy = per-WebSocket, which carries all synthetic sources); the per-source RTP sequence number is the separate `chunk` field from each connection's `RtpTimestamper`
-- `emitTranscripts` (from `config.translation.transcripts`, default true) is threaded to each `TranslatorConnection`
+- `emitTranscripts` (`runtime.config.emitTranscripts`; Node resolves it from `config.translation.transcripts`, default true) controls whether target-language transcripts are emitted
 
 **TranslatorConnection** (`src/TranslatorConnection.ts`)
 - Manages one (source, language) translation stream
@@ -320,9 +320,11 @@ See README.md for complete configuration reference.
 ### Cloudflare Workers Integration
 
 The `worker/` directory contains:
-- `index.ts` - Cloudflare Worker entry point
+- `index.ts` - Cloudflare Worker entry point (routing, container path, dispatcher forwarding)
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
-- Uses `@cloudflare/containers` to run the Node.js server
+- `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)
+- `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
+- Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
 Two routing modes:
 1. **Session mode** (`ROUTING_MODE=session`): One container per session
@@ -369,6 +371,17 @@ When audio stops flowing, `OutgoingConnection` waits `FORCE_COMMIT_TIMEOUT` seco
 src/
 ├── server.ts                  # HTTP/WS server entry (Node.js)
 ├── transcriberproxy.ts        # Main proxy orchestration
+├── translatorproxy.ts         # /translate orchestration (runtime-agnostic core)
+├── TranslatorConnection.ts    # One per (source, language) OpenAI realtime session
+├── RtpTimestamper.ts          # Per-source RTP chunk/timestamp bookkeeping
+├── serverInfo.ts              # Server `info` message builder (Node)
+├── buildInfo.ts               # GIT_HASH baked in at bundle time
+├── translate/
+│   ├── runtime.ts             # TranslationRuntime injection boundary (worker-safe)
+│   ├── nodeRuntime.ts         # Node adapter: config/Winston/OTLP/global WebSocket
+│   ├── messages.ts            # Shared /translate wire-message builders (worker-safe)
+│   ├── base64.ts              # Runtime-neutral base64 (native/injected fast paths)
+│   └── emitter.ts             # Minimal event emitter (no node:events)
 ├── OutgoingConnection.ts      # Per-participant handler
 ├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types
 ├── AudioDecoderFactory.ts     # Selects decoder based on format negotiation
@@ -405,8 +418,15 @@ native/                        # Native Opus addon (compiled by node-gyp)
 binding.gyp                    # node-gyp build: libopus + per-ISA SIMD + addon
 
 worker/
-├── index.ts                   # Cloudflare Worker entry
-└── ContainerCoordinator.ts    # Container routing logic
+├── index.ts                   # Cloudflare Worker entry (routing, container path, dispatcher)
+├── ContainerCoordinator.ts    # Container routing logic
+├── handleTranslate.ts         # Worker-hosted /translate (WebSocketPair + TranslatorProxy)
+├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
+├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
+├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
+└── env.d.ts                   # Worker Env types
+
+scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
 
 test/
 ├── setup.ts                   # Vitest setup
@@ -518,7 +538,9 @@ The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCR
 
 ### `/translate` transcript messages
 
-`/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`.
+`/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`; the Worker-hosted `/translate` forwards its finals to the per-session Dispatcher DO the same way (`worker/handleTranslate.ts`).
+
+Both the Node server and the Worker handler build these messages via the shared builders in `src/translate/messages.ts` (`message_id` uses a per-connection sequence counter — never `Date.now()`, which collides for same-tag events within one millisecond), so the two serializers cannot drift.
 
 ## Keeping Documentation Current
 
