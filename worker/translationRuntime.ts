@@ -13,9 +13,14 @@ import { WorkerOutboundWebSocket } from './outboundWebSocket';
 
 export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
 	registerWorkerOpusWasm();
+	const debugEnabled = env.DEBUG === 'true';
 	return {
 		logger: {
-			debug: (m) => console.debug(m),
+			// Gate debug on the flag (mirrors the Node LOG_LEVEL behaviour). Unconditional console.debug
+			// here floods the isolate: /translate logs once per OpenAI audio delta, and the synchronous
+			// terminal writes compete with per-delta WASM opus-encode for the single workerd thread —
+			// enough to starve the bridge ping/pong and trip JVB's ping timeout.
+			debug: debugEnabled ? (m) => console.debug(m) : () => {},
 			info: (m) => console.info(m),
 			warn: (m) => console.warn(m),
 			error: (m, e) => (e === undefined ? console.error(m) : console.error(m, e)),
@@ -24,7 +29,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			openaiApiKey: env.OPENAI_TRANSLATION_API_KEY || env.OPENAI_API_KEY || '',
 			translationModel: env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
-			debug: env.DEBUG === 'true',
+			debug: debugEnabled,
 		},
 		writeMetric() {
 			// No OTLP in the Worker (yet); metrics are a no-op.
