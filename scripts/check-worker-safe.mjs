@@ -16,6 +16,7 @@ const CORE_FILES = [
 	'src/translate/emitter.ts',
 	'src/translate/base64.ts',
 	'src/translate/messages.ts',
+	'src/buildInfo.ts',
 	'src/OpusDecoder/OpusDecoderWasm.ts',
 	'src/OpusDecoder/opusTypes.ts',
 	'src/OpusEncoder/OpusEncoderWasm.ts',

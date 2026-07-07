@@ -46,6 +46,9 @@ let wasm: WebAssembly.Module | undefined;
 export function provideDecoderWasm(factory: EmscriptenModuleFactory, module: WebAssembly.Module): void {
 	glueFactory = factory;
 	wasm = module;
+	// Reset the cached module promise so a re-registration (e.g. a test switching bindings) takes
+	// effect on the next getOpusModule() call instead of reusing the previous binding's instance.
+	OpusDecoderWasm.resetModule();
 }
 
 interface OpusWasmInstance {
@@ -90,6 +93,11 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 	// Built lazily on first decoder creation from the injected binding (see provideDecoderWasm), so
 	// importing this module has no side effects and doesn't require the binding until it's actually used.
 	private static _opusModule?: Promise<OpusWasmInstance>;
+
+	/** Clears the cached module promise; called by provideDecoderWasm on (re-)registration. */
+	static resetModule(): void {
+		this._opusModule = undefined;
+	}
 
 	static getOpusModule(): Promise<OpusWasmInstance> {
 		if (this._opusModule === undefined) {
