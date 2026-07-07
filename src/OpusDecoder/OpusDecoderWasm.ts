@@ -5,6 +5,13 @@
 // submodules and compiled into the dist files, may have different
 // licensing terms."
 
+// This file deliberately logs via `console` (not the Winston logger): it is part of the Worker-safe
+// core (see scripts/check-worker-safe.mjs), so it cannot import ../logger. On the Node container
+// that bypasses OTLP/LOG_LEVEL, but decode *failures* are still logged through Winston by the
+// callers (OutgoingConnection/TranslatorConnection); all that skips centralized logging is a debug
+// line. If that ever matters, inject a logger alongside provideDecoderWasm rather than importing
+// one here.
+
 // Provide Node.js globals the emscripten glue may reference. HACK. Cast because these aren't in the
 // lib typings (and don't exist in a Worker); harmless where already defined.
 const g = globalThis as any;

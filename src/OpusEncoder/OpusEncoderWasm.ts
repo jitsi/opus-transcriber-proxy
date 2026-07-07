@@ -1,5 +1,11 @@
 import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
+// This file deliberately logs via `console` (not the Winston logger): it is part of the Worker-safe
+// core (see scripts/check-worker-safe.mjs), so it cannot import ../logger. On the Node container
+// that bypasses OTLP/LOG_LEVEL, but encode/decode *failures* are still logged through Winston by
+// the callers; all that skips centralized logging is the ctl warnings below. If that ever matters,
+// inject a logger alongside provideEncoderWasm rather than importing one here.
+
 /**
  * The Emscripten module factory (`opus-encoder.cjs` glue) + compiled `WebAssembly.Module`, injected
  * via {@link provideEncoderWasm} — Node reads them from disk, a Worker imports them. Keeps this
