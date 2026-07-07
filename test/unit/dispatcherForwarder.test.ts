@@ -32,7 +32,7 @@ function fakeDoSocket() {
 }
 
 /** A fake Env with a DISPATCHER_DO whose stub resolves each fetch via `next()`. */
-function fakeEnv(next: () => Promise<{ webSocket: any }>) {
+function fakeEnv(next: () => Promise<{ webSocket: any; status?: number }>) {
 	const fetchMock = vi.fn(async () => next());
 	return {
 		env: { DISPATCHER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: fetchMock }) } } as any,
@@ -68,8 +68,9 @@ describe('createDispatcherForwarder', () => {
 	it('bounds the queue while disconnected, dropping the oldest', async () => {
 		// First connect attempts fail (no webSocket in the response), so everything queues.
 		let socket: any = null;
-		const { env } = fakeEnv(async () => ({ webSocket: socket }));
+		const { env } = fakeEnv(async () => ({ webSocket: socket, status: 502 }));
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		vi.spyOn(console, 'error').mockImplementation(() => {}); // failed upgrades are logged
 		const fwd = createDispatcherForwarder(env, 's1');
 
 		const total = DISPATCHER_QUEUE_LIMIT + 10;
@@ -105,6 +106,18 @@ describe('createDispatcherForwarder', () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(second.sent.map((s: string) => JSON.parse(s).text)).toEqual(['t2']);
+	});
+
+	it('logs an upgrade that resolves without a webSocket (non-101) instead of failing silently', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { env } = fakeEnv(async () => ({ webSocket: null, status: 502 }));
+		const fwd = createDispatcherForwarder(env, 's1');
+
+		fwd.forward(msg(1));
+		await settle();
+
+		expect(error).toHaveBeenCalledTimes(1);
+		expect(String(error.mock.calls[0][0])).toContain('HTTP 502');
 	});
 
 	it('survives a connect failure (fetch throws) and logs it', async () => {

@@ -27,20 +27,22 @@ export function createDispatcherForwarder(env: Env, sessionId: string) {
 		try {
 			const stub = env.DISPATCHER_DO.get(env.DISPATCHER_DO.idFromName(sessionId));
 			const resp = await stub.fetch(new Request('http://dispatcher/websocket', { headers: { Upgrade: 'websocket' } }));
-			if (resp.webSocket) {
-				resp.webSocket.accept();
-				resp.webSocket.addEventListener('close', () => {
-					ws = null; // reopened on the next forward
-				});
-				ws = resp.webSocket;
-				console.log(
-					`Connected to Dispatcher DO via WebSocket for session: ${sessionId}` +
-						(queue.length ? `, draining ${queue.length} queued message(s)` : '') +
-						(dropped ? ` (${dropped} dropped while disconnected)` : ''),
-				);
-				dropped = 0;
-				for (const msg of queue.splice(0)) ws.send(JSON.stringify(msg));
+			if (!resp.webSocket) {
+				// A non-101 response resolves without throwing; surface it instead of silently skipping.
+				throw new Error(`Dispatcher DO WebSocket upgrade failed (HTTP ${resp.status})`);
 			}
+			resp.webSocket.accept();
+			resp.webSocket.addEventListener('close', () => {
+				ws = null; // reopened on the next forward
+			});
+			ws = resp.webSocket;
+			console.log(
+				`Connected to Dispatcher DO via WebSocket for session: ${sessionId}` +
+					(queue.length ? `, draining ${queue.length} queued message(s)` : '') +
+					(dropped ? ` (${dropped} dropped while disconnected)` : ''),
+			);
+			dropped = 0;
+			for (const msg of queue.splice(0)) ws.send(JSON.stringify(msg));
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			console.error(`Failed to connect to Dispatcher DO: ${msg}, sessionId=${sessionId}`);
