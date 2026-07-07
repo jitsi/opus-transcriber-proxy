@@ -59,7 +59,8 @@ export function handleTranslate(request: Request, env: Env): Response {
 	const dispatcher = useDispatcher && env.DISPATCHER_DO ? createDispatcherForwarder(env, sessionId) : null;
 
 	proxy.on('audioFrame', (data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
-		if (!sendBack) return;
+		// Translated audio is the whole point of /translate, so it is always returned to the bridge —
+		// unlike transcripts, it is NOT gated on `sendBack` (which only controls transcript emission).
 		try {
 			server.send(JSON.stringify(buildTranslationMediaMessage(data)));
 		} catch {

@@ -336,9 +336,8 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	translateSession.on(
 		'audioFrame',
 		(data: { tag: string; language: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
-			if (!sendBack) {
-				return;
-			}
+			// Translated audio is the whole point of /translate, so it is always returned to the bridge —
+			// unlike transcripts, it is NOT gated on `sendBack` (which only controls transcript emission).
 			const audioMessage = buildTranslationMediaMessage(data);
 			try {
 				ws.send(JSON.stringify(audioMessage));
