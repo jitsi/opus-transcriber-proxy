@@ -60,7 +60,11 @@ export function handleTranslate(request: Request, env: Env): Response {
 
 	proxy.on('audioFrame', (data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
 		if (!sendBack) return;
-		server.send(JSON.stringify(buildTranslationMediaMessage(data)));
+		try {
+			server.send(JSON.stringify(buildTranslationMediaMessage(data)));
+		} catch {
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+		}
 	});
 
 	// Monotonic per-connection counter for transcript message ids (see buildTranslationTranscriptMessage).
@@ -68,7 +72,11 @@ export function handleTranslate(request: Request, env: Env): Response {
 	proxy.on('transcription', (data: { transcript: string; targetLanguage: string; tag: string; isInterim: boolean }) => {
 		const msg = buildTranslationTranscriptMessage(data, transcriptSeq++);
 		if (sendBack && (!data.isInterim || sendBackInterim)) {
-			server.send(JSON.stringify(msg));
+			try {
+				server.send(JSON.stringify(msg));
+			} catch {
+				// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+			}
 		}
 		// Forward finals to the dispatcher (mirrors the container path in index.ts, where non-interim
 		// realtime-translation-result messages are dispatched to the per-session DO).
