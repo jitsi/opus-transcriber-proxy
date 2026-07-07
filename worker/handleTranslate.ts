@@ -8,70 +8,12 @@
 // fan-out is bounded by (source × language) — runs here.
 
 import type { Env } from './env';
-import type { DispatcherTranscriptionMessage } from './index';
 import { TranslatorProxy } from '../src/translatorproxy';
 import { normalizeTargetLanguage } from '../src/TranslatorConnection';
 import type { IWebSocket } from '../src/translate/runtime';
 import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from '../src/translate/messages';
+import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
-
-/**
- * Forwards final transcripts to the per-session Dispatcher DO over a lazily-opened WebSocket,
- * mirroring the container path's dispatcher output (worker/index.ts). Deliberately simpler than
- * that path's reconnect machinery: messages are queued while (re)connecting, and a dropped socket
- * is reopened on the next forward.
- */
-function createDispatcherForwarder(env: Env, sessionId: string) {
-	let ws: WebSocket | null = null;
-	let connecting = false;
-	const queue: DispatcherTranscriptionMessage[] = [];
-
-	async function connect(): Promise<void> {
-		if (connecting || !env.DISPATCHER_DO) return;
-		connecting = true;
-		try {
-			const stub = env.DISPATCHER_DO.get(env.DISPATCHER_DO.idFromName(sessionId));
-			const resp = await stub.fetch(new Request('http://dispatcher/websocket', { headers: { Upgrade: 'websocket' } }));
-			if (resp.webSocket) {
-				resp.webSocket.accept();
-				resp.webSocket.addEventListener('close', () => {
-					ws = null; // reopened on the next forward
-				});
-				ws = resp.webSocket;
-				console.log(`Connected to Dispatcher DO via WebSocket for session: ${sessionId}`);
-				for (const msg of queue.splice(0)) ws.send(JSON.stringify(msg));
-			}
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`Failed to connect to Dispatcher DO: ${msg}, sessionId=${sessionId}`);
-		} finally {
-			connecting = false;
-		}
-	}
-
-	return {
-		forward(msg: DispatcherTranscriptionMessage): void {
-			if (ws) {
-				try {
-					ws.send(JSON.stringify(msg));
-					return;
-				} catch {
-					ws = null;
-				}
-			}
-			queue.push(msg);
-			void connect();
-		},
-		close(): void {
-			try {
-				ws?.close();
-			} catch {
-				// already closed
-			}
-			ws = null;
-		},
-	};
-}
 
 export function handleTranslate(request: Request, env: Env): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {

@@ -76,6 +76,7 @@ export class WorkerOutboundWebSocket implements IWebSocket {
 	}
 
 	close(code?: number, reason?: string): void {
+		if (this.readyState === 3) return; // already CLOSED
 		this.closedByCaller = true;
 		if (this.readyState < 2) this.readyState = 2; // CLOSING (→ CLOSED on the close event)
 		this.ws?.close(code, reason);

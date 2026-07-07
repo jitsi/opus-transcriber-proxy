@@ -15,6 +15,10 @@ import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from '.
 
 // Buffer-based base64 for the per-frame hot path: 20-100x faster than the portable atob/btoa
 // fallback, and available on every Node the container runs (node:22 lacks Uint8Array.toBase64).
+// Deliberately an import-time side effect: it globally overrides the implementation in base64.ts
+// for this process, so it is in place before any frame is encoded. Importing this module from a
+// context that shouldn't switch base64 to Buffer (e.g. a Worker bundle) would be a bug anyway —
+// this file is Node-only by design.
 provideBase64(
 	(bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64'),
 	(b64) => {
