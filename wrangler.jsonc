@@ -2,6 +2,9 @@
 	"name": "opus-transcriber-proxy",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-01-09",
+	// nodejs_compat: the Worker-hosted /translate path runs the Emscripten Opus glue, which expects
+	// some Node globals.
+	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"enabled": true
 	},

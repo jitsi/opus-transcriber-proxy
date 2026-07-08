@@ -2,15 +2,16 @@
  * Portable libopus build configuration for the native N-API addon.
  *
  * This is a hand-written, platform-agnostic substitute for the config.h that
- * libopus' autotools/cmake build would normally generate. It deliberately
- * enables only the portable C float build and disables every architecture
- * specific optimisation (NEON / SSE / AVX / run-time CPU detection) so that the
- * exact same source list compiles identically on macOS (arm64), Linux x64 and
- * Linux arm64 — including inside the Alpine container. For 24 kHz mono speech
- * the lack of SIMD is irrelevant to throughput.
+ * libopus' autotools/cmake build would normally generate. This *file* enables
+ * only the portable C float build and defines no architecture-specific SIMD
+ * macros, so it compiles identically on macOS (arm64), Linux x64 and Linux arm64
+ * (including inside the Alpine container).
  *
- * If you ever want SIMD, regenerate a real config.h with libopus' configure for
- * the target platform and add the matching arch source files to binding.gyp.
+ * SIMD is NOT disabled overall: it is controlled entirely by binding.gyp, which
+ * defines the OPUS_X86_MAY_HAVE_* / OPUS_ARM_*_NEON_INTR macros and compiles the
+ * matching per-ISA source files, so libopus uses SSE/SSE2/SSE4.1/AVX2 (selected
+ * at runtime via RTCD on x86) and NEON (base ISA on aarch64). Keep SIMD tuning in
+ * binding.gyp, not here.
  */
 #ifndef OPUS_NATIVE_CONFIG_H
 #define OPUS_NATIVE_CONFIG_H

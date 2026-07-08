@@ -5,6 +5,9 @@ import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
 import { normalizeTargetLanguage } from './TranslatorConnection';
+import { createNodeTranslationRuntime } from './translate/nodeRuntime';
+import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from './translate/messages';
+import type { IWebSocket } from './translate/runtime';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -257,17 +260,6 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
-/**
- * A /translate transcript message. The inner `type` is `realtime-translation-result` (not
- * `transcription-result`) so jitsi-meet recognizes it as a translation stream and does not render it
- * in the CC panel like a normal transcription. The outer `event` stays `transcription-result` because
- * JVB dispatches on `event` (via jicoco-mediajson) and only forwards payloads it recognizes — it
- * passes the inner `type` through to the client verbatim.
- */
-interface TranslationTranscriptMessage extends Omit<TranscriptionMessage, 'type'> {
-	type: 'realtime-translation-result';
-}
-
 function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
@@ -302,11 +294,11 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		}
 	}
 
-	const translateSession = new TranslatorProxy(ws, {
-		initialLanguages,
-		provider: parameters.provider,
-		emitTranscripts: config.translation.transcripts,
-	});
+	const translateSession = new TranslatorProxy(
+		ws as unknown as IWebSocket,
+		{ initialLanguages, provider: parameters.provider },
+		createNodeTranslationRuntime(),
+	);
 
 	translateSession.on('closed', () => {
 		if (ws.readyState === ws.OPEN) {
@@ -333,17 +325,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		if (data.isInterim && !parameters.sendBackInterim) {
 			return;
 		}
-		// participant.id is the input (export) source name the translation was produced from.
-		const msg: TranslationTranscriptMessage = {
-			transcript: [{ text: data.transcript }],
-			is_interim: data.isInterim,
-			language: data.targetLanguage,
-			message_id: `translation-${data.tag}-${transcriptSeq++}`,
-			type: 'realtime-translation-result',
-			event: 'transcription-result',
-			participant: { id: data.tag },
-			timestamp: Date.now(),
-		};
+		const msg = buildTranslationTranscriptMessage(data, transcriptSeq++);
 		try {
 			ws.send(JSON.stringify(msg));
 		} catch {
@@ -354,23 +336,9 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	translateSession.on(
 		'audioFrame',
 		(data: { tag: string; language: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
-			if (!sendBack) {
-				return;
-			}
-			// Tag the returned media with the synthetic source name verbatim (e.g. "523834112-a0.en") so the
-			// bridge's findSyntheticAudioSource(tag) matches the colibri2-signaled synthetic source.
-			const audioMessage = {
-				event: 'media',
-				// Numeric per the mediajson protocol (matches the inbound media events); the bridge/JVB parser
-				// expects numbers, not strings, for these fields.
-				sequenceNumber: data.sequenceNumber,
-				media: {
-					tag: data.tag,
-					chunk: data.chunk,
-					timestamp: data.timestamp,
-					payload: data.payload,
-				},
-			};
+			// Translated audio is the whole point of /translate, so it is always returned to the bridge —
+			// unlike transcripts, it is NOT gated on `sendBack` (which only controls transcript emission).
+			const audioMessage = buildTranslationMediaMessage(data);
 			try {
 				ws.send(JSON.stringify(audioMessage));
 			} catch {

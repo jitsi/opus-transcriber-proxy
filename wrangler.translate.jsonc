@@ -1,0 +1,26 @@
+{
+	// Translate-only dev config. The Worker handles /translate entirely in-isolate (no container,
+	// no Durable Object — see worker/index.ts and worker/handleTranslate.ts), so this config omits
+	// the `containers`/`durable_objects`/`migrations` that the production wrangler.jsonc carries for
+	// the /transcribe container path. Dropping the `containers` array is what lets `wrangler dev`
+	// skip the (slow) Docker image build at startup.
+	//
+	// Use for local /translate testing:  npx wrangler dev --config wrangler.translate.jsonc
+	// /transcribe is NOT served here (env.TRANSCRIBER is unbound); use wrangler.jsonc for that.
+	"name": "opus-transcriber-proxy-translate",
+	"main": "worker/index.ts",
+	"compatibility_date": "2025-01-09",
+	// nodejs_compat: the Worker-hosted /translate path runs the Emscripten Opus glue, which expects
+	// some Node globals.
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"version_metadata": {
+		"binding": "CF_VERSION_METADATA"
+	},
+	"vars": {
+		"DEBUG": "false",
+		"ROUTING_MODE": "session"
+	}
+}

@@ -67,7 +67,7 @@ hand-written libopus build config.
 
 ### Development
 ```bash
-npm run dev        # Builds the native addon once, then runs tsx with watch mode
+npm run dev        # Builds the WASM artifacts once, then runs tsx (src/server.ts) with watch mode
 npm run typecheck  # Type check without emitting files
 ```
 
@@ -218,7 +218,7 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 - Also supports a dev `?lang=` path that seeds the initial target languages
 - Sends the server `info` message on connect (via `buildServerInfo`, provider fixed to `openai`) and logs any inbound client `info` event, mirroring `TranscriberProxy`
 - Owns the monotonic mediajson wire-envelope `sequenceNumber` for outbound `media` (per-proxy = per-WebSocket, which carries all synthetic sources); the per-source RTP sequence number is the separate `chunk` field from each connection's `RtpTimestamper`
-- `emitTranscripts` (from `config.translation.transcripts`, default true) is threaded to each `TranslatorConnection`
+- `emitTranscripts` (`runtime.config.emitTranscripts`; Node resolves it from `config.translation.transcripts`, default true) controls whether target-language transcripts are emitted
 
 **TranslatorConnection** (`src/TranslatorConnection.ts`)
 - Manages one (source, language) translation stream
@@ -231,6 +231,15 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 **RtpTimestamper** (`src/RtpTimestamper.ts`)
 - Pure, clock-injectable generator of the RTP timestamp + uint16 sequence number for the 20ms translated-audio frames; used by `TranslatorConnection`
 - Maps OpenAI's bursty, faster-than-real-time output onto one continuous, **monotonic** RTP timeline using a media-playout clock: advances by media duration per frame and inserts a proportional silence gap only when the source idled longer than the buffered media (`gapThresholdMs`, default 100). Guarantees the timestamp never decreases across response boundaries or bursts
+
+### Translation runtime abstraction (container vs Worker)
+
+The translation core (`TranslatorProxy`, `TranslatorConnection`, `RtpTimestamper`) is **runtime-agnostic**: it imports no `config`/`logger`/`metrics`/`ws`/codec modules directly. Everything host-specific is injected via a **`TranslationRuntime`** (`src/translate/runtime.ts`): `logger`, config values, metric sink + batcher, an outbound-WebSocket factory, Opus codec factories, and `buildServerInfo`. `IWebSocket` is the minimal socket surface common to Node `ws`, the Node global WebSocket, and the Worker WebSocket.
+
+- **Node/container** — `createNodeTranslationRuntime` (`src/translate/nodeRuntime.ts`): existing `config`/Winston/OTLP, the Node global `WebSocket` (auth via the OpenAI `openai-insecure-api-key` subprotocol), and the codec facades (native/WASM per `OPUS_BACKEND`). Used by `server.ts` for `/transcribe` **and** `/translate`.
+- **Cloudflare Worker** — `worker/translationRuntime.ts` + `worker/handleTranslate.ts`: the Worker handles `/translate` **directly** (a `WebSocketPair` `accept()`, no Durable Object — the accepted socket keeps the Worker alive for the session, and the bridge's pings keep it active). console logger, config from Worker env, no-op metrics, WASM codec (import-loaded, no fs — see below), and an **outbound OpenAI socket via fetch-upgrade** (`ws(s)://`→`http(s)://` rewrite; auth via the `Authorization: Bearer` header — never both forms, which OpenAI rejects). The async fetch-upgrade is wrapped as a synchronous `IWebSocket` (queues sends/listeners until connected). `worker/index.ts` calls `handleTranslate` for `/translate`; `/transcribe` stays on the container (Worker outbound-connection limits — translate's fan-out is bounded by source×language). Requires `nodejs_compat`.
+- **Worker-safe WASM codec**: `OpusDecoderWasm`/`OpusEncoderWasm` don't read `fs` at module scope — the Emscripten glue + compiled `WebAssembly.Module` are injected via `provideDecoderWasm`/`provideEncoderWasm`. Node registers them from disk (`src/OpusDecoder/wasmSourceNode.ts`, dynamic-imported by the facade only on the wasm path); the Worker imports them (`worker/opusWasmSource.ts`). Auth token is passed to the runtime as a neutral `bearerToken`; each runtime applies it its own way.
+- **Guard**: `npm run check:worker-safe` (`scripts/check-worker-safe.mjs`, run in CI) fails if the core imports a Node-only module/API, so it stays bundlable for workerd. `npm run typecheck:worker` typechecks the Worker + imported core against `@cloudflare/workers-types`.
 
 **TranscriptionBackend** (`src/backends/TranscriptionBackend.ts`)
 - Abstract interface for transcription providers
@@ -311,9 +320,11 @@ See README.md for complete configuration reference.
 ### Cloudflare Workers Integration
 
 The `worker/` directory contains:
-- `index.ts` - Cloudflare Worker entry point
+- `index.ts` - Cloudflare Worker entry point (routing, container path, dispatcher forwarding)
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
-- Uses `@cloudflare/containers` to run the Node.js server
+- `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)
+- `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
+- Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
 Two routing modes:
 1. **Session mode** (`ROUTING_MODE=session`): One container per session
@@ -360,6 +371,17 @@ When audio stops flowing, `OutgoingConnection` waits `FORCE_COMMIT_TIMEOUT` seco
 src/
 ├── server.ts                  # HTTP/WS server entry (Node.js)
 ├── transcriberproxy.ts        # Main proxy orchestration
+├── translatorproxy.ts         # /translate orchestration (runtime-agnostic core)
+├── TranslatorConnection.ts    # One per (source, language) OpenAI realtime session
+├── RtpTimestamper.ts          # Per-source RTP chunk/timestamp bookkeeping
+├── serverInfo.ts              # Server `info` message builder (Node)
+├── buildInfo.ts               # GIT_HASH baked in at bundle time
+├── translate/
+│   ├── runtime.ts             # TranslationRuntime injection boundary (worker-safe)
+│   ├── nodeRuntime.ts         # Node adapter: config/Winston/OTLP/global WebSocket
+│   ├── messages.ts            # Shared /translate wire-message builders (worker-safe)
+│   ├── base64.ts              # Runtime-neutral base64 (native/injected fast paths)
+│   └── emitter.ts             # Minimal event emitter (no node:events)
 ├── OutgoingConnection.ts      # Per-participant handler
 ├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types
 ├── AudioDecoderFactory.ts     # Selects decoder based on format negotiation
@@ -396,8 +418,15 @@ native/                        # Native Opus addon (compiled by node-gyp)
 binding.gyp                    # node-gyp build: libopus + per-ISA SIMD + addon
 
 worker/
-├── index.ts                   # Cloudflare Worker entry
-└── ContainerCoordinator.ts    # Container routing logic
+├── index.ts                   # Cloudflare Worker entry (routing, container path, dispatcher)
+├── ContainerCoordinator.ts    # Container routing logic
+├── handleTranslate.ts         # Worker-hosted /translate (WebSocketPair + TranslatorProxy)
+├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
+├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
+├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
+└── env.d.ts                   # Worker Env types
+
+scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
 
 test/
 ├── setup.ts                   # Vitest setup
@@ -484,6 +513,8 @@ npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 ```
 An informational/observability message describing the running build and effective session config. Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
 
+The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, fixed `provider: "openai"`, and a `worker` block with version/colo). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. The message is informational only; the peer logs whatever it receives.
+
 ## Environment Variables Reference
 
 See README.md for complete list. Key ones:
@@ -509,7 +540,9 @@ The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCR
 
 ### `/translate` transcript messages
 
-`/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`.
+`/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. Note `sendBack` gates **transcripts only** on `/translate` — the translated **audio** (`media` events) is always returned to the bridge regardless of `sendBack`, since returning translated audio is the entire purpose of the endpoint (both `src/server.ts` and `worker/handleTranslate.ts`). The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`; the Worker-hosted `/translate` forwards its finals to the per-session Dispatcher DO the same way (`worker/handleTranslate.ts`).
+
+Both the Node server and the Worker handler build these messages via the shared builders in `src/translate/messages.ts` (`message_id` uses a per-connection sequence counter — never `Date.now()`, which collides for same-tag events within one millisecond), so the two serializers cannot drift.
 
 ## Keeping Documentation Current
 

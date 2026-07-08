@@ -1,15 +1,27 @@
-import OpusEncoderModuleFactory from '../../dist/opus-encoder.cjs';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import logger from '../logger';
 import type { IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const wasmPath = path.join(__dirname, '../../dist/opus-encoder.wasm');
-const wasmBuffer = fs.readFileSync(wasmPath);
-const wasm = new WebAssembly.Module(wasmBuffer);
+// This file deliberately logs via `console` (not the Winston logger): it is part of the Worker-safe
+// core (see scripts/check-worker-safe.mjs), so it cannot import ../logger. On the Node container
+// that bypasses OTLP/LOG_LEVEL, but encode/decode *failures* are still logged through Winston by
+// the callers; all that skips centralized logging is the ctl warnings below. If that ever matters,
+// inject a logger alongside provideEncoderWasm rather than importing one here.
+
+/**
+ * The Emscripten module factory (`opus-encoder.cjs` glue) + compiled `WebAssembly.Module`, injected
+ * via {@link provideEncoderWasm} — Node reads them from disk, a Worker imports them. Keeps this
+ * shared encode logic free of `fs` so it can run in a Cloudflare Worker.
+ */
+export type EmscriptenModuleFactory = (opts: {
+	instantiateWasm: (info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => WebAssembly.Exports;
+}) => Promise<any>;
+
+let glueFactory: EmscriptenModuleFactory | undefined;
+let wasm: WebAssembly.Module | undefined;
+
+export function provideEncoderWasm(factory: EmscriptenModuleFactory, module: WebAssembly.Module): void {
+	glueFactory = factory;
+	wasm = module;
+}
 
 // Shared zero-length buffer for "no leftover input" — never written to, so sharing is safe.
 const EMPTY_INPUT = new Uint8Array(0);
@@ -57,9 +69,13 @@ export class OpusEncoderWasm implements IOpusEncoder {
 	}
 
 	private async init(): Promise<void> {
-		this.module = (await OpusEncoderModuleFactory({
+		if (glueFactory === undefined || wasm === undefined) {
+			throw new Error('Opus WASM encoder binding not provided (call provideEncoderWasm)');
+		}
+		const module = wasm;
+		this.module = (await glueFactory({
 			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				const instance = new WebAssembly.Instance(wasm, info);
+				const instance = new WebAssembly.Instance(module, info);
 				receive(instance);
 				return instance.exports;
 			},
@@ -78,9 +94,9 @@ export class OpusEncoderWasm implements IOpusEncoder {
 		// opus_encoder_ctl returns OPUS_OK (0) on success, negative on error. A failure here means the
 		// encoder silently keeps the codec default, so log it rather than swallowing it.
 		const bitrateRet = this.module._opus_frame_encoder_set_bitrate(this.ctx, this.config.bitrate);
-		if (bitrateRet < 0) logger.warn(`OpusEncoder: set_bitrate(${this.config.bitrate}) failed (${bitrateRet})`);
+		if (bitrateRet < 0) console.warn(`OpusEncoder: set_bitrate(${this.config.bitrate}) failed (${bitrateRet})`);
 		const complexityRet = this.module._opus_frame_encoder_set_complexity(this.ctx, this.config.complexity);
-		if (complexityRet < 0) logger.warn(`OpusEncoder: set_complexity(${this.config.complexity}) failed (${complexityRet})`);
+		if (complexityRet < 0) console.warn(`OpusEncoder: set_complexity(${this.config.complexity}) failed (${complexityRet})`);
 
 		const maxPcmBytes = this.frameSize * this.config.channels * 2; // 16-bit samples
 		this.pcmBuffer = new Uint8Array(this.module.HEAPU8.buffer, this.module._malloc(maxPcmBytes), maxPcmBytes);

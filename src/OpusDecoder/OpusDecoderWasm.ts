@@ -5,19 +5,23 @@
 // submodules and compiled into the dist files, may have different
 // licensing terms."
 
-// Provide Node.js globals for emscripten module.  HACK.
-if (typeof globalThis.__filename === 'undefined') {
-	globalThis.__filename = './opus-decoder.js';
+// This file deliberately logs via `console` (not the Winston logger): it is part of the Worker-safe
+// core (see scripts/check-worker-safe.mjs), so it cannot import ../logger. On the Node container
+// that bypasses OTLP/LOG_LEVEL, but decode *failures* are still logged through Winston by the
+// callers (OutgoingConnection/TranslatorConnection); all that skips centralized logging is a debug
+// line. If that ever matters, inject a logger alongside provideDecoderWasm rather than importing
+// one here.
+
+// Provide Node.js globals the emscripten glue may reference. HACK. Cast because these aren't in the
+// lib typings (and don't exist in a Worker); harmless where already defined.
+const g = globalThis as any;
+if (typeof g.__filename === 'undefined') {
+	g.__filename = './opus-decoder.js';
 }
-if (typeof globalThis.__dirname === 'undefined') {
-	globalThis.__dirname = '.';
+if (typeof g.__dirname === 'undefined') {
+	g.__dirname = '.';
 }
 
-import OpusDecoderModule from '../../dist/opus-decoder.cjs';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import logger from '../logger';
 import type { DecodeError } from '../AudioDecoder';
 import type {
 	IOpusDecoder,
@@ -26,12 +30,26 @@ import type {
 	OpusDecoderSampleRate,
 } from './opusTypes';
 
-// Load WASM module from file system for Node.js
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const wasmPath = path.join(__dirname, '../../dist/opus-decoder.wasm');
-const wasmBuffer = fs.readFileSync(wasmPath);
-const wasm = new WebAssembly.Module(wasmBuffer);
+/**
+ * The Emscripten module factory (the generated `opus-decoder.cjs` glue) and the compiled
+ * `WebAssembly.Module`. How these are obtained is host-specific (Node reads them from the filesystem,
+ * a Worker imports them), so they are injected via {@link provideDecoderWasm} rather than loaded here
+ * — this keeps the shared decode logic free of `fs` and runnable in a Cloudflare Worker.
+ */
+export type EmscriptenModuleFactory = (opts: {
+	instantiateWasm: (info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => WebAssembly.Exports;
+}) => Promise<any>;
+
+let glueFactory: EmscriptenModuleFactory | undefined;
+let wasm: WebAssembly.Module | undefined;
+
+export function provideDecoderWasm(factory: EmscriptenModuleFactory, module: WebAssembly.Module): void {
+	glueFactory = factory;
+	wasm = module;
+	// Reset the cached module promise so a re-registration (e.g. a test switching bindings) takes
+	// effect on the next getOpusModule() call instead of reusing the previous binding's instance.
+	OpusDecoderWasm.resetModule();
+}
 
 interface OpusWasmInstance {
 	opus_frame_decoder_create: (sampleRate: number, channels: number) => number;
@@ -72,35 +90,53 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		[-7, 'OPUS_ALLOC_FAIL: Memory allocation has failed'],
 	]);
 
-	static opusModule = new Promise<OpusWasmInstance>((resolve, reject) => {
-		OpusDecoderModule({
-			instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
-				try {
-					let instance = new WebAssembly.Instance(wasm, info);
-					receive(instance);
-					return instance.exports;
-				} catch (error) {
-					reject(error);
-					throw error;
-				}
-			},
-		})
-			.then((module: any) => {
-				resolve({
-					opus_frame_decoder_create: module._opus_frame_decoder_create,
-					opus_frame_decoder_destroy: module._opus_frame_decoder_destroy,
-					opus_frame_decoder_reset: module._opus_frame_decoder_reset,
-					opus_frame_decode: module._opus_frame_decode,
-					malloc: module._malloc,
-					free: module._free,
-					HEAP: module.wasmMemory.buffer,
-					module,
-				});
-			})
-			.catch((error) => {
-				reject(error);
+	// Built lazily on first decoder creation from the injected binding (see provideDecoderWasm), so
+	// importing this module has no side effects and doesn't require the binding until it's actually used.
+	private static _opusModule?: Promise<OpusWasmInstance>;
+
+	/** Clears the cached module promise; called by provideDecoderWasm on (re-)registration. */
+	static resetModule(): void {
+		this._opusModule = undefined;
+	}
+
+	static getOpusModule(): Promise<OpusWasmInstance> {
+		if (this._opusModule === undefined) {
+			if (glueFactory === undefined || wasm === undefined) {
+				return Promise.reject(new Error('Opus WASM decoder binding not provided (call provideDecoderWasm)'));
+			}
+			const module = wasm;
+			this._opusModule = new Promise<OpusWasmInstance>((resolve, reject) => {
+				glueFactory!({
+					instantiateWasm(info: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) {
+						try {
+							let instance = new WebAssembly.Instance(module, info);
+							receive(instance);
+							return instance.exports;
+						} catch (error) {
+							reject(error);
+							throw error;
+						}
+					},
+				})
+					.then((m: any) => {
+						resolve({
+							opus_frame_decoder_create: m._opus_frame_decoder_create,
+							opus_frame_decoder_destroy: m._opus_frame_decoder_destroy,
+							opus_frame_decoder_reset: m._opus_frame_decoder_reset,
+							opus_frame_decode: m._opus_frame_decode,
+							malloc: m._malloc,
+							free: m._free,
+							HEAP: m.wasmMemory.buffer,
+							module: m,
+						});
+					})
+					.catch((error) => {
+						reject(error);
+					});
 			});
-	});
+		}
+		return this._opusModule;
+	}
 
 	private _sampleRate: OpusDecoderSampleRate;
 	private _channels: number;
@@ -148,11 +184,11 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		return this._ready;
 	}
 
-	async _init(): Promise<void> {
-		const wasmInstance = await OpusDecoderWasm.opusModule;
+	private async _init(): Promise<void> {
+		const wasmInstance = await OpusDecoderWasm.getOpusModule();
 		this.wasm = wasmInstance;
 
-		logger.debug('OpusDecoder WASM module loaded');
+		console.debug('OpusDecoder WASM module loaded');
 
 		this._input = this.allocateTypedArray(this._inputSize, Uint8Array);
 
@@ -162,7 +198,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder < 0) {
 			const error = `libopus opus_decoder_create failed: ${OpusDecoderWasm.errors.get(this._decoder) || 'Unknown Error'}`;
-			logger.error(error);
+			console.error(error);
 			throw Error(error);
 		}
 	}
@@ -223,7 +259,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder === undefined) {
 			this.addError(errors, 'Decoder freed or not initialized', 0, 0, 0, 0);
-			logger.error('Decoder freed or not initialized');
+			console.error('Decoder freed or not initialized');
 			return {
 				errors,
 				audioData: new Uint8Array(0),
@@ -247,7 +283,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		if (samplesDecoded < 0) {
 			const error = `libopus ${samplesDecoded} ${OpusDecoderWasm.errors.get(samplesDecoded) || 'Unknown Error'}`;
 
-			logger.error(error);
+			console.error(error);
 
 			this.addError(errors, error, opusFrame.length, this._frameNumber, this._inputBytes, this._outputSamples);
 
@@ -278,7 +314,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 
 		if (this._decoder === undefined) {
 			this.addError(errors, 'Decoder freed or not initialized', 0, 0, 0, 0);
-			logger.error('Decoder freed or not initialized');
+			console.error('Decoder freed or not initialized');
 			return {
 				errors,
 				audioData: new Uint8Array(0),
@@ -307,7 +343,7 @@ export class OpusDecoderWasm<SampleRate extends OpusDecoderSampleRate | undefine
 		if (samplesDecoded < 0) {
 			const error = `libopus ${samplesDecoded} ${OpusDecoderWasm.errors.get(samplesDecoded) || 'Unknown Error'}`;
 
-			logger.error(error);
+			console.error(error);
 
 			this.addError(errors, error, inLength, this._frameNumber, this._inputBytes, this._outputSamples);
 
