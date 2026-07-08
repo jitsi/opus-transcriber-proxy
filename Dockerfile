@@ -29,7 +29,11 @@ COPY src ./src
 
 # Compile build/Release/opus_native.node, then bundle dist/bundle/server.js.
 RUN npm run build:native
-RUN npm run build:bundle
+# GIT_HASH is baked into the bundle (build.mjs -> __GIT_HASH__) so the running commit is observable
+# in the server `info` message. .git isn't in the build context, so pass it as a build-arg (CI sets
+# it to the commit SHA); falls back to "unknown" for a plain `docker build`.
+ARG GIT_HASH=unknown
+RUN GIT_HASH="$GIT_HASH" npm run build:bundle
 
 # ---- Runtime: slim image with production deps + both backends' artifacts ----
 FROM node:22-alpine AS runtime

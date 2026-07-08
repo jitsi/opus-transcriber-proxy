@@ -94,6 +94,7 @@ jobs:
                     TAGS="$TAGS,jitsi/opus-transcriber-proxy:${{ inputs.custom_tag }}"
                   fi
                   echo "tags=$TAGS" >> $GITHUB_OUTPUT
+                  echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
             - name: Build and push Docker image
               uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
@@ -103,3 +104,6 @@ jobs:
                   pull: true
                   push: true
                   tags: ${{ steps.meta.outputs.tags }}
+                  # Bake the commit SHA into the bundle so the server `info` message reports it.
+                  build-args: |
+                      GIT_HASH=${{ steps.meta.outputs.short_sha }}
