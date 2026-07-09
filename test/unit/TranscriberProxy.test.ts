@@ -387,7 +387,30 @@ describe('TranscriberProxy', () => {
 			proxy.handleStartEvent(validStart('tag1'));
 
 			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
-			expect(OutgoingConnection).toHaveBeenCalledWith('tag1', { encoding: 'opus' }, options);
+			// 4th arg is the per-endpoint diarize override (undefined = use global config)
+			expect(OutgoingConnection).toHaveBeenCalledWith('tag1', { encoding: 'opus' }, options, undefined);
+		});
+
+		it('should pass a per-endpoint diarize=true from the start event to OutgoingConnection', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'room-1', mediaFormat: { encoding: 'opus' }, diarize: true } });
+
+			expect(OutgoingConnection).toHaveBeenCalledWith('room-1', { encoding: 'opus' }, options, true);
+		});
+
+		it('should forward diarize=false and ignore non-boolean diarize values', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+
+			vi.mocked(OutgoingConnection).mockClear();
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'a', mediaFormat: { encoding: 'opus' }, diarize: false } });
+			expect(OutgoingConnection).toHaveBeenLastCalledWith('a', { encoding: 'opus' }, options, false);
+
+			// A non-boolean (e.g. string) must not override the global config.
+			vi.mocked(OutgoingConnection).mockClear();
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'b', mediaFormat: { encoding: 'opus' }, diarize: 'true' } });
+			expect(OutgoingConnection).toHaveBeenLastCalledWith('b', { encoding: 'opus' }, options, undefined);
 		});
 
 		it('should log an error and not create a connection when tag is missing', () => {
@@ -519,6 +542,7 @@ describe('TranscriberProxy', () => {
 				'unknown-tag',
 				{ encoding: 'opus', sampleRate: 48000, channels: 2 },
 				options,
+				undefined,
 			);
 
 			// Should still route the event to the new connection
@@ -537,6 +561,7 @@ describe('TranscriberProxy', () => {
 				'tag1',
 				{ encoding: 'ogg' },
 				oggOptions,
+				undefined,
 			);
 		});
 

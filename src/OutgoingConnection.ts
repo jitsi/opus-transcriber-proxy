@@ -76,7 +76,7 @@ export class OutgoingConnection {
 	private metricCache: MetricCache;
 	private inputAudioFormat!: AudioFormat; // set synchronously by updateInputFormat() in the constructor
 
-	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions) {
+	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions, private readonly diarize?: boolean) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.options = options;
@@ -159,6 +159,7 @@ export class OutgoingConnection {
 			backendConfig.language = this.options.language;
 			backendConfig.tags = this.options.tags;
 			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+			backendConfig.diarize = this.diarize;
 			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
 			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
 			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
@@ -377,6 +378,7 @@ export class OutgoingConnection {
 		backendConfig.language = this.options.language;
 		backendConfig.tags = this.options.tags;
 		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.diarize = this.diarize;
 		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
 		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
 		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;

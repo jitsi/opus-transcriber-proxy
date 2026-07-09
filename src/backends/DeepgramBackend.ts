@@ -96,8 +96,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 				if (config.deepgram.punctuate !== undefined) {
 					params.set('punctuate', config.deepgram.punctuate.toString());
 				}
-				if (config.deepgram.diarize !== undefined) {
-					params.set('diarize', config.deepgram.diarize.toString());
+				// Per-endpoint override (start event's `diarize`) takes precedence over
+				// the global DEEPGRAM_DIARIZE config.
+				const diarize = backendConfig.diarize ?? config.deepgram.diarize;
+				if (diarize !== undefined) {
+					params.set('diarize', diarize.toString());
 				}
 
 				// Model Improvement Program opt-out. Per-connection override
@@ -342,8 +345,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 		const isFinal = result.is_final === true;
 
 		// When diarization is enabled and word-level speaker data is present, split by speaker.
+		// Honour the per-endpoint override (start event) over the global config.
 		if (
-			config.deepgram.diarize &&
+			(this.backendConfig?.diarize ?? config.deepgram.diarize) &&
 			Array.isArray(alternative.words) &&
 			alternative.words.length > 0 &&
 			alternative.words[0].speaker !== undefined

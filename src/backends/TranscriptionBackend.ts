@@ -29,6 +29,14 @@ export interface BackendConfig {
 	 */
 	deepgramMipOptOut?: boolean;
 	/**
+	 * Per-endpoint override for speaker diarization, set from the `start` event's
+	 * `diarize` field. undefined = use global config (DEEPGRAM_DIARIZE / XAI_DIARIZE);
+	 * true/false overrides it for this connection. Enable only for streams that
+	 * genuinely carry multiple speakers (e.g. room systems, dial-in legs) — on a
+	 * single-speaker stream diarization can spuriously split one talker.
+	 */
+	diarize?: boolean;
+	/**
 	 * Per-connection xAI segmentation overrides (undefined = use global config).
 	 * `xaiEndpointing`: silence ms before a final. `xaiSmartTurn`: end-of-turn
 	 * confidence (0–1); when set, enables smart_turn. `xaiSmartTurnTimeout`: max

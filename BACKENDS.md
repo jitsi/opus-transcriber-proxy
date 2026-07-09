@@ -224,6 +224,8 @@ interface BackendConfig {
   prompt?: string;
   model?: string;
   tags?: string[];
+  diarize?: boolean; // per-endpoint override (start event); undefined = global config
+  // ...plus per-connection overrides: deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, etc.
 }
 
 interface TranscriptionBackend {
@@ -250,6 +252,18 @@ interface TranscriptionBackend {
   onClosed?: () => void;
 }
 ```
+
+### Per-endpoint diarization
+
+`BackendConfig.diarize` is a per-endpoint override sourced from the `start` event's
+`diarize` field (`TranscriberProxy.handleStartEvent` → `OutgoingConnection`). It lets
+the caller (e.g. the Jitsi videobridge) enable diarization only for streams that carry
+multiple speakers (room systems, dial-in legs), while leaving single-speaker participant
+streams undiarized. Both `DeepgramBackend` and `XAIBackend` resolve
+`backendConfig.diarize ?? config.<provider>.diarize`, so `undefined` falls back to the
+global `DEEPGRAM_DIARIZE` / `XAI_DIARIZE` env config. Only diarize streams known to be
+multi-speaker: on a single-speaker stream the diarizer can spuriously split one talker
+into several speaker labels.
 
 ### Audio Format Negotiation
 

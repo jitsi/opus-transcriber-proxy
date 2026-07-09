@@ -132,6 +132,31 @@ describe('XAIBackend', () => {
 			expect(backend.getStatus()).toBe('connected');
 		});
 
+		it('should let per-endpoint diarize=true override the global config', async () => {
+			// global config mock has diarize:false; the start-event override enables it
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, diarize: true });
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			expect(getMockWs().url).toContain('diarize=true');
+		});
+
+		it('should let per-endpoint diarize=false override a globally-enabled diarize', async () => {
+			(config.xai as any).diarize = true;
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect({ ...DEFAULT_CONFIG, diarize: false });
+				getMockWs().simulateOpen();
+				await connectPromise;
+
+				// xAI only emits the diarize param when enabled, so it must be absent here
+				expect(getMockWs().url).not.toContain('diarize=true');
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
 		it('should include language from backendConfig', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, language: 'fr' });
