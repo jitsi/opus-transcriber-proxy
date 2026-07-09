@@ -4,9 +4,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"deploy": "wrangler deploy --config ../wrangler-container.jsonc",
-		"dev": "wrangler dev --config ../wrangler-container.jsonc",
-		"tail": "wrangler tail --config ../wrangler-container.jsonc"
+		"deploy": "wrangler deploy --config ../wrangler.jsonc",
+		"dev": "wrangler dev --config ../wrangler.jsonc",
+		"tail": "wrangler tail --config ../wrangler.jsonc"
 	},
 	"dependencies": {
 		"@cloudflare/containers": "latest"
