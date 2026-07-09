@@ -1,0 +1,145 @@
+name: "Integration tests (container/worker x opus-backend x endpoint x provider)"
+
+# Hits live provider APIs (OpenAI/Deepgram/xAI) on every PR — real cost and network flake accepted
+# as a tradeoff for catching integration regressions before merge. See test/integration/MATRIX.md
+# for the full cell list and rationale. Cells whose API key secret isn't set are soft-skipped
+# (scripts/integration-test.mjs exits 0), so this is safe to enable before all keys are added.
+on:
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+jobs:
+    # Build the WASM dist artifacts and the (both-backends) Docker image once, share with every
+    # matrix cell below. Avoids each of the 12 `runtime: container` cells recompiling native Opus +
+    # rebundling from scratch.
+    build-artifacts:
+        runs-on: "ubuntu-latest"
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+              with:
+                  submodules: "true"
+
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Install Linux deps
+              run: |
+                  sudo apt update
+                  sudo apt -y install wget unzip
+
+            - name: Setup Emscripten SDK
+              run: |
+                  EMSDK_VERSION="4.0.20"
+                  wget https://github.com/emscripten-core/emsdk/archive/main.zip
+                  unzip main.zip
+                  cd emsdk-main
+                  ./emsdk install $EMSDK_VERSION
+                  ./emsdk activate $EMSDK_VERSION
+                  source ./emsdk_env.sh
+                  echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+                  echo "EM_CONFIG=$EM_CONFIG" >> $GITHUB_ENV
+                  echo "$EMSDK:$EMSDK/upstream/emscripten" >> $GITHUB_PATH
+
+            - name: Build WASM modules
+              run: |
+                  source "$EMSDK/emsdk_env.sh"
+                  npm run build:wasm
+
+            - name: Upload WASM dist artifacts
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: wasm-dist
+                  path: dist/opus-*
+                  retention-days: 1
+
+            # Ships both Opus backends (Dockerfile default); OPUS_BACKEND selects at container runtime.
+            - name: Build Docker image
+              run: docker build -t opus-transcriber-proxy:itest .
+
+            - name: Save Docker image
+              run: docker save opus-transcriber-proxy:itest -o /tmp/opus-transcriber-proxy.tar
+
+            - name: Upload Docker image artifact
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: docker-image
+                  path: /tmp/opus-transcriber-proxy.tar
+                  retention-days: 1
+
+    integration:
+        needs: build-artifacts
+        runs-on: "ubuntu-latest"
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # runtime=container, opus-backend=wasm, endpoint=transcribe
+                    - { runtime: container, opusBackend: wasm, endpoint: transcribe, provider: dummy }
+                    - { runtime: container, opusBackend: wasm, endpoint: transcribe, provider: openai }
+                    - { runtime: container, opusBackend: wasm, endpoint: transcribe, provider: deepgram }
+                    - { runtime: container, opusBackend: wasm, endpoint: transcribe, provider: xai }
+                    # runtime=container, opus-backend=native, endpoint=transcribe
+                    - { runtime: container, opusBackend: native, endpoint: transcribe, provider: dummy }
+                    - { runtime: container, opusBackend: native, endpoint: transcribe, provider: openai }
+                    - { runtime: container, opusBackend: native, endpoint: transcribe, provider: deepgram }
+                    - { runtime: container, opusBackend: native, endpoint: transcribe, provider: xai }
+                    # runtime=container, endpoint=translate (OpenAI only), both opus backends
+                    - { runtime: container, opusBackend: wasm, endpoint: translate, provider: openai }
+                    - { runtime: container, opusBackend: native, endpoint: translate, provider: openai }
+                    # runtime=worker: /translate only — production never routes /transcribe through
+                    # the Worker (that path also needs Docker, which wrangler dev rebuilds itself and
+                    # is unreliable on constrained local machines; not worth covering here either way).
+                    - { runtime: worker, opusBackend: wasm, endpoint: translate, provider: openai }
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+              # No submodule needed: container cells load the prebuilt image (no build), and the
+              # only worker cell is /translate, which runs in the Worker isolate (no container build).
+
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install dependencies
+              run: |
+                  npm ci
+                  cd worker && npm ci
+
+            - name: Download WASM dist artifacts
+              uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+              with:
+                  name: wasm-dist
+                  path: dist
+
+            - name: Download Docker image artifact
+              if: matrix.runtime == 'container'
+              uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+              with:
+                  name: docker-image
+                  path: /tmp
+
+            - name: Load Docker image
+              if: matrix.runtime == 'container'
+              run: docker load -i /tmp/opus-transcriber-proxy.tar
+
+            - name: Run integration cell
+              run: |
+                  node scripts/integration-test.mjs \
+                    --runtime=${{ matrix.runtime }} \
+                    --opus-backend=${{ matrix.opusBackend }} \
+                    --endpoint=${{ matrix.endpoint }} \
+                    --provider=${{ matrix.provider }}
+              env:
+                  INTEGRATION_TEST_IMAGE: opus-transcriber-proxy:itest
+                  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                  DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+                  XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
