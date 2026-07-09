@@ -110,8 +110,11 @@ jobs:
                   cache: npm
 
             - name: Install dependencies
+              # --ignore-scripts: package.json's binding.gyp triggers an automatic node-gyp rebuild
+              # on plain `npm ci`, which needs the (unfetched, no submodule checkout here) libopus
+              # submodule source. This job never touches the native addon, only `ws` + node builtins.
               run: |
-                  npm ci
+                  npm ci --ignore-scripts
                   cd worker && npm ci
 
             - name: Download WASM dist artifacts
