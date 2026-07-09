@@ -7,7 +7,7 @@ import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig, type OpenAICustomOptions } from './backends/BackendFactory';
-import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
@@ -75,11 +75,14 @@ export class OutgoingConnection {
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
 	private inputAudioFormat!: AudioFormat; // set synchronously by updateInputFormat() in the constructor
+	/** Per-endpoint diarization override (from the start event); mutable so a re-start can change it. */
+	private diarize?: boolean;
 
-	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions, private readonly diarize?: boolean) {
+	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions, diarize?: boolean) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.options = options;
+		this.diarize = diarize;
 		this.metricCache = new MetricCache(undefined, NaN);
 
 		this.updateInputFormat(inputFormat);
@@ -91,17 +94,24 @@ export class OutgoingConnection {
 		return { ...this.inputAudioFormat };
 	}
 
-	updateInputFormat(inputFormat: AudioFormat): void {
+	updateInputFormat(inputFormat: AudioFormat, diarize?: boolean): void {
 		// Validate synchronously so callers get an immediate error rather than
 		// an async failure deep in reinitializeDecoder -> createAudioDecoder.
 		// validateAudioFormat also normalises 'ogg-opus' → 'ogg'.
 		const newFormat = validateAudioFormat(inputFormat);
 
+		// A re-start may change the per-endpoint diarize flag. It's a connect-time
+		// URL param, so honour a change by forcing a backend reconnect even when the
+		// audio format is unchanged. Only an explicit boolean is considered.
+		const diarizeChanged = diarize !== undefined && diarize !== this.diarize;
+		if (diarizeChanged) {
+			this.diarize = diarize;
+		}
+
 		if (this.backend) {
-			// Skip reinitialisation when the validated format is identical to the
-			// current one — avoids flushing pending frames and potentially
-			// reconnecting the backend for repeated start events with unchanged format.
-			if (!audioFormatsDiffer(newFormat, this.inputAudioFormat)) {
+			// Skip reinitialisation when nothing changed — avoids flushing pending
+			// frames and reconnecting the backend for repeated start events.
+			if (!audioFormatsDiffer(newFormat, this.inputAudioFormat) && !diarizeChanged) {
 				return;
 			}
 		}
@@ -114,7 +124,7 @@ export class OutgoingConnection {
 		// one via reconnectBackend().
 
 		if (this.backend) {
-			const promise = this.reinitializeDecoder();
+			const promise = this.reinitializeDecoder(diarizeChanged);
 			// reinitGeneration is incremented synchronously inside reinitializeDecoder
 			// (before its first await), so this.reinitGeneration already reflects the
 			// generation owned by this call.
@@ -141,6 +151,24 @@ export class OutgoingConnection {
 		};
 	}
 
+	/**
+	 * Copy the per-connection / per-endpoint settings onto a fresh BackendConfig.
+	 * Shared by the initial connect (initializeBackend) and the reconnect path
+	 * (reconnectBackend) so the two lists can never drift out of lockstep.
+	 */
+	private applyPerConnectionConfig(backendConfig: BackendConfig): void {
+		backendConfig.language = this.options.language;
+		backendConfig.tags = this.options.tags;
+		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.diarize = this.diarize;
+		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+	}
+
 	private async initializeBackend(): Promise<void> {
 		try {
 			// Create backend using factory
@@ -156,16 +184,7 @@ export class OutgoingConnection {
 
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
-			backendConfig.language = this.options.language;
-			backendConfig.tags = this.options.tags;
-			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-			backendConfig.diarize = this.diarize;
-			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+			this.applyPerConnectionConfig(backendConfig);
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -283,7 +302,7 @@ export class OutgoingConnection {
 		);
 	}
 
-	private async reinitializeDecoder(): Promise<void> {
+	private async reinitializeDecoder(forceReconnect = false): Promise<void> {
 		if (!this.backend) {
 			throw new Error('Cannot initialize decoder without a backend');
 		}
@@ -310,12 +329,13 @@ export class OutgoingConnection {
 		// whether it also needs to replace the backend.
 		this.activeDesiredFormat = desiredFormat;
 
-		// If the backend's desired audio format has changed and a backend already
-		// exists, close it and open a fresh connection with the new format.
-		// This covers mid-session input-format changes (e.g. Deepgram switching
-		// between raw-Opus pass-through and decoded PCM).
-		if (oldDesiredFormat !== undefined && audioFormatsDiffer(desiredFormat, oldDesiredFormat)) {
-			const reconnected = await this.reconnectBackend(generation);
+		// Reconnect the backend when its desired audio format has changed (e.g. Deepgram
+		// switching between raw-Opus pass-through and decoded PCM) OR when a re-start
+		// changed a connect-time flag such as diarize (forceReconnect). Only when a
+		// backend already exists — the initial connect is handled by initializeBackend.
+		const formatChanged = audioFormatsDiffer(desiredFormat, oldDesiredFormat ?? desiredFormat);
+		if (oldDesiredFormat !== undefined && (formatChanged || forceReconnect)) {
+			const reconnected = await this.reconnectBackend(generation, formatChanged ? undefined : 'diarize changed');
 			if (!reconnected) {
 				return; // stale or fatal error — a newer call has taken over
 			}
@@ -375,16 +395,7 @@ export class OutgoingConnection {
 		newBackend.getDesiredAudioFormat(this.inputAudioFormat);
 
 		const backendConfig = getBackendConfig(this.options.provider);
-		backendConfig.language = this.options.language;
-		backendConfig.tags = this.options.tags;
-		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-		backendConfig.diarize = this.diarize;
-		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+		this.applyPerConnectionConfig(backendConfig);
 
 		try {
 			const connectStartTime = Date.now();

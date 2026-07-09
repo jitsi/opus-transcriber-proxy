@@ -470,9 +470,9 @@ npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 }
 ```
 `diarize` is optional and per-endpoint: only an explicit boolean overrides the global
-`DEEPGRAM_DIARIZE` / `XAI_DIARIZE` config; anything else falls back to it. It is captured
-when the connection is first created (a re-`start` updates only the media format). Set it
-to `true` only for endpoints that carry multiple speakers (room systems, dial-in legs).
+`DEEPGRAM_DIARIZE` / `XAI_DIARIZE` config; anything else falls back to it. A re-`start`
+for the same endpoint can change it (the backend reconnects to apply the new value). Set
+it to `true` only for endpoints that carry multiple speakers (room systems, dial-in legs).
 
 **Audio packet:**
 ```json
@@ -577,7 +577,7 @@ Do not leave stale descriptions. If a note says "only X happens" and you change 
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant's media source within a session. Format is a sourceId — `{id}-{mediaType}` (e.g. `abc123-a0`, where the suffix encodes media type: `a`=audio, `v`=video) or just `{id}`. The hex `{id}` prefix is parsed out (via `/^([0-9a-fA-F]+)-/`) as the participant id, while the full tag is retained on `participant.tag`. Tags whose prefix isn't hex fall back to `id === tag === <whole tag>`.
-- Diarization is enabled **per-endpoint**, not per-session: the `start` event's `diarize` field flows `handleStartEvent` → `createConnection(tag, mediaFormat, diarize)` → `new OutgoingConnection(..., diarize)` → `BackendConfig.diarize`, and each backend resolves `backendConfig.diarize ?? config.<provider>.diarize`. Only an explicit boolean overrides the global env config; it is captured at connection creation (a re-`start` does not change it). Enable it only for multi-speaker streams (room systems, dial-in legs) — on a single-speaker stream the diarizer can spuriously split one talker.
+- Diarization is enabled **per-endpoint**, not per-session: the `start` event's `diarize` field flows `handleStartEvent` → `createConnection(tag, mediaFormat, diarize)` → `new OutgoingConnection(..., diarize)` → `BackendConfig.diarize`, and each backend resolves `backendConfig.diarize ?? config.<provider>.diarize`. Only an explicit boolean overrides the global env config; a re-`start` for the same tag can change it (via `updateInputFormat`, which reconnects the backend to apply it). Enable it only for multi-speaker streams (room systems, dial-in legs) — on a single-speaker stream the diarizer can spuriously split one talker.
 - Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
 - `openai_custom` is a provider that reuses `OpenAIBackend` but with a per-request WebSocket URL (from the `openaiCustomUrl` URL query parameter) and API key (from the `X-Custom-Openai-Api-Key` HTTP header). It is gated by `ENABLE_OPENAI_CUSTOM_PROVIDER=true` (similar to `ENABLE_DUMMY_PROVIDER`). The URL and key are stored in `TranscriberProxyOptions` (`openaiCustomUrl`, `openaiCustomApiKey`) and passed to `BackendFactory.createBackend` via `OpenAICustomOptions`. `BackendFactory` instantiates `OpenAIBackend(tag, participantInfo, wsUrl, apiKey)` for this provider.
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.

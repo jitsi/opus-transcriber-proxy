@@ -22,6 +22,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	private _connectCallCount: number = 0;
 	private _forceCommitCallCount: number = 0;
 	private _closeCallCount: number = 0;
+	private _lastConnectConfig?: BackendConfig;
 
 	// Callbacks
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
@@ -52,6 +53,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 
 	async connect(config: BackendConfig): Promise<void> {
 		this._connectCallCount++;
+		this._lastConnectConfig = config;
 
 		if (this._promptHistory.length === 0 && config.prompt) {
 			this._promptHistory.push(config.prompt);
@@ -181,6 +183,13 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	 */
 	getConnectCallCount(): number {
 		return this._connectCallCount;
+	}
+
+	/**
+	 * Get the BackendConfig passed to the most recent connect() call
+	 */
+	getLastConnectConfig(): BackendConfig | undefined {
+		return this._lastConnectConfig;
 	}
 
 	/**

@@ -296,10 +296,10 @@ export class TranscriberProxy extends EventEmitter {
 
 		const connection = this.getConnection(tag);
 		if (connection) {
-			// diarize is captured when the connection is first created; a re-start
-			// updates only the media format (changing diarize mid-stream would require
-			// tearing down and reconnecting the backend).
-			connection.updateInputFormat(mediaFormat);
+			// A re-start updates the media format and may also change the per-endpoint
+			// diarize flag; updateInputFormat applies the new diarize (reconnecting the
+			// backend if it changed).
+			connection.updateInputFormat(mediaFormat, diarize);
 		} else {
 			this.createConnection(tag, mediaFormat, diarize);
 		}

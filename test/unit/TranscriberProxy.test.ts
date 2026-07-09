@@ -461,12 +461,28 @@ describe('TranscriberProxy', () => {
 			// Constructor called exactly once (for the first event only)
 			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
 
-			// updateInputFormat called on the connection instance
+			// updateInputFormat called on the connection instance (2nd arg is the
+			// per-endpoint diarize override — undefined when the start omits it)
 			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
-			expect(conn.updateInputFormat).toHaveBeenCalledWith({
-				encoding: 'l16',
-				sampleRate: 16000,
-			});
+			expect(conn.updateInputFormat).toHaveBeenCalledWith(
+				{
+					encoding: 'l16',
+					sampleRate: 16000,
+				},
+				undefined,
+			);
+		});
+
+		it('should forward a changed diarize flag to updateInputFormat on a re-start', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			// Re-start for the same tag now requesting diarization
+			proxy.handleStartEvent({ event: 'start', start: { tag: 'tag1', mediaFormat: { encoding: 'opus' }, diarize: true } });
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.updateInputFormat).toHaveBeenLastCalledWith({ encoding: 'opus' }, true);
 		});
 
 		it('should create separate connections for different tags', () => {
