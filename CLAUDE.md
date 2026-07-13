@@ -89,8 +89,7 @@ server/worker process — no mocks — replaying `resources/sample.jsonl` via `s
 full 11-cell list and required API keys — `runtime=worker` only covers `/translate` (production
 never routes `/transcribe` through the Worker), and Gemini is excluded to keep the per-PR matrix
 smaller. Runs in CI via `.github/workflows/integration-test.yml` on every PR into `main` and on
-`workflow_dispatch` —
-cells without their provider's API key secret set are soft-skipped, not failed.
+`workflow_dispatch` — cells without their provider's API key secret set are soft-skipped, not failed.
 
 ### Docker
 ```bash

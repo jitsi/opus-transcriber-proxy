@@ -134,14 +134,17 @@ function waitForHttpOk(url, timeoutMs) {
 
 function waitForPort(port, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
+	let settled = false;
 	return new Promise((resolve, reject) => {
 		function attempt() {
+			if (settled) return;
 			const socket = net.connect(port, '127.0.0.1');
-			socket.on('connect', () => { socket.end(); resolve(); });
+			socket.on('connect', () => { settled = true; socket.end(); resolve(); });
 			socket.on('error', () => { socket.destroy(); retry(); });
 		}
 		function retry() {
-			if (Date.now() > deadline) reject(new Error(`Timed out waiting for port ${port}`));
+			if (settled) return;
+			if (Date.now() > deadline) { settled = true; reject(new Error(`Timed out waiting for port ${port}`)); }
 			else setTimeout(attempt, 1000);
 		}
 		attempt();
@@ -152,10 +155,17 @@ function waitForPort(port, timeoutMs) {
 function waitForOutput(proc, pattern, timeoutMs) {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error(`Timed out waiting for /${pattern.source}/ in process output`)), timeoutMs);
+		function onExit(code) {
+			clearTimeout(timer);
+			proc.stdout.off('data', onData);
+			proc.stderr.off('data', onData);
+			reject(new Error(`Process exited (code ${code}) before matching /${pattern.source}/`));
+		}
 		function onData(chunk) {
 			process.stdout.write(chunk);
 			if (pattern.test(chunk.toString())) {
 				clearTimeout(timer);
+				proc.off('exit', onExit); // otherwise stop()'s later kill fires this after we've settled
 				proc.stdout.off('data', onData);
 				proc.stderr.off('data', onData);
 				resolve();
@@ -163,24 +173,29 @@ function waitForOutput(proc, pattern, timeoutMs) {
 		}
 		proc.stdout.on('data', onData);
 		proc.stderr.on('data', onData);
-		proc.on('exit', (code) => {
-			clearTimeout(timer);
-			proc.stdout.off('data', onData);
-			proc.stderr.off('data', onData);
-			reject(new Error(`Process exited (code ${code}) before matching /${pattern.source}/`));
-		});
+		proc.once('exit', onExit);
 	});
 }
 
 async function startContainer({ port, opusBackend, provider }) {
 	const name = `opus-itest-${randomUUID().slice(0, 8)}`;
 	const env = ['-e', `OPUS_BACKEND=${opusBackend}`];
+	// The API key goes through --env-file, not -e KEY=VALUE: -e args are visible in plaintext via
+	// `/proc/<pid>/cmdline` of the invoking `docker` process (e.g. to `ps aux` on a shared host)
+	// while `docker run` executes, which redact() (log-only) doesn't protect against. Note this does
+	// NOT hide the value from `docker inspect` once the container is running — Docker resolves -e
+	// and --env-file into the same `.Config.Env`, indistinguishable by source. Not a concern for a
+	// single-tenant, ephemeral CI runner; the fix's actual value is scoped to the process-argv exposure.
+	const varsDir = mkdtempSync(path.join(os.tmpdir(), 'opus-itest-'));
+	const envFile = path.join(varsDir, 'itest.env');
 	if (provider === 'dummy') {
 		env.push('-e', 'ENABLE_DUMMY_PROVIDER=true', '-e', 'PROVIDERS_PRIORITY=dummy');
+		writeFileSync(envFile, '');
 	} else {
-		env.push('-e', `PROVIDERS_PRIORITY=${provider}`, '-e', `${PROVIDER_KEY_ENV[provider]}=${process.env[PROVIDER_KEY_ENV[provider]]}`);
+		env.push('-e', `PROVIDERS_PRIORITY=${provider}`);
+		writeFileSync(envFile, `${PROVIDER_KEY_ENV[provider]}=${process.env[PROVIDER_KEY_ENV[provider]]}\n`);
 	}
-	const dockerArgs = ['run', '-d', '--rm', '-p', `${port}:8080`, '--name', name, ...env, CONTAINER_IMAGE];
+	const dockerArgs = ['run', '-d', '--rm', '-p', `${port}:8080`, '--name', name, '--env-file', envFile, ...env, CONTAINER_IMAGE];
 	log(`docker ${redact(dockerArgs).join(' ')}`);
 	const code = await run('docker', dockerArgs);
 	if (code !== 0) throw new Error(`docker run exited with code ${code}`);
@@ -188,11 +203,14 @@ async function startContainer({ port, opusBackend, provider }) {
 	async function stop() {
 		log(`Stopping container ${name}`);
 		await run('docker', ['stop', name]).catch(() => {});
+		rmSync(varsDir, { recursive: true, force: true });
 	}
 
 	try {
 		await waitForHttpOk(`http://localhost:${port}/health`, 60_000);
 	} catch (err) {
+		log(`Container failed to become healthy — dumping logs for ${name}:`);
+		await run('docker', ['logs', name]).catch(() => {});
 		await stop();
 		throw err;
 	}
@@ -213,7 +231,9 @@ async function startWorker({ port, endpoint, provider, translateLang }) {
 	}
 	writeFileSync(envFile, lines.join('\n') + '\n');
 
-	const wranglerArgs = ['dev', '--config', config, '--port', String(port), '--env-file', envFile];
+	// --inspector-port=0: let the OS pick a free port for the devtools inspector instead of
+	// wrangler's fixed default (9229), which could collide with something else on the runner.
+	const wranglerArgs = ['dev', '--config', config, '--port', String(port), '--inspector-port', '0', '--env-file', envFile];
 	log(`${WRANGLER_BIN} ${wranglerArgs.join(' ')} (config=${config})`);
 	const proc = spawn(WRANGLER_BIN, wranglerArgs, { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
 
