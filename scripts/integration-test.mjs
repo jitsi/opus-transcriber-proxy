@@ -200,6 +200,11 @@ async function startContainer({ port, opusBackend, provider }) {
 	const code = await run('docker', dockerArgs);
 	if (code !== 0) throw new Error(`docker run exited with code ${code}`);
 
+	async function dumpLogs() {
+		log(`Dumping logs for ${name}:`);
+		await run('docker', ['logs', name]).catch(() => {});
+	}
+
 	async function stop() {
 		log(`Stopping container ${name}`);
 		await run('docker', ['stop', name]).catch(() => {});
@@ -209,12 +214,12 @@ async function startContainer({ port, opusBackend, provider }) {
 	try {
 		await waitForHttpOk(`http://localhost:${port}/health`, 60_000);
 	} catch (err) {
-		log(`Container failed to become healthy — dumping logs for ${name}:`);
-		await run('docker', ['logs', name]).catch(() => {});
+		log('Container failed to become healthy —');
+		await dumpLogs();
 		await stop();
 		throw err;
 	}
-	return { stop };
+	return { stop, dumpLogs };
 }
 
 async function startWorker({ port, endpoint, provider, translateLang }) {
@@ -310,6 +315,11 @@ async function main() {
 		const code = await run('node', replayArgs, { cwd: REPO_ROOT });
 		if (code !== 0) {
 			log(`FAIL: replay exited with code ${code}`);
+			// A bad API key, expired auth, etc. surfaces here as a plain assertion failure (e.g.
+			// "expected >= 1 final transcript(s), got 0") with no clue why — the actual provider
+			// error only shows up in the container's own logs. Worker cells already stream their
+			// output live (see startWorker), so this only applies to the container path.
+			await handle.dumpLogs?.();
 			process.exitCode = 1;
 		} else {
 			log('PASS');
