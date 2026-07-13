@@ -10,12 +10,19 @@ on:
             - main
     workflow_dispatch:
 
+# Cancel a superseded run's jobs when the same PR is pushed to again, rather than letting the
+# full (real-API-hitting) matrix from the previous push keep running to completion.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
 jobs:
     # Build the WASM dist artifacts and the (both-backends) Docker image once, share with every
     # matrix cell below. Avoids each of the 12 `runtime: container` cells recompiling native Opus +
     # rebundling from scratch.
     build-artifacts:
         runs-on: "ubuntu-latest"
+        timeout-minutes: 30
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -77,6 +84,7 @@ jobs:
     integration:
         needs: build-artifacts
         runs-on: "ubuntu-latest"
+        timeout-minutes: 20
         strategy:
             fail-fast: false
             matrix:

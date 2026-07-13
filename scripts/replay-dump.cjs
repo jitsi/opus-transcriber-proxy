@@ -391,6 +391,11 @@ ws.on('error', (error) => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
     console.error('WebSocket error:', error.message);
     if (ciMode) {
+        // process.exit() here is synchronous and load-bearing: it's what makes a WS-level error a
+        // hard FAIL. The 'close' handler's --assert-min-* checks below have no way to distinguish
+        // "0 transcripts because nothing arrived" from "0 transcripts because we errored out before
+        // anything could arrive" — without this exit, a connection error with assertions unset
+        // would fall through to 'close' and print a false PASS.
         console.error(`INTEGRATION_RESULT: FAIL: WebSocket error: ${error.message}`);
         process.exit(1);
     }

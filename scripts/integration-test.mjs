@@ -74,6 +74,12 @@ function parseArgs(argv) {
 			'OPUS_BACKEND to the container, so a Worker-routed session always uses the image default (wasm).'
 		);
 	}
+	if (args.runtime === 'worker' && args.endpoint === 'transcribe') {
+		throw new Error(
+			'--runtime=worker + --endpoint=transcribe is not a supported cell: production never routes ' +
+			'/transcribe through the Worker (see test/integration/MATRIX.md).'
+		);
+	}
 	if (args.endpoint === 'translate' && args.provider !== 'openai') {
 		throw new Error('--endpoint=translate only supports --provider=openai (the only translation model configured).');
 	}
@@ -105,18 +111,21 @@ function run(cmd, cmdArgs, opts = {}) {
 
 function waitForHttpOk(url, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
+	let settled = false;
 	return new Promise((resolve, reject) => {
 		function attempt() {
+			if (settled) return; // a previous attempt already resolved/rejected the promise
 			const req = http.get(url, (res) => {
 				res.resume();
-				if (res.statusCode && res.statusCode < 500) resolve();
+				if (res.statusCode && res.statusCode < 500) { settled = true; resolve(); }
 				else retry();
 			});
 			req.on('error', retry);
 			req.setTimeout(2000, () => req.destroy());
 		}
 		function retry() {
-			if (Date.now() > deadline) reject(new Error(`Timed out waiting for ${url}`));
+			if (settled) return;
+			if (Date.now() > deadline) { settled = true; reject(new Error(`Timed out waiting for ${url}`)); }
 			else setTimeout(attempt, 1000);
 		}
 		attempt();
@@ -156,6 +165,8 @@ function waitForOutput(proc, pattern, timeoutMs) {
 		proc.stderr.on('data', onData);
 		proc.on('exit', (code) => {
 			clearTimeout(timer);
+			proc.stdout.off('data', onData);
+			proc.stderr.off('data', onData);
 			reject(new Error(`Process exited (code ${code}) before matching /${pattern.source}/`));
 		});
 	});
@@ -224,18 +235,27 @@ async function startWorker({ port, endpoint, provider, translateLang }) {
 		await stop();
 		throw err;
 	}
+	// waitForOutput detached its own listeners once "Ready on" matched — reattach so wrangler's
+	// output during the actual replay (errors, request logs) is visible instead of silently
+	// dropped, and so its stdout/stderr pipes keep draining instead of risking backpressure.
+	proc.stdout.on('data', (chunk) => process.stdout.write(chunk));
+	proc.stderr.on('data', (chunk) => process.stderr.write(chunk));
 	return { stop };
 }
 
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
 
-	const requiredKey = args.provider === 'dummy' ? null : (args.provider === 'openai' ? 'OPENAI_API_KEY' : PROVIDER_KEY_ENV[args.provider]);
+	const requiredKey = PROVIDER_KEY_ENV[args.provider]; // null for 'dummy', key env var name otherwise
 	if (requiredKey && !process.env[requiredKey]) {
 		log(`SKIP: ${requiredKey} not set — skipping ${args.runtime}/${args.opusBackend}/${args.endpoint}/${args.provider}`);
 		process.exit(0);
 	}
 
+	// Fixed ports: each CI matrix cell is its own isolated job/VM, so there's no conflict there.
+	// Running two cells of the same runtime locally at once would collide on these — not a problem
+	// this harness has hit in practice (cells are run one at a time), so not worth a dynamic-port
+	// allocator until it actually is.
 	const port = args.runtime === 'container' ? 18080 : 18787;
 	log(`Starting ${args.runtime} (opus-backend=${args.opusBackend}, endpoint=${args.endpoint}, provider=${args.provider})`);
 
@@ -253,7 +273,9 @@ async function main() {
 			wsUrl,
 			'0', // no delay — replay as fast as possible
 			'--ci',
-			`--connect-timeout=${args.runtime === 'worker' && args.endpoint === 'transcribe' ? 120 : 15}`,
+			// worker+transcribe (the only cell that would need a longer connect timeout, for the
+			// container cold-start) is rejected in parseArgs — every remaining cell connects fast.
+			'--connect-timeout=15',
 		];
 		if (args.endpoint === 'translate') {
 			replayArgs.push(`--translate=${args.translateLang}`, '--assert-min-media=1');
