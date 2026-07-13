@@ -214,6 +214,15 @@ export class DeepgramBackend implements TranscriptionBackend {
 	}
 
 	close(): void {
+		// Idempotent guard (mirrors OutgoingConnection/TranslatorConnection's doClose()): calling
+		// ws.close() below can synchronously re-dispatch 'error'/'close' on a connection that never
+		// successfully opened (observed with undici's WebSocket on a bad API key), and both event
+		// listeners call this.close() themselves. Without this guard that reenters close() while
+		// `this.ws` is still set, recursing without bound and stack-overflowing the whole process.
+		if (this.status === 'closed') return;
+		const wasConnected = this.status === 'connected';
+		this.status = 'closed';
+
 		logger.debug(`Closing Deepgram backend for tag: ${this.tag}`);
 
 		// Stop KeepAlive timer
@@ -223,7 +232,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 		}
 
 		// Send CloseStream message
-		if (this.ws && this.status === 'connected') {
+		if (this.ws && wasConnected) {
 			try {
 				this.ws.send(JSON.stringify({ type: 'CloseStream' }));
 			} catch (error) {
@@ -231,9 +240,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 			}
 		}
 
-		this.ws?.close();
+		const ws = this.ws;
 		this.ws = undefined;
-		this.status = 'closed';
+		ws?.close();
 	}
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
