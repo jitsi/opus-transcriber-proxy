@@ -17,6 +17,16 @@
  *                  `realtime-translation-result` transcripts. Received media packets are counted.
  *   --save-audio[=<dir>] - Save the returned translated audio as one Ogg-Opus file per source tag
  *                  (`<dir>/<tag>.opus`, default dir "."). Playable in ffplay/VLC/browsers.
+ *   --ci           - Assertion mode for scripted/CI use (no-op unless combined with the flags below):
+ *                    treats a WebSocket-level error as failure, enforces --connect-timeout, and on
+ *                    close checks any --assert-min-* thresholds, printing a final
+ *                    "INTEGRATION_RESULT: PASS|FAIL" line and exiting 0/1 accordingly. Without --ci
+ *                    the script behaves exactly as before (always exits 0, no assertions).
+ *   --connect-timeout=<sec> - (--ci only) fail if the WebSocket doesn't open within this many
+ *                  seconds (default 15).
+ *   --assert-min-finals=<N>   - (--ci only) fail unless at least N final transcripts were received.
+ *   --assert-min-interims=<N> - (--ci only) fail unless at least N interim transcripts were received.
+ *   --assert-min-media=<N>    - (--ci only) fail unless at least N translated media packets were received.
  *
  * Example:
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
@@ -153,6 +163,11 @@ let speed = 1.0;
 const extraHeaders = {};
 let translateLang = null; // when set, send `start-translation` signaling for this target language
 let saveAudioDir = null;  // when set, save returned translated audio as per-tag .opus files here
+let ciMode = false;
+let connectTimeoutSec = 15;
+let assertMinFinals = null;
+let assertMinInterims = null;
+let assertMinMedia = null;
 
 for (let i = 0; i < extraArgs.length; i++) {
     const arg = extraArgs[i];
@@ -166,6 +181,16 @@ for (let i = 0; i < extraArgs.length; i++) {
     } else if (arg === '--save-audio' || arg.startsWith('--save-audio=')) {
         const eq = arg.indexOf('=');
         saveAudioDir = eq !== -1 ? arg.slice(eq + 1).trim() : '.';
+    } else if (arg === '--ci') {
+        ciMode = true;
+    } else if (arg.startsWith('--connect-timeout=')) {
+        connectTimeoutSec = parseFloat(arg.slice('--connect-timeout='.length));
+    } else if (arg.startsWith('--assert-min-finals=')) {
+        assertMinFinals = parseInt(arg.slice('--assert-min-finals='.length), 10);
+    } else if (arg.startsWith('--assert-min-interims=')) {
+        assertMinInterims = parseInt(arg.slice('--assert-min-interims='.length), 10);
+    } else if (arg.startsWith('--assert-min-media=')) {
+        assertMinMedia = parseInt(arg.slice('--assert-min-media='.length), 10);
     } else if (arg === '-H' || arg === '--header') {
         const header = extraArgs[++i];
         if (!header) {
@@ -243,7 +268,20 @@ if (Object.keys(headers).length > 0) {
 const wsOptions = Object.keys(headers).length > 0 ? { headers } : {};
 const ws = new WebSocket(wsUrl, wsOptions);
 
+let connected = false;
+let connectTimeoutHandle = null;
+if (ciMode) {
+    connectTimeoutHandle = setTimeout(() => {
+        if (!connected) {
+            console.error(`INTEGRATION_RESULT: FAIL: did not connect within ${connectTimeoutSec}s`);
+            process.exit(1);
+        }
+    }, connectTimeoutSec * 1000);
+}
+
 ws.on('open', () => {
+    connected = true;
+    if (connectTimeoutHandle) clearTimeout(connectTimeoutHandle);
     console.log('Connected! Starting replay...');
 
     // For /translate: enable a target language before sending media. `start-translation` applies the
@@ -352,6 +390,15 @@ ws.on('message', (data) => {
 ws.on('error', (error) => {
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
     console.error('WebSocket error:', error.message);
+    if (ciMode) {
+        // process.exit() here is synchronous and load-bearing: it's what makes a WS-level error a
+        // hard FAIL. The 'close' handler's --assert-min-* checks below have no way to distinguish
+        // "0 transcripts because nothing arrived" from "0 transcripts because we errored out before
+        // anything could arrive" — without this exit, a connection error with assertions unset
+        // would fall through to 'close' and print a false PASS.
+        console.error(`INTEGRATION_RESULT: FAIL: WebSocket error: ${error.message}`);
+        process.exit(1);
+    }
 });
 
 ws.on('close', () => {
@@ -368,5 +415,24 @@ ws.on('close', () => {
         }
     } else if (saveAudioDir) {
         console.log('No translated media received — nothing to save.');
+    }
+
+    if (ciMode) {
+        const failures = [];
+        if (assertMinFinals !== null && finalTranscripts < assertMinFinals) {
+            failures.push(`expected >= ${assertMinFinals} final transcript(s), got ${finalTranscripts}`);
+        }
+        if (assertMinInterims !== null && interimTranscripts < assertMinInterims) {
+            failures.push(`expected >= ${assertMinInterims} interim transcript(s), got ${interimTranscripts}`);
+        }
+        if (assertMinMedia !== null && mediaPacketsReceived < assertMinMedia) {
+            failures.push(`expected >= ${assertMinMedia} media packet(s), got ${mediaPacketsReceived}`);
+        }
+        if (failures.length > 0) {
+            console.error(`INTEGRATION_RESULT: FAIL: ${failures.join('; ')}`);
+            process.exit(1);
+        }
+        console.log('INTEGRATION_RESULT: PASS');
+        process.exit(0);
     }
 });
