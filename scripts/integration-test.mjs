@@ -195,7 +195,11 @@ async function startContainer({ port, opusBackend, provider }) {
 		env.push('-e', `PROVIDERS_PRIORITY=${provider}`);
 		writeFileSync(envFile, `${PROVIDER_KEY_ENV[provider]}=${process.env[PROVIDER_KEY_ENV[provider]]}\n`);
 	}
-	const dockerArgs = ['run', '-d', '--rm', '-p', `${port}:8080`, '--name', name, '--env-file', envFile, ...env, CONTAINER_IMAGE];
+	// No --rm: a crashed container (see e.g. the DeepgramBackend reconnect-loop stack overflow found
+	// via this harness) would otherwise be auto-removed the instant it exits, racing dumpLogs() out
+	// of a "No such container" error instead of the actual crash trace. stop() removes it explicitly
+	// once we're done with it either way.
+	const dockerArgs = ['run', '-d', '-p', `${port}:8080`, '--name', name, '--env-file', envFile, ...env, CONTAINER_IMAGE];
 	log(`docker ${redact(dockerArgs).join(' ')}`);
 	const code = await run('docker', dockerArgs);
 	if (code !== 0) throw new Error(`docker run exited with code ${code}`);
@@ -206,8 +210,8 @@ async function startContainer({ port, opusBackend, provider }) {
 	}
 
 	async function stop() {
-		log(`Stopping container ${name}`);
-		await run('docker', ['stop', name]).catch(() => {});
+		log(`Removing container ${name}`);
+		await run('docker', ['rm', '-f', name]).catch(() => {});
 		rmSync(varsDir, { recursive: true, force: true });
 	}
 
