@@ -87,9 +87,14 @@ export interface TranslatorConnectionOptions {
 	/** ISO 2-letter target language code (e.g. "en", "es"). */
 	targetLanguage: string;
 	/**
-	 * Called exactly once when the connection terminates, with the total audio
-	 * duration translated for this direction. Reporting-agnostic — the proxy wires
-	 * this to the usage reporter. `durationSeconds` is derived from the input
+	 * Called periodically with the audio duration translated since the previous
+	 * report, plus a final delta on close; the deltas sum to this direction's total.
+	 * Reporting incrementally (rather than once at close) means an abrupt kill —
+	 * e.g. a Cloudflare Worker hitting its CPU limit — only loses the last partial
+	 * interval, not the whole direction. Billing is linear in duration and the usage
+	 * endpoint sums each report's `duration_seconds`, so periodic deltas are
+	 * billing-equivalent to one cumulative report. Reporting-agnostic — the proxy
+	 * wires this to the usage reporter. `durationSeconds` is derived from the input
 	 * audio appended to OpenAI (24 kHz PCM).
 	 */
 	onUsageReport?: (durationSeconds: number, targetLanguage: string) => void;
@@ -127,6 +132,10 @@ export class TranslatorConnection {
 
 	private totalSamplesSent: number = 0;
 	private lastLoggedSecond: number = 0;
+	// Samples already reported via onUsageReport. Each report fires the delta (total - reported)
+	// so periodic reports sum to the direction's total; see reportUsageDelta.
+	private reportedSamples = 0;
+	private usageReportTimer?: ReturnType<typeof setInterval>;
 
 	private readonly rtpTimestamper = new RtpTimestamper();
 
@@ -169,6 +178,17 @@ export class TranslatorConnection {
 		this.runtime = runtime;
 		this.measureLatency = runtime.config.debug;
 		this.metricBatcher = runtime.createMetricBatcher();
+
+		// Report usage incrementally (periodic deltas) while the direction is open, but only when a
+		// reporter is wired AND an interval is configured — dev/replay sessions pass no onUsageReport
+		// and thus start no timer. The final remaining delta is flushed in doClose().
+		const iv = this.runtime.config.usageReportIntervalMs;
+		if (this.options.onUsageReport && iv && iv > 0) {
+			this.usageReportTimer = setInterval(() => this.reportUsageDelta(), iv);
+			// Don't keep the process alive solely for the reporting timer. `unref` exists on Node's
+			// Timeout but not on the Worker's numeric timer id, so probe for it (the cast bridges both).
+			(this.usageReportTimer as unknown as { unref?: () => void }).unref?.();
+		}
 
 		this.initializeOpusDecoder();
 		this.initializeOpusEncoder();
@@ -697,6 +717,20 @@ export class TranslatorConnection {
 		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);
 	}
 
+	// Report the audio duration translated since the previous report. Fired on a timer while open and
+	// once more at close to flush the remainder; the deltas sum to totalSamplesSent / 24000.
+	private reportUsageDelta(): void {
+		const total = this.totalSamplesSent;
+		const deltaSamples = total - this.reportedSamples;
+		if (deltaSamples <= 0) return;
+		this.reportedSamples = total;
+		try {
+			this.options.onUsageReport?.(deltaSamples / 24000, this.options.targetLanguage);
+		} catch (err) {
+			this.runtime.logger.error('onUsageReport callback failed', err as Error);
+		}
+	}
+
 	close(): void {
 		this.doClose(false);
 	}
@@ -707,18 +741,15 @@ export class TranslatorConnection {
 		}
 		this.isClosed = true;
 
-		// Report the translated audio duration for this direction exactly once. Every
-		// teardown path (proxy reconcile, ws close, error) funnels through here, and
-		// the isClosed guard above ensures a single report. onUsageReport lives on
-		// options (not detached below), so it survives the teardown.
-		const durationSeconds = this.totalSamplesSent / 24000;
-		if (durationSeconds > 0) {
-			try {
-				this.options.onUsageReport?.(durationSeconds, this.options.targetLanguage);
-			} catch (err) {
-				this.runtime.logger.error('onUsageReport callback failed', err as Error);
-			}
+		// Stop the periodic usage timer and flush the final remaining delta for this direction. Every
+		// teardown path (proxy reconcile, ws close, error) funnels through here, and the isClosed guard
+		// above ensures this runs once. onUsageReport lives on options (not detached below), so it
+		// survives the teardown; reportUsageDelta no-ops when nothing new has been translated.
+		if (this.usageReportTimer) {
+			clearInterval(this.usageReportTimer as unknown as number);
+			this.usageReportTimer = undefined;
 		}
+		this.reportUsageDelta();
 
 		// Detach callbacks before teardown so a late OpenAI event firing during close() can't re-emit on the
 		// proxy. Keep onClosed locally so we can notify exactly once after everything is torn down.

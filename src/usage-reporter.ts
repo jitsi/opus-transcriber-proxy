@@ -42,6 +42,12 @@ export interface UsageReporterDeps {
 const FLUSH_MAX_EVENTS = 50;
 const FLUSH_MAX_AGE_MS = 1000;
 
+// These are deliberately module-level (process/isolate-wide) singletons, shared across every
+// concurrent connection rather than per-connection. That is intentional: the usage URL
+// (`translationUsageUrl`) is a deployment-wide constant, so a single stashed url+logger is always
+// correct, and batching events from concurrent connections into one flush is the whole point (fewer
+// POSTs, grouped by token). `warnedUnconfigured` likewise suppresses the "no URL" warning for the
+// lifetime of the process/isolate rather than warning per report.
 let buffer: TranslationUsageEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let warnedUnconfigured = false;
@@ -150,7 +156,7 @@ async function postBatch(url: string, token: string, events: TranslationUsageEve
 		const totalSeconds = events.reduce((sum, e) => sum + e.durationSeconds, 0);
 		logger.debug(`reported ${events.length} translation usage event(s), ${totalSeconds.toFixed(1)}s total`);
 	} catch (err) {
-		logger.error('translation usage report error', err);
+		logger.error('translation usage report error', err as Error);
 	} finally {
 		clearTimeout(timeout);
 	}

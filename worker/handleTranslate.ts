@@ -14,6 +14,7 @@ import type { IWebSocket } from '../src/translate/runtime';
 import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
+import { flushTranslationUsage } from '../src/usage-reporter';
 
 export function handleTranslate(request: Request, env: Env): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {
@@ -102,6 +103,11 @@ export function handleTranslate(request: Request, env: Env): Response {
 	});
 
 	proxy.on('closed', () => {
+		// Drain any buffered usage — the final per-direction delta plus sub-threshold batched events —
+		// now that the bridge has closed. No ExecutionContext is available here, so this is
+		// fire-and-forget: without it the last interval's usage (and anything under the batch
+		// threshold) would be lost when the isolate is torn down.
+		void flushTranslationUsage();
 		dispatcher?.close();
 		try {
 			server.close();

@@ -136,4 +136,52 @@ describe('usage-reporter', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(postedBodies(fetchMock)[0].events).toEqual([{ duration_seconds: 5 }, { duration_seconds: 7 }]);
 	});
+
+	it('auto-flushes on the 1000ms timer when under the size threshold', async () => {
+		vi.useFakeTimers();
+		try {
+			const fetchMock = okFetch();
+			vi.stubGlobal('fetch', fetchMock);
+
+			const deps = { url: URL, logger: stubLogger() };
+			reportTranslationUsage({ token: 'tt_a', durationSeconds: 3, targetLanguage: 'en' }, deps);
+			// Under the 50-event threshold, so only the 1000ms timer will flush it.
+			expect(fetchMock).not.toHaveBeenCalled();
+
+			await vi.runAllTimersAsync();
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(postedBodies(fetchMock)[0].events).toEqual([{ duration_seconds: 3 }]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('warns (does not throw) when the endpoint returns a non-2xx status', async () => {
+		const fetchMock = vi.fn(async () => ({ ok: false, status: 429 }) as unknown as Response);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const logger = stubLogger();
+		reportTranslationUsage({ token: 'tt_a', durationSeconds: 2, targetLanguage: 'en' }, { url: URL, logger });
+		await flushTranslationUsage();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(logger.warn).toHaveBeenCalledTimes(1);
+		expect((logger.warn as any).mock.calls[0][0]).toContain('429');
+		expect(logger.error).not.toHaveBeenCalled();
+	});
+
+	it('logs an error when the POST rejects (network error)', async () => {
+		const fetchMock = vi.fn(async () => {
+			throw new Error('network down');
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const logger = stubLogger();
+		reportTranslationUsage({ token: 'tt_a', durationSeconds: 2, targetLanguage: 'en' }, { url: URL, logger });
+		await flushTranslationUsage();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(logger.error).toHaveBeenCalledTimes(1);
+	});
 });

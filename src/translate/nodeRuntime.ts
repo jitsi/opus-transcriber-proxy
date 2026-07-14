@@ -27,6 +27,13 @@ provideBase64(
 	},
 );
 
+/** Parse an integer env var, falling back to a default when unset or non-numeric. */
+function parseIntOr(value: string | undefined, fallback: number): number {
+	if (value === undefined) return fallback;
+	const parsed = parseInt(value, 10);
+	return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 export function createNodeTranslationRuntime(): TranslationRuntime {
 	return {
 		logger,
@@ -36,6 +43,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
 			translationUsageUrl: config.translation.usageUrl,
+			usageReportIntervalMs: parseIntOr(process.env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 		},
 		writeMetric(metric) {
 			writeMetric(undefined, metric as any);

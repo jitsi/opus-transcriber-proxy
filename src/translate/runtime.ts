@@ -60,6 +60,15 @@ export interface TranslationRuntimeConfig {
 	 * reporting endpoint cost nothing. Resolved by each runtime from its environment.
 	 */
 	translationUsageUrl?: string;
+	/**
+	 * Interval (ms) between periodic incremental usage reports for an open translation direction.
+	 * Each TranslatorConnection reports the audio duration translated since its previous report;
+	 * the deltas sum to the direction's total. Reporting incrementally (rather than once at close)
+	 * survives an abrupt kill (e.g. a Cloudflare Worker hitting its CPU limit), which would
+	 * otherwise lose the usage of any direction still open. Default 15000; <=0 disables the timer
+	 * (only the final delta at close is reported). Resolved by each runtime from its environment.
+	 */
+	usageReportIntervalMs?: number;
 }
 
 /** Per-connection metric batcher (Node aggregates + flushes to OTLP; a Worker may no-op). */

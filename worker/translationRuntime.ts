@@ -11,6 +11,13 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 
+/** Parse an integer env var, falling back to a default when unset or non-numeric. */
+function parseIntOr(value: string | undefined, fallback: number): number {
+	if (value === undefined) return fallback;
+	const parsed = parseInt(value, 10);
+	return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
 	registerWorkerOpusWasm();
 	const debugEnabled = env.DEBUG === 'true';
@@ -31,6 +38,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,
 			translationUsageUrl: env.TRANSLATION_USAGE_URL || '',
+			usageReportIntervalMs: parseIntOr(env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 		},
 		writeMetric() {
 			// No OTLP in the Worker (yet); metrics are a no-op.

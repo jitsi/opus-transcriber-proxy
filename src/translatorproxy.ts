@@ -287,18 +287,23 @@ export class TranslatorProxy extends Emitter {
 			return existing;
 		}
 
+		// Wire the usage reporter only when a token is present (the JVB-forwarded X-Translation-Token).
+		// Without a token there is nothing to attribute, so we pass no onUsageReport at all — that also
+		// means the connection starts no periodic reporting timer on the dev/replay `?lang=` path.
+		const token = this.options.translationToken;
 		const conn = new TranslatorConnection(
 			inputSourceName,
 			{
 				targetLanguage: language,
-				onUsageReport: (durationSeconds, targetLanguage) => {
-					const token = this.options.translationToken;
-					if (!token) return;
-					reportTranslationUsage(
-						{ token, durationSeconds, targetLanguage },
-						{ url: this.runtime.config.translationUsageUrl, logger: this.runtime.logger },
-					);
-				},
+				...(token
+					? {
+							onUsageReport: (durationSeconds: number, targetLanguage: string) =>
+								reportTranslationUsage(
+									{ token, durationSeconds, targetLanguage },
+									{ url: this.runtime.config.translationUsageUrl, logger: this.runtime.logger },
+								),
+						}
+					: {}),
 			},
 			this.runtime,
 		);
