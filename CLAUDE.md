@@ -403,6 +403,7 @@ src/
 │   ├── nodeRuntime.ts         # Node adapter: config/Winston/OTLP/global WebSocket
 │   ├── messages.ts            # Shared /translate wire-message builders (worker-safe)
 │   ├── base64.ts              # Runtime-neutral base64 (native/injected fast paths)
+│   ├── env.ts                 # Worker-safe env-var parsing (parseIntOr) shared by both runtimes
 │   └── emitter.ts             # Minimal event emitter (no node:events)
 ├── OutgoingConnection.ts      # Per-participant handler
 ├── AudioDecoder.ts            # AudioDecoder interface + DecodedAudio types

@@ -146,6 +146,9 @@ export class TranslatorProxy extends Emitter {
 	 * the usage reporter is drained.
 	 */
 	close(): void {
+		// closeAllConnections() buffers each direction's final usage delta synchronously (so a shutdown
+		// caller can drain the reporter right after). ws.close() then fires the bridge 'close' handler,
+		// which calls closeAllConnections() again on the now-empty map (harmless no-op) and emits 'closed'.
 		this.closeAllConnections();
 		try {
 			this.ws.close();

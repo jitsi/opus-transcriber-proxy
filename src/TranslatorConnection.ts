@@ -733,7 +733,9 @@ export class TranslatorConnection {
 		if (deltaSamples <= 0) return;
 		try {
 			this.options.onUsageReport?.(deltaSamples / 24000, this.options.targetLanguage);
-			// Advance only after a successful report, so a throwing callback re-includes this delta next time.
+			// Advance only after a successful report so a throwing callback re-includes this delta on the
+			// next timer tick. The final close() call has no next tick, so a throw there drops the last
+			// delta — acceptable because reportTranslationUsage is synchronous and non-throwing.
 			this.reportedSamples = total;
 		} catch (err) {
 			this.runtime.logger.error('onUsageReport callback failed', err as Error);

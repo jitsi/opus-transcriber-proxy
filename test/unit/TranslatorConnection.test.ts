@@ -212,4 +212,21 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		expect(reports).toEqual([1]);
 		conn.close();
 	});
+
+	it('logs (and does not throw) when onUsageReport throws on the final close() delta', async () => {
+		const { runtime, sockets } = makeHarness(0); // no timer: the only report is the final close() delta
+		const conn = new TranslatorConnection('spk-1', {
+			targetLanguage: 'en',
+			onUsageReport: () => { throw new Error('reporter down'); },
+		}, runtime);
+		await flushMicrotasks();
+		expect(sockets).toHaveLength(1);
+		sockets[0].fireOpen();
+
+		conn.handleMediaEvent(mediaEvent('spk-1', 1)); // 1s appended
+		// close() flushes the final delta; the throw is caught + logged, never propagated (the last
+		// delta is dropped — acceptable, and made explicit here so the failure mode can't regress silently).
+		expect(() => conn.close()).not.toThrow();
+		expect(runtime.logger.error).toHaveBeenCalled();
+	});
 });
