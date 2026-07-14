@@ -132,8 +132,13 @@ export class TranslatorConnection {
 
 	private totalSamplesSent: number = 0;
 	private lastLoggedSecond: number = 0;
-	// Samples already reported via onUsageReport. Each report fires the delta (total - reported)
-	// so periodic reports sum to the direction's total; see reportUsageDelta.
+	// Samples actually appended to OpenAI — the billable translated audio. Distinct from
+	// totalSamplesSent (which counts all decoded audio, including frames dropped before the socket
+	// opens); usage is billed from this so a stalled/never-connected session that drops its buffered
+	// audio isn't charged. See reportUsageDelta / sendAudioToOpenAI.
+	private sentSamples = 0;
+	// Samples already reported via onUsageReport. Each report fires the delta (sentSamples - reported)
+	// so periodic reports sum to the direction's translated total; see reportUsageDelta.
 	private reportedSamples = 0;
 	private usageReportTimer?: ReturnType<typeof setInterval>;
 
@@ -481,7 +486,7 @@ export class TranslatorConnection {
 
 		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
 			const encodedAudio = safeToBase64(audioData);
-			this.sendAudioToOpenAI(encodedAudio);
+			this.sendAudioToOpenAI(encodedAudio, samplesSent);
 		} else if (this.connectionStatus === 'pending') {
 			if (this.pendingAudioData.length + audioData.length <= MAX_PENDING_PCM_BYTES) {
 				const merged = new Uint8Array(this.pendingAudioData.length + audioData.length);
@@ -513,7 +518,7 @@ export class TranslatorConnection {
 		}
 	}
 
-	private sendAudioToOpenAI(encodedAudio: string): void {
+	private sendAudioToOpenAI(encodedAudio: string, sampleCount: number): void {
 		if (!this.openaiWebSocket) {
 			this.logError(`No websocket available for tag: ${this.localTag}`);
 			return;
@@ -528,6 +533,8 @@ export class TranslatorConnection {
 				type: 'session.input_audio_buffer.append',
 				audio: encodedAudio,
 			}));
+			// Bill only audio actually appended to OpenAI (see reportUsageDelta).
+			this.sentSamples += sampleCount;
 			this.metricBatcher.increment({
 				name: 'backend_audio_sent',
 				worker: 'opus-transcriber-proxy',
@@ -542,10 +549,11 @@ export class TranslatorConnection {
 
 		this.log(`Processing ${this.pendingAudioData.length} bytes of queued audio for tag: ${this.localTag}`);
 
+		const flushedSamples = this.pendingAudioData.length / 2; // 16-bit samples
 		const encodedAudio = safeToBase64(this.pendingAudioData);
 		this.pendingAudioData = new Uint8Array(0);
 
-		this.sendAudioToOpenAI(encodedAudio);
+		this.sendAudioToOpenAI(encodedAudio, flushedSamples);
 	}
 
 	private handleOpenAIMessage(data: any): void {
@@ -717,15 +725,16 @@ export class TranslatorConnection {
 		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);
 	}
 
-	// Report the audio duration translated since the previous report. Fired on a timer while open and
-	// once more at close to flush the remainder; the deltas sum to totalSamplesSent / 24000.
+	// Report the audio duration translated (appended to OpenAI) since the previous report. Fired on a
+	// timer while open and once more at close to flush the remainder; the deltas sum to sentSamples / 24000.
 	private reportUsageDelta(): void {
-		const total = this.totalSamplesSent;
+		const total = this.sentSamples;
 		const deltaSamples = total - this.reportedSamples;
 		if (deltaSamples <= 0) return;
-		this.reportedSamples = total;
 		try {
 			this.options.onUsageReport?.(deltaSamples / 24000, this.options.targetLanguage);
+			// Advance only after a successful report, so a throwing callback re-includes this delta next time.
+			this.reportedSamples = total;
 		} catch (err) {
 			this.runtime.logger.error('onUsageReport callback failed', err as Error);
 		}

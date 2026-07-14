@@ -16,7 +16,7 @@ import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
 import { flushTranslationUsage } from '../src/usage-reporter';
 
-export function handleTranslate(request: Request, env: Env): Response {
+export function handleTranslate(request: Request, env: Env, ctx: ExecutionContext): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {
 		return new Response('Expected WebSocket upgrade', { status: 426 });
 	}
@@ -104,10 +104,10 @@ export function handleTranslate(request: Request, env: Env): Response {
 
 	proxy.on('closed', () => {
 		// Drain any buffered usage — the final per-direction delta plus sub-threshold batched events —
-		// now that the bridge has closed. No ExecutionContext is available here, so this is
-		// fire-and-forget: without it the last interval's usage (and anything under the batch
-		// threshold) would be lost when the isolate is torn down.
-		void flushTranslationUsage();
+		// now that the bridge has closed. Register with ctx.waitUntil so the POST completes before the
+		// isolate is reclaimed; without it the last interval's usage (and anything under the batch
+		// threshold) would be lost on teardown.
+		ctx.waitUntil(flushTranslationUsage());
 		dispatcher?.close();
 		try {
 			server.close();

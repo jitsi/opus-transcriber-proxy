@@ -1,11 +1,12 @@
 /**
  * Focused test for TranslatorConnection's incremental usage reporting.
  *
- * A stub runtime supplies a fake Opus decoder whose decodeFrame returns a fixed-size PCM buffer, so
- * each fed media frame grows totalSamplesSent by a known amount. We drive the periodic timer with
- * vi.useFakeTimers() and assert onUsageReport fires the DELTA translated since the previous report
- * (not the cumulative total), that a final delta fires on close(), and that the deltas sum to the
- * direction's total (totalSamplesSent / 24000).
+ * A stub runtime supplies a fake Opus decoder (fixed 1s PCM per frame) and a fake outbound WebSocket
+ * that we open explicitly so the connection reaches 'connected' and actually appends audio to OpenAI.
+ * Usage is billed from that appended audio (sentSamples), so the socket must be open for frames to
+ * count. We drive the periodic timer with vi.useFakeTimers() and assert onUsageReport fires the DELTA
+ * translated since the previous report (not the cumulative total), that a final delta fires on close(),
+ * and that the deltas sum to the direction's total (sentSamples / 24000).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -33,18 +34,31 @@ function makeFakeDecoder() {
 	};
 }
 
-/** Fake outbound WebSocket that never opens, so the connection stays 'pending' and buffers PCM. */
-function makeFakeWebSocket() {
+interface FakeWs {
+	send: ReturnType<typeof vi.fn>;
+	close: ReturnType<typeof vi.fn>;
+	addEventListener: (type: string, cb: (ev?: any) => void) => void;
+	readyState: number;
+	/** Simulate the socket opening (drives the connection to 'connected'). */
+	fireOpen: () => void;
+}
+
+/** Fake outbound WebSocket. Captures listeners; `fireOpen()` drives the 'connected' transition. */
+function makeFakeWebSocket(): FakeWs {
+	const listeners: Record<string, (ev?: any) => void> = {};
 	return {
 		send: vi.fn(),
 		close: vi.fn(),
-		addEventListener: vi.fn(),
-		readyState: 0,
+		addEventListener: (type: string, cb: (ev?: any) => void) => { listeners[type] = cb; },
+		readyState: 1,
+		fireOpen: () => listeners.open?.(),
 	};
 }
 
-function makeRuntime(usageReportIntervalMs: number): TranslationRuntime {
-	return {
+/** Runtime + a handle to the outbound sockets it creates, so tests can open them. */
+function makeHarness(usageReportIntervalMs: number): { runtime: TranslationRuntime; sockets: FakeWs[] } {
+	const sockets: FakeWs[] = [];
+	const runtime: TranslationRuntime = {
 		logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 		config: {
 			openaiApiKey: 'test-key',
@@ -56,16 +70,21 @@ function makeRuntime(usageReportIntervalMs: number): TranslationRuntime {
 		},
 		writeMetric: () => {},
 		createMetricBatcher: () => ({ increment: () => {}, flush: () => {} }),
-		createOutboundWebSocket: () => makeFakeWebSocket() as any,
+		createOutboundWebSocket: () => {
+			const ws = makeFakeWebSocket();
+			sockets.push(ws);
+			return ws as any;
+		},
 		createOpusDecoder: () => makeFakeDecoder() as any,
 		createOpusEncoder: () => ({ ready: Promise.resolve(), encodeFrame: () => [], reset: () => {}, free: () => {} }) as any,
 		buildServerInfo: () => undefined,
 	};
+	return { runtime, sockets };
 }
 
 /** Flush pending microtasks so the async decoder/encoder init settles (independent of fake timers). */
 async function flushMicrotasks(): Promise<void> {
-	for (let i = 0; i < 10; i++) await Promise.resolve();
+	for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
 function mediaEvent(tag: string, chunk: number) {
@@ -83,14 +102,17 @@ describe('TranslatorConnection incremental usage reporting', () => {
 
 	it('reports periodic deltas (not the cumulative total) plus a final delta on close', async () => {
 		const reports: number[] = [];
-		const runtime = makeRuntime(100);
+		const { runtime, sockets } = makeHarness(100);
 		const conn = new TranslatorConnection('spk-1', {
 			targetLanguage: 'en',
 			onUsageReport: (durationSeconds) => reports.push(durationSeconds),
 		}, runtime);
 
-		// Let the async decoder/encoder init resolve so decoderStatus becomes 'ready'.
+		// Let the async decoder/encoder init resolve (decoderStatus 'ready', outbound socket created),
+		// then open the socket so fed audio is actually appended to OpenAI (and therefore billed).
 		await flushMicrotasks();
+		expect(sockets).toHaveLength(1);
+		sockets[0].fireOpen();
 
 		// Feed 1s of audio, then advance one interval → first delta ≈ 1.0s.
 		conn.handleMediaEvent(mediaEvent('spk-1', 1));
@@ -108,15 +130,34 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		conn.close();
 
 		expect(reports).toEqual([1, 2, 1]);
-		// Deltas sum to the direction's total: 4 frames * 1s = 4s = totalSamplesSent / 24000.
+		// Deltas sum to the direction's translated total: 4 frames * 1s = 4s.
 		const sum = reports.reduce((a, b) => a + b, 0);
 		expect(sum).toBeCloseTo(4, 5);
 	});
 
+	it('does not bill audio buffered before the socket opens if it is never appended', async () => {
+		const reports: number[] = [];
+		const { runtime, sockets } = makeHarness(100);
+		const conn = new TranslatorConnection('spk-1', {
+			targetLanguage: 'en',
+			onUsageReport: (durationSeconds) => reports.push(durationSeconds),
+		}, runtime);
+		await flushMicrotasks();
+		expect(sockets).toHaveLength(1);
+
+		// Socket never opens → audio stays buffered/dropped, never appended to OpenAI.
+		conn.handleMediaEvent(mediaEvent('spk-1', 1));
+		await vi.advanceTimersByTimeAsync(500);
+		conn.close();
+		// Nothing was appended, so nothing is billed.
+		expect(reports).toEqual([]);
+	});
+
 	it('starts no timer and reports nothing when onUsageReport is absent', async () => {
-		const runtime = makeRuntime(100);
+		const { runtime, sockets } = makeHarness(100);
 		const conn = new TranslatorConnection('spk-1', { targetLanguage: 'en' }, runtime);
 		await flushMicrotasks();
+		sockets[0]?.fireOpen();
 
 		conn.handleMediaEvent(mediaEvent('spk-1', 1));
 		await vi.advanceTimersByTimeAsync(500);
@@ -126,12 +167,14 @@ describe('TranslatorConnection incremental usage reporting', () => {
 
 	it('starts no periodic timer when the interval is <= 0 but still flushes a final delta on close', async () => {
 		const reports: number[] = [];
-		const runtime = makeRuntime(0);
+		const { runtime, sockets } = makeHarness(0);
 		const conn = new TranslatorConnection('spk-1', {
 			targetLanguage: 'en',
 			onUsageReport: (durationSeconds) => reports.push(durationSeconds),
 		}, runtime);
 		await flushMicrotasks();
+		expect(sockets).toHaveLength(1);
+		sockets[0].fireOpen();
 
 		conn.handleMediaEvent(mediaEvent('spk-1', 1));
 		conn.handleMediaEvent(mediaEvent('spk-1', 2));
@@ -139,7 +182,7 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(reports).toEqual([]);
 
-		// close() flushes the whole total as a single final delta.
+		// close() flushes the whole appended total as a single final delta.
 		conn.close();
 		expect(reports).toEqual([2]);
 	});
