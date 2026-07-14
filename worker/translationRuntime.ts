@@ -10,6 +10,7 @@ import { OpusEncoderWasm } from '../src/OpusEncoder/OpusEncoderWasm';
 import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
+import { parseIntOr } from '../src/translate/env';
 
 export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
 	registerWorkerOpusWasm();
@@ -30,6 +31,8 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			translationModel: env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,
+			translationUsageUrl: env.TRANSLATION_USAGE_URL || '',
+			usageReportIntervalMs: parseIntOr(env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 		},
 		writeMetric() {
 			// No OTLP in the Worker (yet); metrics are a no-op.

@@ -610,7 +610,7 @@ export default {
 			if (env.ENABLE_TRANSLATE === 'false') {
 				return new Response('Translation endpoint disabled', { status: 404 });
 			}
-			return handleTranslate(request, env);
+			return handleTranslate(request, env, ctx);
 		}
 
 		// Handle stats endpoint for monitoring

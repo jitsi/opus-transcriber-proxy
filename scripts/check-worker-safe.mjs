@@ -11,11 +11,13 @@ import fs from 'fs';
 const CORE_FILES = [
 	'src/translatorproxy.ts',
 	'src/TranslatorConnection.ts',
+	'src/usage-reporter.ts',
 	'src/RtpTimestamper.ts',
 	'src/translate/runtime.ts',
 	'src/translate/emitter.ts',
 	'src/translate/base64.ts',
 	'src/translate/messages.ts',
+	'src/translate/env.ts',
 	'src/buildInfo.ts',
 	'src/OpusDecoder/OpusDecoderWasm.ts',
 	'src/OpusDecoder/opusTypes.ts',

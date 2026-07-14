@@ -11,6 +11,7 @@ import { buildServerInfo } from '../serverInfo';
 import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
 import { provideBase64 } from './base64';
+import { parseIntOr } from './env';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
 
 // Buffer-based base64 for the per-frame hot path: 20-100x faster than the portable atob/btoa
@@ -35,6 +36,8 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			translationModel: config.translation.model,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
+			translationUsageUrl: config.translation.usageUrl,
+			usageReportIntervalMs: parseIntOr(process.env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 		},
 		writeMetric(metric) {
 			writeMetric(undefined, metric as any);

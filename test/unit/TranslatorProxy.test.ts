@@ -220,4 +220,15 @@ describe('TranslatorProxy (sources model)', () => {
 		expect(MockedConnection).toHaveBeenCalledTimes(1);
 		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' }, mockRuntime);
 	});
+
+	it('wires an onUsageReport callback onto the connection when a translationToken is set', () => {
+		new TranslatorProxy(mockWebSocket, { translationToken: 'tt_secret' }, mockRuntime);
+		mockWebSocket.emit('message', { data: sourcesMessage([], ['523834112-a0.en']) });
+
+		expect(MockedConnection).toHaveBeenCalledWith(
+			'523834112-a0',
+			expect.objectContaining({ targetLanguage: 'en', onUsageReport: expect.any(Function) }),
+			mockRuntime,
+		);
+	});
 });

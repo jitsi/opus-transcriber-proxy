@@ -1,6 +1,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
+import { reportTranslationUsage } from './usage-reporter';
 
 export interface TranslatorProxyOptions {
 	/**
@@ -10,6 +11,12 @@ export interface TranslatorProxyOptions {
 	 */
 	initialLanguages?: string[];
 	provider?: string;
+	/**
+	 * Translation usage token (the JVB-forwarded `X-Translation-Token`). Threaded to
+	 * the usage reporter so reported translation usage can be attributed downstream.
+	 * Absent on the dev/replay `?lang=` path — usage is then not reported.
+	 */
+	translationToken?: string;
 }
 
 /**
@@ -65,12 +72,7 @@ export class TranslatorProxy extends Emitter {
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 
 		this.ws.addEventListener('close', () => {
-			for (const byLanguage of this.connections.values()) {
-				for (const conn of byLanguage.values()) {
-					conn.close();
-				}
-			}
-			this.connections.clear();
+			this.closeAllConnections();
 			this.emit('closed');
 		});
 
@@ -122,6 +124,37 @@ export class TranslatorProxy extends Emitter {
 		});
 
 		this.sendServerInfo();
+	}
+
+	/**
+	 * Close every active translation connection — each flushes its final usage delta on close — and
+	 * clear the map. Idempotent (connection close is guarded). Shared by the bridge-ws close handler
+	 * and by {@link close}.
+	 */
+	private closeAllConnections(): void {
+		for (const byLanguage of this.connections.values()) {
+			for (const conn of byLanguage.values()) {
+				conn.close();
+			}
+		}
+		this.connections.clear();
+	}
+
+	/**
+	 * Synchronously tear down the proxy: close all connections (flushing their final usage deltas) and
+	 * the bridge socket. Used by graceful shutdown so the last per-direction delta is buffered before
+	 * the usage reporter is drained.
+	 */
+	close(): void {
+		// closeAllConnections() buffers each direction's final usage delta synchronously (so a shutdown
+		// caller can drain the reporter right after). ws.close() then fires the bridge 'close' handler,
+		// which calls closeAllConnections() again on the now-empty map (harmless no-op) and emits 'closed'.
+		this.closeAllConnections();
+		try {
+			this.ws.close();
+		} catch {
+			// bridge already closing/closed
+		}
 	}
 
 	/**
@@ -280,7 +313,26 @@ export class TranslatorProxy extends Emitter {
 			return existing;
 		}
 
-		const conn = new TranslatorConnection(inputSourceName, { targetLanguage: language }, this.runtime);
+		// Wire the usage reporter only when a token is present (the JVB-forwarded X-Translation-Token).
+		// Without a token there is nothing to attribute, so we pass no onUsageReport at all — that also
+		// means the connection starts no periodic reporting timer on the dev/replay `?lang=` path.
+		const token = this.options.translationToken;
+		const conn = new TranslatorConnection(
+			inputSourceName,
+			{
+				targetLanguage: language,
+				...(token
+					? {
+							onUsageReport: (durationSeconds: number, targetLanguage: string) =>
+								reportTranslationUsage(
+									{ token, durationSeconds, targetLanguage },
+									{ url: this.runtime.config.translationUsageUrl, logger: this.runtime.logger },
+								),
+						}
+					: {}),
+			},
+			this.runtime,
+		);
 
 		conn.onClosed = () => {
 			const map = this.connections.get(inputSourceName);

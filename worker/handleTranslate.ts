@@ -14,8 +14,9 @@ import type { IWebSocket } from '../src/translate/runtime';
 import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
+import { flushTranslationUsage } from '../src/usage-reporter';
 
-export function handleTranslate(request: Request, env: Env): Response {
+export function handleTranslate(request: Request, env: Env, ctx: ExecutionContext): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {
 		return new Response('Expected WebSocket upgrade', { status: 426 });
 	}
@@ -50,12 +51,16 @@ export function handleTranslate(request: Request, env: Env): Response {
 		}
 	}
 
+	// Translation usage token, forwarded by the JVB as an HTTP header on the connect. Used only to
+	// attribute reported translation usage; absent on the dev/replay path.
+	const translationToken = request.headers.get('X-Translation-Token') ?? undefined;
+
 	const pair = new WebSocketPair();
 	const client = pair[0];
 	const server = pair[1];
 	server.accept();
 
-	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages }, runtime);
+	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages, translationToken }, runtime);
 	const dispatcher = useDispatcher && env.DISPATCHER_DO ? createDispatcherForwarder(env, sessionId) : null;
 
 	proxy.on('audioFrame', (data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
@@ -98,6 +103,11 @@ export function handleTranslate(request: Request, env: Env): Response {
 	});
 
 	proxy.on('closed', () => {
+		// Drain any buffered usage — the final per-direction delta plus sub-threshold batched events —
+		// now that the bridge has closed. Register with ctx.waitUntil so the POST completes before the
+		// isolate is reclaimed; without it the last interval's usage (and anything under the batch
+		// threshold) would be lost on teardown.
+		ctx.waitUntil(flushTranslationUsage());
 		dispatcher?.close();
 		try {
 			server.close();
