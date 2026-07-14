@@ -50,6 +50,11 @@ const server = http.createServer((req, res) => {
 // Create WebSocket server
 const wss = new WebSocketServer({ noServer: true });
 
+// Active /translate proxies. Unlike transcription sessions (tracked by sessionManager), translation
+// proxies are created inline, so track them here for graceful shutdown: SIGTERM closes them so each
+// direction flushes its final usage delta into the reporter buffer before we drain it.
+const activeTranslateSessions = new Set<TranslatorProxy>();
+
 // Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
 	logger.debug('UPGRADE EVENT TRIGGERED!');
@@ -307,8 +312,10 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		{ initialLanguages, provider: parameters.provider, translationToken },
 		createNodeTranslationRuntime(),
 	);
+	activeTranslateSessions.add(translateSession);
 
 	translateSession.on('closed', () => {
+		activeTranslateSessions.delete(translateSession);
 		if (ws.readyState === ws.OPEN) {
 			ws.close();
 		}
@@ -544,9 +551,13 @@ server.listen(PORT, HOST, () => {
 process.on('SIGTERM', async () => {
 	logger.info('SIGTERM received, closing server...');
 
-	// Shutdown SessionManager first (cleanup detached sessions). Closing sessions
-	// drains each TranslatorConnection's final usage report into the buffer.
+	// Shut down transcription sessions (SessionManager) and close active translation proxies — each
+	// TranslatorConnection flushes its final usage delta into the reporter buffer on close — so the
+	// buffer is complete before we drain it below.
 	sessionManager.shutdown();
+	for (const session of activeTranslateSessions) {
+		session.close();
+	}
 
 	// Flush any buffered translation usage, then shutdown telemetry.
 	await Promise.all([flushTranslationUsage(), shutdownTelemetry(), shutdownTelemetryLogs()]);

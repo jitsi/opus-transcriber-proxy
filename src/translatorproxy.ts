@@ -72,12 +72,7 @@ export class TranslatorProxy extends Emitter {
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 
 		this.ws.addEventListener('close', () => {
-			for (const byLanguage of this.connections.values()) {
-				for (const conn of byLanguage.values()) {
-					conn.close();
-				}
-			}
-			this.connections.clear();
+			this.closeAllConnections();
 			this.emit('closed');
 		});
 
@@ -129,6 +124,34 @@ export class TranslatorProxy extends Emitter {
 		});
 
 		this.sendServerInfo();
+	}
+
+	/**
+	 * Close every active translation connection — each flushes its final usage delta on close — and
+	 * clear the map. Idempotent (connection close is guarded). Shared by the bridge-ws close handler
+	 * and by {@link close}.
+	 */
+	private closeAllConnections(): void {
+		for (const byLanguage of this.connections.values()) {
+			for (const conn of byLanguage.values()) {
+				conn.close();
+			}
+		}
+		this.connections.clear();
+	}
+
+	/**
+	 * Synchronously tear down the proxy: close all connections (flushing their final usage deltas) and
+	 * the bridge socket. Used by graceful shutdown so the last per-direction delta is buffered before
+	 * the usage reporter is drained.
+	 */
+	close(): void {
+		this.closeAllConnections();
+		try {
+			this.ws.close();
+		} catch {
+			// bridge already closing/closed
+		}
 	}
 
 	/**
