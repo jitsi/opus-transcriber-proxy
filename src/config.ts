@@ -131,6 +131,8 @@ export const config = {
 		// API key for translation. Defaults to OPENAI_API_KEY; set OPENAI_TRANSLATION_API_KEY to use a
 		// separate key/quota for translation (the realtime translate endpoint can be billed separately).
 		apiKey: process.env.OPENAI_TRANSLATION_API_KEY || process.env.OPENAI_API_KEY || '',
+		// Endpoint for live-translation audio-duration usage reports. Unset → reporting is a no-op.
+		usageUrl: process.env.TRANSLATION_USAGE_URL || '',
 	},
 
 	server: {

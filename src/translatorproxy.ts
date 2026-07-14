@@ -1,6 +1,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
+import { reportTranslationUsage } from './usage-reporter';
 
 export interface TranslatorProxyOptions {
 	/**
@@ -10,6 +11,12 @@ export interface TranslatorProxyOptions {
 	 */
 	initialLanguages?: string[];
 	provider?: string;
+	/**
+	 * Translation usage token (the JVB-forwarded `X-Translation-Token`). Threaded to
+	 * the usage reporter so reported translation usage can be attributed downstream.
+	 * Absent on the dev/replay `?lang=` path — usage is then not reported.
+	 */
+	translationToken?: string;
 }
 
 /**
@@ -280,7 +287,21 @@ export class TranslatorProxy extends Emitter {
 			return existing;
 		}
 
-		const conn = new TranslatorConnection(inputSourceName, { targetLanguage: language }, this.runtime);
+		const conn = new TranslatorConnection(
+			inputSourceName,
+			{
+				targetLanguage: language,
+				onUsageReport: (durationSeconds, targetLanguage) => {
+					const token = this.options.translationToken;
+					if (!token) return;
+					reportTranslationUsage(
+						{ token, durationSeconds, targetLanguage },
+						{ url: this.runtime.config.translationUsageUrl, logger: this.runtime.logger },
+					);
+				},
+			},
+			this.runtime,
+		);
 
 		conn.onClosed = () => {
 			const map = this.connections.get(inputSourceName);

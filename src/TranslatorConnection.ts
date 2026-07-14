@@ -86,6 +86,13 @@ export function normalizeTargetLanguage(input: string): string {
 export interface TranslatorConnectionOptions {
 	/** ISO 2-letter target language code (e.g. "en", "es"). */
 	targetLanguage: string;
+	/**
+	 * Called exactly once when the connection terminates, with the total audio
+	 * duration translated for this direction. Reporting-agnostic — the proxy wires
+	 * this to the usage reporter. `durationSeconds` is derived from the input
+	 * audio appended to OpenAI (24 kHz PCM).
+	 */
+	onUsageReport?: (durationSeconds: number, targetLanguage: string) => void;
 }
 
 export class TranslatorConnection {
@@ -699,6 +706,19 @@ export class TranslatorConnection {
 			return;
 		}
 		this.isClosed = true;
+
+		// Report the translated audio duration for this direction exactly once. Every
+		// teardown path (proxy reconcile, ws close, error) funnels through here, and
+		// the isClosed guard above ensures a single report. onUsageReport lives on
+		// options (not detached below), so it survives the teardown.
+		const durationSeconds = this.totalSamplesSent / 24000;
+		if (durationSeconds > 0) {
+			try {
+				this.options.onUsageReport?.(durationSeconds, this.options.targetLanguage);
+			} catch (err) {
+				this.runtime.logger.error('onUsageReport callback failed', err as Error);
+			}
+		}
 
 		// Detach callbacks before teardown so a late OpenAI event firing during close() can't re-emit on the
 		// proxy. Keep onClosed locally so we can notify exactly once after everything is torn down.

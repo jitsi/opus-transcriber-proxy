@@ -11,6 +11,7 @@ import type { IWebSocket } from './translate/runtime';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
+import { flushTranslationUsage } from './usage-reporter';
 import { initTelemetry, initTelemetryLogs, shutdownTelemetry, shutdownTelemetryLogs, isTelemetryEnabled } from './telemetry';
 import { getInstruments } from './telemetry/instruments';
 
@@ -75,6 +76,13 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
+	// Translation usage token, forwarded by the JVB as an HTTP header on the connect
+	// (originating from prosody room metadata). Used only to attribute reported
+	// translation usage; absent on the dev/replay path. Node types headers as
+	// string | string[] | undefined; collapse the (unused here) repeated-header case.
+	const rawTranslationToken = request.headers['x-translation-token'];
+	const translationToken = Array.isArray(rawTranslationToken) ? rawTranslationToken[0] : rawTranslationToken;
+
 	// Handle the /translate endpoint separately (speech-to-speech translation).
 	if (parameters.url.pathname.endsWith('/translate')) {
 		if (!config.enableTranslate) {
@@ -83,7 +91,7 @@ server.on('upgrade', (request, socket, head) => {
 			return;
 		}
 		wss.handleUpgrade(request, socket, head, (ws) => {
-			handleTranslatorConnection(ws, parameters);
+			handleTranslatorConnection(ws, parameters, translationToken);
 		});
 		return;
 	}
@@ -260,7 +268,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 	});
 }
 
-function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters) {
+function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters, translationToken?: string) {
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
 
@@ -296,7 +304,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 
 	const translateSession = new TranslatorProxy(
 		ws as unknown as IWebSocket,
-		{ initialLanguages, provider: parameters.provider },
+		{ initialLanguages, provider: parameters.provider, translationToken },
 		createNodeTranslationRuntime(),
 	);
 
@@ -536,11 +544,12 @@ server.listen(PORT, HOST, () => {
 process.on('SIGTERM', async () => {
 	logger.info('SIGTERM received, closing server...');
 
-	// Shutdown SessionManager first (cleanup detached sessions)
+	// Shutdown SessionManager first (cleanup detached sessions). Closing sessions
+	// drains each TranslatorConnection's final usage report into the buffer.
 	sessionManager.shutdown();
 
-	// Shutdown telemetry (flush pending metrics and logs)
-	await Promise.all([shutdownTelemetry(), shutdownTelemetryLogs()]);
+	// Flush any buffered translation usage, then shutdown telemetry.
+	await Promise.all([flushTranslationUsage(), shutdownTelemetry(), shutdownTelemetryLogs()]);
 
 	server.close(() => {
 		logger.info('Server closed');

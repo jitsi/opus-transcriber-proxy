@@ -54,6 +54,12 @@ export interface TranslationRuntimeConfig {
 	emitTranscripts: boolean;
 	/** Enable debug-only latency instrumentation. */
 	debug: boolean;
+	/**
+	 * Endpoint for live-translation audio-duration usage reports. When unset, usage reporting is a
+	 * no-op (the usage reporter warns once and drops), so dev/replay runs and deployments without a
+	 * reporting endpoint cost nothing. Resolved by each runtime from its environment.
+	 */
+	translationUsageUrl?: string;
 }
 
 /** Per-connection metric batcher (Node aggregates + flushes to OTLP; a Worker may no-op). */

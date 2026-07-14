@@ -50,12 +50,16 @@ export function handleTranslate(request: Request, env: Env): Response {
 		}
 	}
 
+	// Translation usage token, forwarded by the JVB as an HTTP header on the connect. Used only to
+	// attribute reported translation usage; absent on the dev/replay path.
+	const translationToken = request.headers.get('X-Translation-Token') ?? undefined;
+
 	const pair = new WebSocketPair();
 	const client = pair[0];
 	const server = pair[1];
 	server.accept();
 
-	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages }, runtime);
+	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages, translationToken }, runtime);
 	const dispatcher = useDispatcher && env.DISPATCHER_DO ? createDispatcherForwarder(env, sessionId) : null;
 
 	proxy.on('audioFrame', (data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {

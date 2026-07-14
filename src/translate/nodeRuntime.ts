@@ -35,6 +35,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			translationModel: config.translation.model,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
+			translationUsageUrl: config.translation.usageUrl,
 		},
 		writeMetric(metric) {
 			writeMetric(undefined, metric as any);

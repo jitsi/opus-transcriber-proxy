@@ -11,6 +11,7 @@ import fs from 'fs';
 const CORE_FILES = [
 	'src/translatorproxy.ts',
 	'src/TranslatorConnection.ts',
+	'src/usage-reporter.ts',
 	'src/RtpTimestamper.ts',
 	'src/translate/runtime.ts',
 	'src/translate/emitter.ts',

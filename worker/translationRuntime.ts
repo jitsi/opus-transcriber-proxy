@@ -30,6 +30,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			translationModel: env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,
+			translationUsageUrl: env.TRANSLATION_USAGE_URL || '',
 		},
 		writeMetric() {
 			// No OTLP in the Worker (yet); metrics are a no-op.
