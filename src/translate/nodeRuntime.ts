@@ -11,6 +11,7 @@ import { buildServerInfo } from '../serverInfo';
 import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
 import { provideBase64 } from './base64';
+import { parseIntOr } from './env';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
 
 // Buffer-based base64 for the per-frame hot path: 20-100x faster than the portable atob/btoa
@@ -26,13 +27,6 @@ provideBase64(
 		return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 	},
 );
-
-/** Parse an integer env var, falling back to a default when unset or non-numeric. */
-function parseIntOr(value: string | undefined, fallback: number): number {
-	if (value === undefined) return fallback;
-	const parsed = parseInt(value, 10);
-	return Number.isNaN(parsed) ? fallback : parsed;
-}
 
 export function createNodeTranslationRuntime(): TranslationRuntime {
 	return {

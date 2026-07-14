@@ -186,4 +186,30 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		conn.close();
 		expect(reports).toEqual([2]);
 	});
+
+	it('re-reports the delta on the next tick if onUsageReport throws', async () => {
+		const reports: number[] = [];
+		let throwOnce = true;
+		const { runtime, sockets } = makeHarness(100);
+		const conn = new TranslatorConnection('spk-1', {
+			targetLanguage: 'en',
+			onUsageReport: (durationSeconds) => {
+				if (throwOnce) {
+					throwOnce = false;
+					throw new Error('reporter down');
+				}
+				reports.push(durationSeconds);
+			},
+		}, runtime);
+		await flushMicrotasks();
+		expect(sockets).toHaveLength(1);
+		sockets[0].fireOpen();
+
+		conn.handleMediaEvent(mediaEvent('spk-1', 1)); // 1s appended
+		await vi.advanceTimersByTimeAsync(100); // first fire throws → reportedSamples not advanced
+		expect(reports).toEqual([]);
+		await vi.advanceTimersByTimeAsync(100); // next tick re-includes the same 1s delta
+		expect(reports).toEqual([1]);
+		conn.close();
+	});
 });

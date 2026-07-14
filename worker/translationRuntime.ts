@@ -10,13 +10,7 @@ import { OpusEncoderWasm } from '../src/OpusEncoder/OpusEncoderWasm';
 import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
-
-/** Parse an integer env var, falling back to a default when unset or non-numeric. */
-function parseIntOr(value: string | undefined, fallback: number): number {
-	if (value === undefined) return fallback;
-	const parsed = parseInt(value, 10);
-	return Number.isNaN(parsed) ? fallback : parsed;
-}
+import { parseIntOr } from '../src/translate/env';
 
 export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
 	registerWorkerOpusWasm();
