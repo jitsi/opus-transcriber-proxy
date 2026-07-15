@@ -60,6 +60,10 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 				runtime: 'cloudflare-worker',
 				// Translation always runs on OpenAI, so the reported provider is fixed.
 				provider: 'openai',
+				// Whether this deployment is configured to report per-customer usage (URL set). A flag,
+				// not the URL itself — enough to answer "is usage reporting on for this worker?" from the
+				// peer's logs without echoing the endpoint into them.
+				config: { usageReporting: !!env.TRANSLATION_USAGE_URL },
 			};
 			const worker: Record<string, unknown> = { present: true };
 			if (env.CF_VERSION_METADATA) {

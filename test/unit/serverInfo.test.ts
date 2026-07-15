@@ -36,6 +36,8 @@ describe('buildServerInfo', () => {
 			forceCommitTimeout: expect.any(Number),
 			sessionResumeEnabled: expect.any(Boolean),
 			useDispatcher: expect.any(Boolean),
+			// Usage-reporting status is surfaced as a boolean flag (URL configured or not), never the URL.
+			usageReporting: expect.any(Boolean),
 		});
 	});
 
