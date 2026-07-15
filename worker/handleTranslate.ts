@@ -104,10 +104,19 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 
 	proxy.on('closed', () => {
 		// Drain any buffered usage — the final per-direction delta plus sub-threshold batched events —
-		// now that the bridge has closed. Register with ctx.waitUntil so the POST completes before the
-		// isolate is reclaimed; without it the last interval's usage (and anything under the batch
-		// threshold) would be lost on teardown.
-		ctx.waitUntil(flushTranslationUsage());
+		// now that the bridge has closed. This fires long after handleTranslate returned its 101 upgrade
+		// response, by which point the request's ExecutionContext is finalized: `ctx` is no longer usable
+		// and `ctx.waitUntil` throws (TypeError: reading 'waitUntil' of undefined). So start the flush
+		// unconditionally, and only register it with waitUntil when that's still callable.
+		const flushed = flushTranslationUsage();
+		if (typeof ctx?.waitUntil === 'function') {
+			try {
+				ctx.waitUntil(flushed);
+			} catch {
+				// ctx already finalized after the upgrade response returned — the flush above still runs.
+			}
+		}
+		void flushed.catch(() => {});
 		dispatcher?.close();
 		try {
 			server.close();

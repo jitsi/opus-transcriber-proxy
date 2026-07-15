@@ -30,6 +30,9 @@ export function buildServerInfo(opts: { sessionId?: string; provider?: Provider 
 			forceCommitTimeout: config.forceCommitTimeout,
 			sessionResumeEnabled: config.sessionResumeEnabled,
 			useDispatcher: config.useDispatcher,
+			// Whether usage reporting is configured (URL set) — a flag, not the URL, to keep the
+			// endpoint out of the peer's logs. Mirrored in worker/translationRuntime.ts for the Worker path.
+			usageReporting: !!config.translation.usageUrl,
 		},
 	};
 
