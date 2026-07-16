@@ -6,7 +6,7 @@ import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy'
 import { TranslatorProxy } from './translatorproxy';
 import { normalizeTargetLanguage } from './TranslatorConnection';
 import { createNodeTranslationRuntime } from './translate/nodeRuntime';
-import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from './translate/messages';
+import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage } from './translate/messages';
 import type { IWebSocket } from './translate/runtime';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
@@ -361,6 +361,22 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 			}
 		},
 	);
+
+	// Talk boundaries bracketing the translated audio, mirroring the audioFrame handler above.
+	translateSession.on('talkStart', (data: { tag: string; timestamp: number; sequenceNumber: number }) => {
+		try {
+			ws.send(JSON.stringify(buildTranslationTalkStartMessage(data)));
+		} catch {
+			// ignore
+		}
+	});
+	translateSession.on('talkStop', (data: { tag: string; timestamp: number; mediaInfo: { bytesSent: number; duration: number }; sequenceNumber: number }) => {
+		try {
+			ws.send(JSON.stringify(buildTranslationTalkStopMessage(data)));
+		} catch {
+			// ignore
+		}
+	});
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {

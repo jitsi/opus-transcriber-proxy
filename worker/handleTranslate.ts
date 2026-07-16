@@ -11,7 +11,12 @@ import type { Env } from './env';
 import { TranslatorProxy } from '../src/translatorproxy';
 import { normalizeTargetLanguage } from '../src/TranslatorConnection';
 import type { IWebSocket } from '../src/translate/runtime';
-import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from '../src/translate/messages';
+import {
+	buildTranslationMediaMessage,
+	buildTranslationTalkStartMessage,
+	buildTranslationTalkStopMessage,
+	buildTranslationTranscriptMessage,
+} from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
 import { flushTranslationUsage } from '../src/usage-reporter';
@@ -68,6 +73,22 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 		// unlike transcripts, it is NOT gated on `sendBack` (which only controls transcript emission).
 		try {
 			server.send(JSON.stringify(buildTranslationMediaMessage(data)));
+		} catch {
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+		}
+	});
+
+	// Talk boundaries bracketing the translated audio, mirroring the audioFrame handler above.
+	proxy.on('talkStart', (data: { tag: string; timestamp: number; sequenceNumber: number }) => {
+		try {
+			server.send(JSON.stringify(buildTranslationTalkStartMessage(data)));
+		} catch {
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+		}
+	});
+	proxy.on('talkStop', (data: { tag: string; timestamp: number; mediaInfo: { bytesSent: number; duration: number }; sequenceNumber: number }) => {
+		try {
+			server.send(JSON.stringify(buildTranslationTalkStopMessage(data)));
 		} catch {
 			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
 		}

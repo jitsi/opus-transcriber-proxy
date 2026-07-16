@@ -31,6 +31,38 @@ export interface TranslationMediaMessage {
 }
 
 /**
+ * The media format of the translated Opus audio, announced on each talk-start `start` event. The RTP clock rate is
+ * 48000 Hz and the encoder is mono (see TranslatorConnection's opus encoder). The bridge does not act on these
+ * fields for the sending-change notification, but the mediajson `start` event requires a mediaFormat.
+ */
+const TRANSLATED_AUDIO_MEDIA_FORMAT = { encoding: 'opus', sampleRate: 48000, channels: 1 } as const;
+
+/**
+ * A /translate talk-start message: the mediajson `start` event, augmented with the RTP `timestamp` at which a "talk"
+ * (a contiguous run of translated audio) begins. Brackets the run of `media` frames, paired with a
+ * {@link TranslationTalkStopMessage}. The bridge turns it into a client-facing SyntheticSourceSendingChangeEvent.
+ */
+export interface TranslationTalkStartMessage {
+	event: 'start';
+	sequenceNumber: number;
+	start: {
+		tag: string;
+		mediaFormat: { encoding: string; sampleRate: number; channels: number };
+		timestamp: number;
+	};
+}
+
+/**
+ * A /translate talk-stop message: the mediajson `stop` event, carrying the RTP `timestamp` at which the talk ends
+ * and `mediaInfo` end-of-run statistics (`bytesSent` = total encoded Opus payload bytes, `duration` = ms).
+ */
+export interface TranslationTalkStopMessage {
+	event: 'stop';
+	sequenceNumber: number;
+	stop: { tag: string; mediaInfo: { bytesSent: number; duration: number }; timestamp: number };
+}
+
+/**
  * Build the transcript message for a translation result. `seq` must be a monotonic per-connection
  * counter: two events for the same tag within the same millisecond would collide under Date.now().
  * `participant.id` is the input (export) source name the translation was produced from.
@@ -68,5 +100,38 @@ export function buildTranslationMediaMessage(data: {
 		event: 'media',
 		sequenceNumber: data.sequenceNumber,
 		media: { tag: data.tag, chunk: data.chunk, timestamp: data.timestamp, payload: data.payload },
+	};
+}
+
+/**
+ * Build the talk-start message wrapping a run of translated audio for `tag`. `timestamp` is the RTP timestamp (48000
+ * Hz, same timeline as the media frames) of the first frame of the talk.
+ */
+export function buildTranslationTalkStartMessage(data: {
+	tag: string;
+	timestamp: number;
+	sequenceNumber: number;
+}): TranslationTalkStartMessage {
+	return {
+		event: 'start',
+		sequenceNumber: data.sequenceNumber,
+		start: { tag: data.tag, mediaFormat: { ...TRANSLATED_AUDIO_MEDIA_FORMAT }, timestamp: data.timestamp },
+	};
+}
+
+/**
+ * Build the talk-stop message ending a run of translated audio for `tag`. `timestamp` is the RTP timestamp (48000 Hz)
+ * marking the end of the talk; `mediaInfo` carries the run's `bytesSent` (encoded Opus payload) and `duration` (ms).
+ */
+export function buildTranslationTalkStopMessage(data: {
+	tag: string;
+	timestamp: number;
+	mediaInfo: { bytesSent: number; duration: number };
+	sequenceNumber: number;
+}): TranslationTalkStopMessage {
+	return {
+		event: 'stop',
+		sequenceNumber: data.sequenceNumber,
+		stop: { tag: data.tag, mediaInfo: data.mediaInfo, timestamp: data.timestamp },
 	};
 }
