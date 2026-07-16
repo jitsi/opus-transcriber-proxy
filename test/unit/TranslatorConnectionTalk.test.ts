@@ -72,10 +72,14 @@ function makeHarness(): { runtime: TranslationRuntime; sockets: FakeWs[] } {
 }
 
 async function flushMicrotasks(): Promise<void> {
+	// TranslatorConnection defers its OpenAI socket init to a microtask (so onError/onClosed are wired before a
+	// synchronous `new WebSocket` failure can fire), and connect() awaits several more before the socket appears.
+	// 20 turns of the microtask queue is comfortably enough to drain that chain before we assert.
 	for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
 const audioDelta = () => JSON.stringify({ type: 'response.output_audio.delta', delta: 'AAAA' });
+const outputAudioDone = () => JSON.stringify({ type: 'response.output_audio.done' });
 const responseDone = () => JSON.stringify({ type: 'response.done' });
 
 describe('TranslatorConnection talk boundaries', () => {
@@ -115,6 +119,23 @@ describe('TranslatorConnection talk boundaries', () => {
 		// 2 frames of 3 bytes each -> bytesSent 6, duration 2 * 20 ms.
 		expect(stops).toEqual([['55555555-a0', 2 * SAMPLES_PER_FRAME, { bytesSent: 6, duration: 40 }]]);
 		// One talk only.
+		expect(starts).toHaveLength(1);
+	});
+
+	it('stops once on the first end-of-utterance event; a trailing response.done is a no-op', async () => {
+		const { ws, starts, stops } = await connect();
+
+		ws.fireMessage(audioDelta()); // talk start at ts 0
+		ws.fireMessage(audioDelta()); // second frame at ts 960
+
+		// The real OpenAI sequence closes a response window with response.output_audio.done *and then*
+		// response.done — both reach the same end-of-utterance handler. The stop must fire on the first, and
+		// endTalk()'s idempotence must make the trailing response.done a no-op (no double-emit).
+		ws.fireMessage(outputAudioDone());
+		expect(stops).toEqual([['55555555-a0', 2 * SAMPLES_PER_FRAME, { bytesSent: 6, duration: 40 }]]);
+
+		ws.fireMessage(responseDone());
+		expect(stops).toHaveLength(1);
 		expect(starts).toHaveLength(1);
 	});
 

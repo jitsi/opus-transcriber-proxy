@@ -367,14 +367,14 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 		try {
 			ws.send(JSON.stringify(buildTranslationTalkStartMessage(data)));
 		} catch {
-			// ignore
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
 		}
 	});
 	translateSession.on('talkStop', (data: TranslationTalkStopData) => {
 		try {
 			ws.send(JSON.stringify(buildTranslationTalkStopMessage(data)));
 		} catch {
-			// ignore
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
 		}
 	});
 }
