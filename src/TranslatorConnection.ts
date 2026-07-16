@@ -17,10 +17,10 @@ const OPENAI_TRANSLATIONS_ENDPOINT = 'wss://api.openai.com/v1/realtime/translati
 const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
 // ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
 const MAX_PENDING_OPUS_FRAMES = 500;
-// RTP ticks per emitted Opus frame (48000 Hz * 20 ms). The talk-stop timestamp is one past the end of the run:
+// RTP ticks per emitted Opus frame (48000 Hz * 20 ms = 960). The talk-stop timestamp is one past the end of the run:
 // the last frame's timestamp plus this, i.e. the timestamp the next contiguous packet would carry (were there no
-// intervening silence before the next talk).
-const SAMPLES_PER_FRAME = Math.round((RTP_CLOCK_RATE / 1000) * FRAME_DURATION_MS);
+// intervening silence before the next talk). Multiply before dividing so the arithmetic is an exact integer.
+const SAMPLES_PER_FRAME = (RTP_CLOCK_RATE * FRAME_DURATION_MS) / 1000;
 
 function safeToBase64(array: Uint8Array): string {
 	return bytesToBase64(array);

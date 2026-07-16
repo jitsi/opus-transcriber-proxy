@@ -16,6 +16,8 @@ import {
 	buildTranslationTalkStartMessage,
 	buildTranslationTalkStopMessage,
 	buildTranslationTranscriptMessage,
+	type TranslationTalkStartData,
+	type TranslationTalkStopData,
 } from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
 import { createWorkerTranslationRuntime } from './translationRuntime';
@@ -79,14 +81,14 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 	});
 
 	// Talk boundaries bracketing the translated audio, mirroring the audioFrame handler above.
-	proxy.on('talkStart', (data: { tag: string; timestamp: number; sequenceNumber: number }) => {
+	proxy.on('talkStart', (data: TranslationTalkStartData) => {
 		try {
 			server.send(JSON.stringify(buildTranslationTalkStartMessage(data)));
 		} catch {
 			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
 		}
 	});
-	proxy.on('talkStop', (data: { tag: string; timestamp: number; mediaInfo: { bytesSent: number; duration: number }; sequenceNumber: number }) => {
+	proxy.on('talkStop', (data: TranslationTalkStopData) => {
 		try {
 			server.send(JSON.stringify(buildTranslationTalkStopMessage(data)));
 		} catch {
