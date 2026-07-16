@@ -1,4 +1,4 @@
-import { RtpTimestamper } from './RtpTimestamper';
+import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
@@ -17,6 +17,10 @@ const OPENAI_TRANSLATIONS_ENDPOINT = 'wss://api.openai.com/v1/realtime/translati
 const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
 // ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
 const MAX_PENDING_OPUS_FRAMES = 500;
+// RTP ticks per emitted Opus frame (48000 Hz * 20 ms = 960). The talk-stop timestamp is one past the end of the run:
+// the last frame's timestamp plus this, i.e. the timestamp the next contiguous packet would carry (were there no
+// intervening silence before the next talk). Multiply before dividing so the arithmetic is an exact integer.
+const SAMPLES_PER_FRAME = (RTP_CLOCK_RATE * FRAME_DURATION_MS) / 1000;
 
 function safeToBase64(array: Uint8Array): string {
 	return bytesToBase64(array);
@@ -148,6 +152,21 @@ export class TranslatorConnection {
 	onClosed?: (tag: string) => void = undefined;
 	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
 	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string) => void = undefined;
+	// Talk boundaries: a "talk" is one contiguous run of translated audio (one OpenAI response window). onTalkStart
+	// fires on the first frame of the run (timestamp = that frame's RTP timestamp); onTalkStop fires at end-of-
+	// utterance with a timestamp one past the end of the run (the last frame's RTP timestamp + one frame), i.e. the
+	// timestamp the next contiguous packet would carry — so the run spans [start, stop). onTalkStop also reports the
+	// run's mediaInfo: bytesSent (total encoded Opus payload bytes) and duration (ms, the [start, stop) span).
+	onTalkStart?: (tag: string, timestamp: number) => void = undefined;
+	onTalkStop?: (tag: string, timestamp: number, mediaInfo: { bytesSent: number; duration: number }) => void = undefined;
+
+	// Whether a talk is currently in progress (between onTalkStart and onTalkStop), the RTP timestamp of the most
+	// recently emitted frame (to place the talk-stop boundary), the RTP timestamp of the run's first frame, and the
+	// total encoded Opus bytes emitted in the run (for the stop's mediaInfo). See sendAudioFrame / endTalk.
+	private talkActive = false;
+	private lastFrameTimestamp = 0;
+	private talkStartTimestamp = 0;
+	private talkBytes = 0;
 
 	// Per-response latency measurement.
 	// firstInputToFirstOutput (TTFA — "time to first audio") = wall-clock from
@@ -694,6 +713,9 @@ export class TranslatorConnection {
 			this.firstOutputAt = null;
 			this.firstInputAt = null;
 			this.lastInputAppendAt = null;
+			// Close the talk opened by this response window's first audio frame. No-op if the window produced no
+			// audio (e.g. response.done with no deltas), since no talk was started.
+			this.endTalk();
 			this.log(`[${this.options.targetLanguage}] ${parsedMessage.type}`);
 			return;
 		}
@@ -719,10 +741,38 @@ export class TranslatorConnection {
 		// Conference.handleMediaMessage reinterprets `media.chunk` as that 16-bit RTP sequence number.
 		const { timestamp, sequenceNumber: rtpSequenceNumber } = this.rtpTimestamper.nextFrameTimestamp();
 
+		// First frame of a talk: emit the talk-start boundary at this frame's timestamp, and reset the run's
+		// mediaInfo accumulators. The end-of-utterance handler emits the matching talk-stop. Uses its own flag
+		// (not the debug-only firstOutputAt) so it works in production.
+		if (!this.talkActive) {
+			this.talkActive = true;
+			this.talkStartTimestamp = timestamp;
+			this.talkBytes = 0;
+			this.onTalkStart?.(this.localTag, timestamp);
+		}
+		this.lastFrameTimestamp = timestamp;
+		this.talkBytes += opusFrame.length;
+
 		const payload = bytesToBase64(opusFrame);
 
 		// The mediajson wire-envelope sequence number is assigned by the proxy (per-WebSocket), not here.
 		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);
+	}
+
+	/** Emit the talk-stop boundary if a talk is in progress. Idempotent (a no-op when no talk is active). */
+	private endTalk(): void {
+		if (!this.talkActive) {
+			return;
+		}
+		this.talkActive = false;
+		// One past the end of the run: the last frame occupies [lastFrameTimestamp, lastFrameTimestamp + one frame),
+		// so its exclusive end (the next contiguous packet's timestamp) marks where the talk stops.
+		const stopTimestamp = this.lastFrameTimestamp + SAMPLES_PER_FRAME;
+		// duration is the run's span on the media timeline: (stop - start) converted to ms at RTP_CLOCK_RATE. It
+		// equals the [start, stop) interval the talk-start/stop timestamps bracket, so it includes any silence the
+		// RtpTimestamper inserted mid-run. bytesSent is the total encoded Opus payload.
+		const duration = Math.round((stopTimestamp - this.talkStartTimestamp) / (RTP_CLOCK_RATE / 1000));
+		this.onTalkStop?.(this.localTag, stopTimestamp, { bytesSent: this.talkBytes, duration });
 	}
 
 	// Report the audio duration translated (appended to OpenAI) since the previous report. Fired on a
@@ -762,6 +812,10 @@ export class TranslatorConnection {
 		}
 		this.reportUsageDelta();
 
+		// Close any talk still in progress so a receiver isn't left believing the source is still sending after the
+		// connection goes away. Fired while onTalkStop is still attached, before the detach below.
+		this.endTalk();
+
 		// Detach callbacks before teardown so a late OpenAI event firing during close() can't re-emit on the
 		// proxy. Keep onClosed locally so we can notify exactly once after everything is torn down.
 		const onClosed = this.onClosed;
@@ -769,6 +823,8 @@ export class TranslatorConnection {
 		this.onError = undefined;
 		this.onTranscription = undefined;
 		this.onAudioFrame = undefined;
+		this.onTalkStart = undefined;
+		this.onTalkStop = undefined;
 
 		this.connectionStatus = 'closed';
 		this.decoderStatus = 'closed';

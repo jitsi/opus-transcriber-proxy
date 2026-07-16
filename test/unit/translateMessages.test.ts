@@ -4,7 +4,12 @@
  * counter, not Date.now() (whose collisions e719ea4 fixed).
  */
 import { describe, it, expect } from 'vitest';
-import { buildTranslationMediaMessage, buildTranslationTranscriptMessage } from '../../src/translate/messages';
+import {
+	buildTranslationMediaMessage,
+	buildTranslationTalkStartMessage,
+	buildTranslationTalkStopMessage,
+	buildTranslationTranscriptMessage,
+} from '../../src/translate/messages';
 
 describe('buildTranslationTranscriptMessage', () => {
 	const data = { transcript: 'hola', targetLanguage: 'es', tag: '523834112-a0.es', isInterim: false };
@@ -53,5 +58,40 @@ describe('buildTranslationMediaMessage', () => {
 		expect(typeof msg.sequenceNumber).toBe('number');
 		expect(typeof msg.media.chunk).toBe('number');
 		expect(typeof msg.media.timestamp).toBe('number');
+	});
+});
+
+describe('buildTranslationTalkStartMessage', () => {
+	it('builds the mediajson start envelope augmented with the talk timestamp', () => {
+		const msg = buildTranslationTalkStartMessage({ tag: '55555555-a0.hi', timestamp: 384000, sequenceNumber: 5 });
+		expect(msg).toEqual({
+			event: 'start',
+			sequenceNumber: 5,
+			start: {
+				tag: '55555555-a0.hi',
+				mediaFormat: { encoding: 'opus', sampleRate: 48000, channels: 1 },
+				timestamp: 384000,
+			},
+		});
+		expect(typeof msg.start.timestamp).toBe('number');
+	});
+});
+
+describe('buildTranslationTalkStopMessage', () => {
+	it('builds the mediajson stop envelope with tag, mediaInfo, and timestamp', () => {
+		const msg = buildTranslationTalkStopMessage({
+			tag: '55555555-a0.hi',
+			timestamp: 960000,
+			mediaInfo: { bytesSent: 4096, duration: 2000 },
+			sequenceNumber: 6,
+		});
+		expect(msg).toEqual({
+			event: 'stop',
+			sequenceNumber: 6,
+			stop: { tag: '55555555-a0.hi', mediaInfo: { bytesSent: 4096, duration: 2000 }, timestamp: 960000 },
+		});
+		expect(typeof msg.stop.timestamp).toBe('number');
+		expect(typeof msg.stop.mediaInfo.bytesSent).toBe('number');
+		expect(typeof msg.stop.mediaInfo.duration).toBe('number');
 	});
 });

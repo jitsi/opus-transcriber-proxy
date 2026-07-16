@@ -36,6 +36,8 @@ vi.mock('../../src/TranslatorConnection', () => ({
 		this.onError = undefined;
 		this.onTranscription = undefined;
 		this.onAudioFrame = undefined;
+		this.onTalkStart = undefined;
+		this.onTalkStop = undefined;
 	}),
 	normalizeTargetLanguage: vi.fn((lang: string) => {
 		const norm = String(lang).toLowerCase();
@@ -185,6 +187,33 @@ describe('TranslatorProxy (sources model)', () => {
 
 		expect(frames).toHaveLength(1);
 		expect(frames[0]).toMatchObject({ tag: '523834112-a0.en', language: 'en', chunk: 5, timestamp: 960, payload: 'OPUSB64', sequenceNumber: 0 });
+	});
+
+	it('draws talk start/stop from the same wire-envelope counter as audio, so start < frames < stop', () => {
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+		const conn = MockedConnection.mock.instances[0] as any;
+
+		// Record every outbound envelope's sequenceNumber in the order the proxy emits it.
+		const events: Array<{ kind: string; sequenceNumber: number }> = [];
+		proxy.on('talkStart', (d: any) => events.push({ kind: 'start', sequenceNumber: d.sequenceNumber }));
+		proxy.on('audioFrame', (d: any) => events.push({ kind: 'frame', sequenceNumber: d.sequenceNumber }));
+		proxy.on('talkStop', (d: any) => events.push({ kind: 'stop', sequenceNumber: d.sequenceNumber }));
+
+		// Fire the connection callbacks in the production order: talk-start before the first frame (see
+		// TranslatorConnection.sendAudioFrame), then the frames, then talk-stop at end-of-utterance.
+		conn.onTalkStart('523834112-a0.en', 0);
+		conn.onAudioFrame('523834112-a0.en', 1, 0, 'P');
+		conn.onAudioFrame('523834112-a0.en', 2, 960, 'P');
+		conn.onTalkStop('523834112-a0.en', 1920, { bytesSent: 6, duration: 40 });
+
+		expect(events.map((e) => e.kind)).toEqual(['start', 'frame', 'frame', 'stop']);
+		const seqs = events.map((e) => e.sequenceNumber);
+		// One shared per-proxy counter advanced in callback-firing order -> strictly increasing, so on the single
+		// outbound WebSocket the bridge always sees talkStart before the frames it brackets and talkStop after them.
+		expect(seqs).toEqual([0, 1, 2, 3]);
+		expect(seqs[0]).toBeLessThan(seqs[1]); // start before first frame
+		expect(seqs[3]).toBeGreaterThan(seqs[2]); // stop after last frame
 	});
 
 	it('attributes transcription to the input source name', () => {

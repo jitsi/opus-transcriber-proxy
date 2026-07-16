@@ -352,6 +352,14 @@ export class TranslatorProxy extends Emitter {
 		conn.onAudioFrame = (_tag, chunk, timestamp, payload) => {
 			this.emit('audioFrame', { tag: outputTag, language, chunk, timestamp, payload, sequenceNumber: this.envelopeSequenceNumber++ });
 		};
+		// Talk boundaries bracketing the run of audioFrames. Reuse the wire-envelope sequence counter so start/stop
+		// interleave correctly with the media frames they wrap on the single outbound WebSocket.
+		conn.onTalkStart = (_tag, timestamp) => {
+			this.emit('talkStart', { tag: outputTag, timestamp, sequenceNumber: this.envelopeSequenceNumber++ });
+		};
+		conn.onTalkStop = (_tag, timestamp, mediaInfo) => {
+			this.emit('talkStop', { tag: outputTag, timestamp, mediaInfo, sequenceNumber: this.envelopeSequenceNumber++ });
+		};
 
 		byLanguage.set(language, conn);
 		return conn;
