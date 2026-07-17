@@ -47,4 +47,21 @@ describe('RoomAttributor.attribute', () => {
     expect(segs).toHaveLength(1);
     expect(segs[0].identity).toBe('alice');
   });
+
+  it('merges a single-word island flanked by the same speaker', () => {
+    const w: Word[] = [
+      { text: 'made', start: 0.5, end: 1.0 },
+      { text: 'whilst', start: 2.4, end: 2.6 }, // stray word landing on the other speaker
+      { text: 'filmed', start: 3.5, end: 4.0 },
+    ];
+    const t = [
+      turn(0, 'Purple Otter', 'alice', 0, 2),
+      turn(1, 'Amber Falcon', null, 2, 3),
+      turn(0, 'Purple Otter', 'alice', 3, 5),
+    ];
+    const segs = attribute(w, t);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].identity).toBe('alice');
+    expect(segs[0].text).toBe('made whilst filmed');
+  });
 });
