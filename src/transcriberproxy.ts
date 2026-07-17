@@ -241,6 +241,31 @@ export class TranscriberProxy extends EventEmitter {
 			if (transcriptText.trim()) {
 				this.broadcastTranscriptToOtherTags(sourceTag, transcriptText);
 			}
+
+			// Speaker-identity attribution: async, off the hot path. The transcript above is
+			// already emitted; here we (best-effort) resolve who said what and emit a reconcile
+			// event with per-speaker segments. Any failure is swallowed — transcription is never
+			// affected. Gated by the IDENTITY_ENABLED feature flag.
+			if (config.identity?.enabled) {
+				newConnection
+					.identityAttributeFinal(message)
+					.then((segments) => {
+						if (!segments || segments.length === 0) return;
+						this.emit('identity_attribution', {
+							sessionId: this.sessionId,
+							tag,
+							participantId: message.participant?.id || tag,
+							messageId: message.message_id,
+							segments,
+						});
+						logger.info(
+							`[identity] ${tag}: ${segments
+								.map((s) => `${s.identity ?? s.handle ?? '?'}="${s.text}"`)
+								.join(' | ')}`,
+						);
+					})
+					.catch(() => {});
+			}
 		};
 		newConnection.onClosed = (tag) => {
 			this.outgoingConnections.delete(tag);

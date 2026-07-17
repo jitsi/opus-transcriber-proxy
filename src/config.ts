@@ -161,6 +161,9 @@ export const config = {
 		enabled: process.env.IDENTITY_ENABLED === 'true', // Default false — feature flag
 		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '', // e.g. http://identity-sidecar:8090
 		sidecarToken: process.env.IDENTITY_SIDECAR_TOKEN || '',
+		// Tenant scoping for enroll/identify. Placeholder default until per-customer identity
+		// is resolved from the WEBHOOK_EVENTS KV (a later step); fine for single-tenant testing.
+		tenant: process.env.IDENTITY_TENANT || 'default',
 		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 2000),
 		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
 		holdMs: parseIntOrDefault(process.env.IDENTITY_HOLD_MS, 3000), // hold a room final until identity resolves

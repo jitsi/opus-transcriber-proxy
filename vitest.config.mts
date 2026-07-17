@@ -22,7 +22,7 @@ export default defineConfig({
 		},
 		setupFiles: ['./test/setup.ts'],
 		testMatch: ['**/__tests__/**/*.test.ts', '**/*.test.ts'],
-		exclude: ['**/node_modules/**', '**/dist/**', '**/test/index.spec.ts'],
+		exclude: ['**/node_modules/**', '**/dist/**', '**/test/index.spec.ts', '**/identity-sidecar/**'],
 		mockReset: true,
 		restoreMocks: true,
 		clearMocks: true,

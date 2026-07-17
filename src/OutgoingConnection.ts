@@ -10,6 +10,26 @@ import { createBackend, getBackendConfig, type OpenAICustomOptions } from './bac
 import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
+import { SidecarClient } from './identity/SidecarClient';
+import { IdentityAttributor } from './identity/IdentityAttributor';
+import type { AttributedSegment } from './identity/RoomAttributor';
+
+// Process-wide sidecar client, built once from config when the identity feature is enabled.
+let sidecarSingleton: SidecarClient | null | undefined;
+function getSidecar(): SidecarClient | null {
+	if (sidecarSingleton !== undefined) return sidecarSingleton;
+	if (!config.identity?.enabled || !config.identity.sidecarUrl) {
+		sidecarSingleton = null;
+		return null;
+	}
+	sidecarSingleton = new SidecarClient({
+		baseUrl: config.identity.sidecarUrl,
+		token: config.identity.sidecarToken,
+		timeoutMs: config.identity.timeoutMs,
+		maxInFlight: config.identity.maxInFlight,
+	});
+	return sidecarSingleton;
+}
 
 const tagMatcher = /^([0-9a-fA-F]+)-/;
 
@@ -59,6 +79,9 @@ export class OutgoingConnection {
 	private pendingAudioFrames: string[] = [];
 	/** The audio format the current backend instance was initialized for (set synchronously in reinitializeDecoder). */
 	private activeDesiredFormat: AudioFormat | undefined;
+
+	/** Speaker-identity attributor (only when config.identity.enabled and this is the l16/16k path). */
+	private identityAttributor?: IdentityAttributor;
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -562,6 +585,17 @@ export class OutgoingConnection {
 	}
 
 	private sendOrEnqueueDecodedAudio(audioData: Uint8Array) {
+		// Identity feature: buffer decoded PCM for the sidecar (only the l16/16k path, i.e. xAI).
+		// Off the hot path — a copy into a bounded ring, no network here.
+		if (
+			config.identity?.enabled &&
+			this.activeDesiredFormat?.encoding === 'l16' &&
+			this.activeDesiredFormat?.sampleRate === 16000
+		) {
+			this.ensureIdentityAttributor();
+			this.identityAttributor?.appendPcm(audioData);
+		}
+
 		const backendStatus = this.backend?.getStatus();
 
 		if (backendStatus === 'connected' && this.backend) {
@@ -576,6 +610,32 @@ export class OutgoingConnection {
 			});
 		} else {
 			logger.debug(`Not queueing audio data for tag: ${this.localTag}: backend ${backendStatus}`);
+		}
+	}
+
+	private ensureIdentityAttributor(): void {
+		if (this.identityAttributor) return;
+		const sidecar = getSidecar();
+		const sessionId = this.options.sessionId;
+		if (!sidecar || !sessionId) return;
+		this.identityAttributor = new IdentityAttributor(sidecar, {
+			sessionId,
+			streamId: this.localTag,
+			tenant: config.identity?.tenant ?? 'default',
+		});
+	}
+
+	/**
+	 * Attribute a final transcript's words to speakers via the sidecar. Returns null
+	 * when the feature is off, the message has no per-word timing, or the sidecar can't
+	 * produce a result. Never throws — callers run this off the transcription hot path.
+	 */
+	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
+		if (!this.identityAttributor || message.is_interim || !message.words?.length) return null;
+		try {
+			return await this.identityAttributor.attributeFinal(message.words);
+		} catch {
+			return null;
 		}
 	}
 
