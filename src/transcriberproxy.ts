@@ -6,6 +6,7 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { buildDispatcherMessages } from './identity/dispatcherMessages';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';
@@ -221,9 +222,13 @@ export class TranscriberProxy extends EventEmitter {
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
-			// Send to dispatcher if connected
-			if (this.dispatcherConnection && this.sessionId) {
-				const transcriptText = message.transcript.map((t) => t.text).join(' ');
+			const transcriptText = message.transcript.map((t) => t.text).join(' ');
+			const sourceTag = message.participant?.id || tag;
+			const identityEnabled = config.identity?.enabled === true;
+
+			// Send to dispatcher immediately — UNLESS identity is enabled, in which case the
+			// dispatcher send is deferred to the attribution result below (per-speaker + identity).
+			if (this.dispatcherConnection && this.sessionId && !identityEnabled) {
 				const dispatcherMessage: DispatcherMessage = {
 					sessionId: this.sessionId,
 					endpointId: message.participant?.id || tag,
@@ -235,34 +240,44 @@ export class TranscriberProxy extends EventEmitter {
 			}
 
 			// Broadcast this transcript to all OTHER tags in the same session
-			const sourceTag = message.participant?.id || tag;
-			const transcriptText = message.transcript.map((t) => t.text).join(' ');
-
 			if (transcriptText.trim()) {
 				this.broadcastTranscriptToOtherTags(sourceTag, transcriptText);
 			}
 
-			// Speaker-identity attribution: async, off the hot path. The transcript above is
-			// already emitted; here we (best-effort) resolve who said what and emit a reconcile
-			// event with per-speaker segments. Any failure is swallowed — transcription is never
-			// affected. Gated by the IDENTITY_ENABLED feature flag.
-			if (config.identity?.enabled) {
+			// Speaker-identity attribution: async, off the hot path. Emits a reconcile event and,
+			// when identity is enabled + the dispatcher is connected, sends per-speaker messages with
+			// a resolved-identity override (falling back to the plain transcript when nothing
+			// resolved). Any failure is swallowed — transcription is never affected. Gated by
+			// IDENTITY_ENABLED.
+			if (identityEnabled) {
 				newConnection
 					.identityAttributeFinal(message)
 					.then((segments) => {
-						if (!segments || segments.length === 0) return;
-						this.emit('identity_attribution', {
-							sessionId: this.sessionId,
-							tag,
-							participantId: message.participant?.id || tag,
-							messageId: message.message_id,
-							segments,
-						});
-						logger.info(
-							`[identity] ${tag}: ${segments
-								.map((s) => `${s.identity ?? s.handle ?? '?'}="${s.text}"`)
-								.join(' | ')}`,
-						);
+						if (segments && segments.length > 0) {
+							this.emit('identity_attribution', {
+								sessionId: this.sessionId,
+								tag,
+								participantId: message.participant?.id || tag,
+								messageId: message.message_id,
+								segments,
+							});
+							logger.info(
+								`[identity] ${tag}: ${segments
+									.map((s) => `${s.identity ?? s.handle ?? '?'}="${s.text}"`)
+									.join(' | ')}`,
+							);
+						}
+						if (this.dispatcherConnection && this.sessionId) {
+							const base = {
+								sessionId: this.sessionId,
+								endpointId: message.participant?.id || tag,
+								timestamp: message.timestamp,
+								language: message.language,
+							};
+							for (const dm of buildDispatcherMessages(base, transcriptText, segments)) {
+								this.dispatcherConnection.send(dm);
+							}
+						}
 					})
 					.catch(() => {});
 			}
