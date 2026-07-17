@@ -73,4 +73,17 @@ export interface Env {
 	OTLP_ENV?: string;
 	OTLP_RESOURCE_ATTRIBUTES?: string;
 	OTLP_HEADERS?: string;
+	// Speaker-identity feature (forwarded to the container)
+	IDENTITY_ENABLED?: string;
+	IDENTITY_SIDECAR_URL?: string;
+	IDENTITY_SIDECAR_TOKEN?: string;
+	IDENTITY_TENANT?: string;
+	IDENTITY_TIMEOUT_MS?: string;
+	IDENTITY_ANALYZE_WINDOW_SEC?: string;
+	IDENTITY_KV_ACCOUNT_ID?: string;
+	IDENTITY_KV_NAMESPACE_ID?: string;
+	IDENTITY_KV_API_TOKEN?: string;
+	IDENTITY_ENROLL_MIN_SPEECH_SEC?: string;
+	IDENTITY_ENROLL_COOLDOWN_MS?: string;
+	IDENTITY_MAX_ENROLLS_PER_SESSION?: string;
 }
