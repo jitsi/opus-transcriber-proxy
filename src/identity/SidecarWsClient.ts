@@ -42,8 +42,10 @@ export class SidecarWsClient implements ISidecarClient {
     this.factory = o.wsFactory ?? ((url: string) => new (globalThis as any).WebSocket(url) as WsLike);
     const u = new URL(o.url);
     u.protocol = u.protocol === 'https:' ? 'wss:' : u.protocol === 'http:' ? 'ws:' : u.protocol;
-    u.pathname = '/ws';
-    u.searchParams.set('token', o.token);
+    // Append /ws to the base path so a co-located route (…/identity) becomes …/identity/ws,
+    // and a bare host (/) becomes /ws.
+    u.pathname = `${u.pathname.replace(/\/$/, '')}/ws`;
+    if (o.token) u.searchParams.set('token', o.token);
     this.wsUrl = u.toString();
   }
 

@@ -1,11 +1,14 @@
 // Environment types for the Cloudflare Worker
 
-import type { TranscriberContainer, TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
+import type { TranscriberContainer, IdentityContainer, TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
 import type { ContainerCoordinator } from './ContainerCoordinator';
 
 export interface Env {
 	// Durable Object binding for the container
 	TRANSCRIBER: DurableObjectNamespace<TranscriberContainer>;
+
+	// Durable Object binding for the co-located identity sidecar container
+	IDENTITY?: DurableObjectNamespace<IdentityContainer>;
 
 	// Dispatcher Durable Object (for WebSocket connection - preferred)
 	// This avoids the 1000 subrequest limit by using WebSocket messages
@@ -86,4 +89,11 @@ export interface Env {
 	IDENTITY_ENROLL_MIN_SPEECH_SEC?: string;
 	IDENTITY_ENROLL_COOLDOWN_MS?: string;
 	IDENTITY_MAX_ENROLLS_PER_SESSION?: string;
+	// Identity sidecar container config (forwarded to the IdentityContainer)
+	VECTORIZE_ACCOUNT_ID?: string;
+	VECTORIZE_INDEX?: string;
+	VECTORIZE_API_TOKEN?: string;
+	SIDECAR_BEARER_TOKEN?: string;
+	MATCH_THRESHOLD?: string;
+	SEG_CLUSTER_THRESHOLD?: string;
 }

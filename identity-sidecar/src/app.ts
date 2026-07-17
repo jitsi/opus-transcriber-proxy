@@ -22,7 +22,9 @@ export function buildApp(deps: Deps): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024 * 1024 });
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 
-  const authed = (req: FastifyRequest): boolean => req.headers.authorization === `Bearer ${deps.bearerToken}`;
+  // Empty bearerToken → auth disabled (co-located/testing). Otherwise require the header.
+  const authed = (req: FastifyRequest): boolean =>
+    !deps.bearerToken || req.headers.authorization === `Bearer ${deps.bearerToken}`;
 
   app.get('/health', async () => ({ status: 'ok' }));
 

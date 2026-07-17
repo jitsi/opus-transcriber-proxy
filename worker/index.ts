@@ -112,6 +112,23 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 	};
 }
 
+/** Env for the co-located identity sidecar container. */
+function buildSidecarEnvVars(env: Env): Record<string, string> {
+	return {
+		PORT: '8090',
+		HOST: '0.0.0.0',
+		// Vectorize when configured, else in-memory (per-container, non-persistent).
+		STORE: env.VECTORIZE_INDEX ? 'vectorize' : 'memory',
+		...(env.VECTORIZE_ACCOUNT_ID && { VECTORIZE_ACCOUNT_ID: env.VECTORIZE_ACCOUNT_ID }),
+		...(env.VECTORIZE_INDEX && { VECTORIZE_INDEX: env.VECTORIZE_INDEX }),
+		...(env.VECTORIZE_API_TOKEN && { VECTORIZE_API_TOKEN: env.VECTORIZE_API_TOKEN }),
+		// Empty → auth disabled (testing); set to require a bearer/token.
+		...(env.SIDECAR_BEARER_TOKEN && { SIDECAR_BEARER_TOKEN: env.SIDECAR_BEARER_TOKEN }),
+		...(env.MATCH_THRESHOLD && { MATCH_THRESHOLD: env.MATCH_THRESHOLD }),
+		...(env.SEG_CLUSTER_THRESHOLD && { SEG_CLUSTER_THRESHOLD: env.SEG_CLUSTER_THRESHOLD }),
+	};
+}
+
 /**
  * Build the `worker` block that augments the container's `info` message, recording that the
  * request went through the Cloudflare Worker and adding edge/deployment details the container
@@ -610,9 +627,40 @@ async function handleWebSocketWithDispatcher(
 	});
 }
 
+/**
+ * Co-located identity sidecar container (speaker diarization + embeddings). Shared
+ * singleton (one instance name), reached via the Worker's /identity route; per-session
+ * state is keyed by the x-session header inside the sidecar, so one instance serves all
+ * sessions. Longer sleepAfter than the transcriber — the model load is worth amortizing.
+ */
+export class IdentityContainer extends Container<Env> {
+	defaultPort = 8090;
+	sleepAfter = this.env.SLEEP_AFTER || '15m';
+	envVars: Record<string, string> = buildSidecarEnvVars(this.env);
+
+	override onStart() {
+		console.log('Identity sidecar container started');
+	}
+	override onStop() {
+		console.log('Identity sidecar container stopped');
+	}
+	override onError(error: unknown) {
+		console.error('Identity sidecar container error:', error instanceof Error ? error.message : String(error));
+	}
+}
+
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
+
+		// Co-located identity sidecar: forward /identity/* (WS + HTTP) to the shared sidecar
+		// container, stripping the /identity prefix (so /identity/ws -> /ws). Only when bound.
+		if ((url.pathname === '/identity' || url.pathname.startsWith('/identity/')) && env.IDENTITY) {
+			const target = getContainer<IdentityContainer>(env.IDENTITY, 'shared');
+			const inner = new URL(request.url);
+			inner.pathname = url.pathname.replace(/^\/identity/, '') || '/';
+			return target.fetch(new Request(inner.toString(), request));
+		}
 
 		// Handle /translate entirely in this Worker (no container). The accepted WebSocket keeps the
 		// Worker alive for the session; the bridge's pings keep it active. Transcribe stays on the

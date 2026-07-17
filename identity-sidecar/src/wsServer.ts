@@ -24,8 +24,10 @@ export function attachWsServer(server: Server, deps: Deps, bearerToken: string):
     // can't set headers on a WS upgrade) or an Authorization: Bearer header.
     const url = new URL(req.url ?? '', 'http://localhost');
     const token = url.searchParams.get('token');
-    const authed = token === bearerToken || req.headers.authorization === `Bearer ${bearerToken}`;
-    if (url.pathname !== '/ws' || !authed) {
+    // Empty bearerToken → auth disabled (co-located/testing). Path must still end in /ws
+    // (the co-located route is /identity/ws, so match by suffix rather than exact).
+    const authed = !bearerToken || token === bearerToken || req.headers.authorization === `Bearer ${bearerToken}`;
+    if (!url.pathname.endsWith('/ws') || !authed) {
       ws.close(1008, 'unauthorized');
       return;
     }
