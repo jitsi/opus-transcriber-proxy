@@ -13,6 +13,7 @@ import { getInstruments } from './telemetry/instruments';
 import { SidecarClient, type ISidecarClient } from './identity/SidecarClient';
 import { SidecarWsClient } from './identity/SidecarWsClient';
 import { IdentityAttributor } from './identity/IdentityAttributor';
+import { createIdentitySource, type IdentitySource, type ResolvedIdentity } from './identity/IdentitySource';
 import type { AttributedSegment } from './identity/RoomAttributor';
 
 // Process-wide sidecar client, built once from config when the identity feature is enabled.
@@ -42,6 +43,13 @@ function getSidecar(): ISidecarClient | null {
 		});
 	}
 	return sidecarSingleton;
+}
+
+// Process-wide identity source (KV REST). Null when KV creds are unset.
+let identitySourceSingleton: IdentitySource | null | undefined;
+function getIdentitySource(): IdentitySource | null {
+	if (identitySourceSingleton === undefined) identitySourceSingleton = createIdentitySource();
+	return identitySourceSingleton;
 }
 
 const tagMatcher = /^([0-9a-fA-F]+)-/;
@@ -95,6 +103,12 @@ export class OutgoingConnection {
 
 	/** Speaker-identity attributor (only when config.identity.enabled and this is the l16/16k path). */
 	private identityAttributor?: IdentityAttributor;
+	private identitySidecar?: ISidecarClient;
+	/** Set once this stream has ever shown >1 speaker → never auto-enroll from it (it's a room). */
+	private everSawMultipleSpeakers = false;
+	private resolvedIdentityP?: Promise<ResolvedIdentity | null>;
+	private lastEnrollAt = 0;
+	private enrollCount = 0;
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -631,26 +645,61 @@ export class OutgoingConnection {
 		const sidecar = getSidecar();
 		const sessionId = this.options.sessionId;
 		if (!sidecar || !sessionId) return;
+		this.identitySidecar = sidecar;
 		this.identityAttributor = new IdentityAttributor(sidecar, {
 			sessionId,
 			streamId: this.localTag,
-			tenant: config.identity?.tenant ?? 'default',
 			analyzeWindowSec: config.identity?.analyzeWindowSec,
 		});
 	}
 
+	/** Resolve (once, cached) this participant's stable identity + tenant from the identity source. */
+	private resolveIdentity(): Promise<ResolvedIdentity | null> {
+		if (this.resolvedIdentityP) return this.resolvedIdentityP;
+		const src = getIdentitySource();
+		const sessionId = this.options.sessionId;
+		this.resolvedIdentityP =
+			src && sessionId ? src.resolve(sessionId, this.participantId).catch(() => null) : Promise.resolve(null);
+		return this.resolvedIdentityP;
+	}
+
 	/**
-	 * Attribute a final transcript's words to speakers via the sidecar. Returns null
-	 * when the feature is off, the message has no per-word timing, or the sidecar can't
-	 * produce a result. Never throws — callers run this off the transcription hot path.
+	 * Analyze a final and either auto-enroll (single-speaker stream) or return per-speaker
+	 * segments (room). Returns null when the feature is off / no per-word timing / single
+	 * speaker / any failure → the caller then uses the normal (non-overridden) dispatch path.
+	 * Never throws — runs off the transcription hot path.
 	 */
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
 		if (!this.identityAttributor || message.is_interim || !message.words?.length) return null;
 		try {
-			return await this.identityAttributor.attributeFinal(message.words);
+			const resolved = await this.resolveIdentity();
+			const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
+			const a = await this.identityAttributor.analyze(message.words, tenant);
+			if (!a) return null;
+			if (a.speakerCount > 1) this.everSawMultipleSpeakers = true;
+			if (a.speakerCount <= 1) {
+				// Normal single-person stream → auto-enroll (guarded); no room attribution/override.
+				this.maybeAutoEnroll(resolved, tenant, a.pcm, a.windowSec);
+				return null;
+			}
+			return a.segments;
 		} catch {
 			return null;
 		}
+	}
+
+	/** Quality-gated + rate-limited enrollment of a single-person stream's audio. */
+	private maybeAutoEnroll(resolved: ResolvedIdentity | null, tenant: string, pcm: Buffer, windowSec: number): void {
+		const c = config.identity;
+		if (!resolved || !this.identitySidecar || !c) return;
+		if (this.everSawMultipleSpeakers) return; // this stream has shown a room — don't pollute the fingerprint
+		if (windowSec < c.enrollMinSpeechSec) return;
+		const now = Date.now();
+		if (now - this.lastEnrollAt < c.enrollCooldownMs) return;
+		if (this.enrollCount >= c.maxEnrollsPerSession) return;
+		this.lastEnrollAt = now;
+		this.enrollCount++;
+		void this.identitySidecar.enroll(resolved.identity, tenant, pcm, resolved.name).catch(() => {});
 	}
 
 	private processPendingInputFrames(): void {

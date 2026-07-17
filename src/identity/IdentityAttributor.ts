@@ -4,10 +4,16 @@ import { attribute, type Word, type AttributedSegment } from './RoomAttributor';
 export interface IdentityAttributorOptions {
   sessionId: string;
   streamId: string;
-  tenant: string;
   sampleRate?: number; // default 16000
   maxBufferSec?: number; // ring cap, default 120
   analyzeWindowSec?: number; // rolling context sent per final, default 45
+}
+
+export interface UtteranceAnalysis {
+  speakerCount: number;
+  segments: AttributedSegment[];
+  pcm: Buffer; // the analyzed window slice (reusable for enrollment)
+  windowSec: number;
 }
 
 /**
@@ -59,19 +65,22 @@ export class IdentityAttributor {
     return all.subarray(rs, re);
   }
 
-  /** Attribute an utterance's words to speakers via the sidecar. Returns null on any failure. */
-  async attributeFinal(words: Word[]): Promise<AttributedSegment[] | null> {
+  /**
+   * Analyze an utterance: slice a rolling window ending at the utterance end (cross-speaker
+   * context → stabler clustering), diarize+identify via the sidecar, and attribute words to
+   * speakers. Returns speakerCount + per-speaker segments + the analyzed PCM (reusable for
+   * enrollment). Null on any failure. `tenant` scopes enroll/identify.
+   */
+  async analyze(words: Word[], tenant: string): Promise<UtteranceAnalysis | null> {
     if (!words.length) return null;
     const uEnd = words[words.length - 1].end;
-    // Send a rolling window ending at the utterance end (not just the bare utterance) so the
-    // sidecar diarizes with cross-speaker context → more consistent clustering / stable handles.
     const windowStart = Math.max(this.bufStartSec, uEnd - this.windowSec);
     const pcm = this.sliceSec(windowStart, uEnd);
     if (!pcm || pcm.length < this.bytesPerSec * 0.5) return null; // need >= 0.5s of audio
-    const res = await this.sidecar.analyze(this.o.sessionId, this.o.streamId, this.o.tenant, pcm);
+    const res = await this.sidecar.analyze(this.o.sessionId, this.o.streamId, tenant, pcm);
     if (!res || res.turns.length === 0) return null;
     // Turns are relative to the sliced window; shift to absolute media time to match the words.
     const absTurns = res.turns.map((t) => ({ ...t, start: t.start + windowStart, end: t.end + windowStart }));
-    return attribute(words, absTurns);
+    return { speakerCount: res.speakerCount, segments: attribute(words, absTurns), pcm, windowSec: pcm.length / this.bytesPerSec };
   }
 }

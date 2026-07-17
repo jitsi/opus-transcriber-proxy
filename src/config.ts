@@ -172,6 +172,15 @@ export const config = {
 		// Rolling context sent to /analyze per final (seconds ending at the utterance end).
 		// Larger = more consistent diarization/clustering across utterances (stable handles), but slower.
 		analyzeWindowSec: parseIntOrDefault(process.env.IDENTITY_ANALYZE_WINDOW_SEC, 45),
+		// Real per-customer identity + tenant from the WEBHOOK_EVENTS KV (via CF KV REST API).
+		// Unset → no source: falls back to the `tenant` default above and skips auto-enroll.
+		kvAccountId: process.env.IDENTITY_KV_ACCOUNT_ID || '',
+		kvNamespaceId: process.env.IDENTITY_KV_NAMESPACE_ID || '',
+		kvApiToken: process.env.IDENTITY_KV_API_TOKEN || '',
+		// Auto-enrollment from normal (single-speaker) streams — quality-gated + rate-limited.
+		enrollMinSpeechSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_MIN_SPEECH_SEC, 8),
+		enrollCooldownMs: parseIntOrDefault(process.env.IDENTITY_ENROLL_COOLDOWN_MS, 20000),
+		maxEnrollsPerSession: parseIntOrDefault(process.env.IDENTITY_MAX_ENROLLS_PER_SESSION, 10),
 	},
 
 	// Session resumption configuration
