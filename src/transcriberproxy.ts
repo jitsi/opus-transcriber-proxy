@@ -263,7 +263,7 @@ export class TranscriberProxy extends EventEmitter {
 							});
 							logger.info(
 								`[identity] ${tag}: ${segments
-									.map((s) => `${s.identity ?? s.handle ?? '?'}="${s.text}"`)
+									.map((s) => `${s.name ?? s.identity ?? s.handle ?? '?'}="${s.text}"`)
 									.join(' | ')}`,
 							);
 						}
