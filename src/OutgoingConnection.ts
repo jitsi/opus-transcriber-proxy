@@ -622,6 +622,7 @@ export class OutgoingConnection {
 			sessionId,
 			streamId: this.localTag,
 			tenant: config.identity?.tenant ?? 'default',
+			analyzeWindowSec: config.identity?.analyzeWindowSec,
 		});
 	}
 

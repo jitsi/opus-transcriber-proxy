@@ -164,10 +164,14 @@ export const config = {
 		// Tenant scoping for enroll/identify. Placeholder default until per-customer identity
 		// is resolved from the WEBHOOK_EVENTS KV (a later step); fine for single-tenant testing.
 		tenant: process.env.IDENTITY_TENANT || 'default',
-		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 2000),
+		// /analyze runs offline diarization (several seconds) — the timeout must exceed it.
+		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 30000),
 		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
 		holdMs: parseIntOrDefault(process.env.IDENTITY_HOLD_MS, 3000), // hold a room final until identity resolves
 		analyzeIntervalMs: parseIntOrDefault(process.env.IDENTITY_ANALYZE_INTERVAL_MS, 4000),
+		// Rolling context sent to /analyze per final (seconds ending at the utterance end).
+		// Larger = more consistent diarization/clustering across utterances (stable handles), but slower.
+		analyzeWindowSec: parseIntOrDefault(process.env.IDENTITY_ANALYZE_WINDOW_SEC, 45),
 	},
 
 	// Session resumption configuration

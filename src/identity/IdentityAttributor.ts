@@ -7,6 +7,7 @@ export interface IdentityAttributorOptions {
   tenant: string;
   sampleRate?: number; // default 16000
   maxBufferSec?: number; // ring cap, default 120
+  analyzeWindowSec?: number; // rolling context sent per final, default 45
 }
 
 /**
@@ -25,6 +26,7 @@ export class IdentityAttributor {
   private bufStartSec = 0;
   private readonly bytesPerSec: number;
   private readonly maxBytes: number;
+  private readonly windowSec: number;
 
   constructor(
     private sidecar: SidecarClient,
@@ -33,6 +35,7 @@ export class IdentityAttributor {
     const sr = o.sampleRate ?? 16000;
     this.bytesPerSec = sr * 2; // s16le mono
     this.maxBytes = (o.maxBufferSec ?? 120) * this.bytesPerSec;
+    this.windowSec = o.analyzeWindowSec ?? 45;
   }
 
   appendPcm(pcm: Uint8Array): void {
@@ -59,14 +62,16 @@ export class IdentityAttributor {
   /** Attribute an utterance's words to speakers via the sidecar. Returns null on any failure. */
   async attributeFinal(words: Word[]): Promise<AttributedSegment[] | null> {
     if (!words.length) return null;
-    const uStart = words[0].start;
     const uEnd = words[words.length - 1].end;
-    const pcm = this.sliceSec(uStart, uEnd);
+    // Send a rolling window ending at the utterance end (not just the bare utterance) so the
+    // sidecar diarizes with cross-speaker context → more consistent clustering / stable handles.
+    const windowStart = Math.max(this.bufStartSec, uEnd - this.windowSec);
+    const pcm = this.sliceSec(windowStart, uEnd);
     if (!pcm || pcm.length < this.bytesPerSec * 0.5) return null; // need >= 0.5s of audio
     const res = await this.sidecar.analyze(this.o.sessionId, this.o.streamId, this.o.tenant, pcm);
     if (!res || res.turns.length === 0) return null;
-    // Turns are relative to the sliced buffer; shift to absolute media time to match the words.
-    const absTurns = res.turns.map((t) => ({ ...t, start: t.start + uStart, end: t.end + uStart }));
+    // Turns are relative to the sliced window; shift to absolute media time to match the words.
+    const absTurns = res.turns.map((t) => ({ ...t, start: t.start + windowStart, end: t.end + windowStart }));
     return attribute(words, absTurns);
   }
 }
