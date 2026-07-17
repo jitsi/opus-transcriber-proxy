@@ -35,7 +35,9 @@ export class SidecarClient {
   private maxInFlight: number;
 
   constructor(private o: SidecarClientOptions) {
-    this.fetch = o.fetchImpl ?? fetch;
+    // Bind global fetch — undici throws "Illegal invocation" if fetch is called
+    // as a method (this.fetch(...)). Injected mocks are used as-is.
+    this.fetch = o.fetchImpl ?? fetch.bind(globalThis);
     this.timeoutMs = o.timeoutMs ?? 2000;
     this.maxInFlight = o.maxInFlight ?? 8;
   }

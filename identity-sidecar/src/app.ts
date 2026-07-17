@@ -18,7 +18,8 @@ export interface Deps {
 }
 
 export function buildApp(deps: Deps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  // Raw PCM bodies can be several MB (enrollment clips are minutes of 16k s16le).
+  const app = Fastify({ logger: false, bodyLimit: 64 * 1024 * 1024 });
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 
   const authed = (req: FastifyRequest): boolean => req.headers.authorization === `Bearer ${deps.bearerToken}`;
