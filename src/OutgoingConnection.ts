@@ -33,6 +33,8 @@ function getSidecar(): ISidecarClient | null {
 			token: config.identity.sidecarToken,
 			timeoutMs: config.identity.timeoutMs,
 			maxInFlight: config.identity.maxInFlight,
+			accessClientId: config.identity.accessClientId,
+			accessClientSecret: config.identity.accessClientSecret,
 		});
 	} else {
 		sidecarSingleton = new SidecarClient({

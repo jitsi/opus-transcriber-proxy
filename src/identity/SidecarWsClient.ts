@@ -1,3 +1,4 @@
+import WsWebSocket from 'ws';
 import logger from '../logger';
 import type { ISidecarClient, AnalyzeResult } from './SidecarClient';
 
@@ -15,6 +16,9 @@ export interface SidecarWsClientOptions {
   token: string;
   timeoutMs?: number;
   maxInFlight?: number;
+  // CF Access service token — sent as headers so a container→own-domain call passes Zero Trust.
+  accessClientId?: string;
+  accessClientSecret?: string;
   wsFactory?: WsFactory;
 }
 
@@ -38,8 +42,15 @@ export class SidecarWsClient implements ISidecarClient {
   constructor(o: SidecarWsClientOptions) {
     this.timeoutMs = o.timeoutMs ?? 30000;
     this.maxInFlight = o.maxInFlight ?? 8;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.factory = o.wsFactory ?? ((url: string) => new (globalThis as any).WebSocket(url) as WsLike);
+    // CF Access service-token headers (reuses the token that already fronts the proxy domain),
+    // so the container's call to wss://<own-domain>/identity passes Zero Trust. The `ws` package
+    // is used because the global (undici) WebSocket can't set custom headers.
+    const headers: Record<string, string> = {};
+    if (o.accessClientId) headers['CF-Access-Client-Id'] = o.accessClientId;
+    if (o.accessClientSecret) headers['CF-Access-Client-Secret'] = o.accessClientSecret;
+    this.factory =
+      o.wsFactory ??
+      ((url: string) => new WsWebSocket(url, Object.keys(headers).length ? { headers } : undefined) as unknown as WsLike);
     const u = new URL(o.url);
     u.protocol = u.protocol === 'https:' ? 'wss:' : u.protocol === 'http:' ? 'ws:' : u.protocol;
     // Append /ws to the base path so a co-located route (…/identity) becomes …/identity/ws,

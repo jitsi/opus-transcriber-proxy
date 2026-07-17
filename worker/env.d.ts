@@ -80,6 +80,8 @@ export interface Env {
 	IDENTITY_ENABLED?: string;
 	IDENTITY_SIDECAR_URL?: string;
 	IDENTITY_SIDECAR_TOKEN?: string;
+	CF_ACCESS_CLIENT_ID?: string;
+	CF_ACCESS_CLIENT_SECRET?: string;
 	IDENTITY_TENANT?: string;
 	IDENTITY_TIMEOUT_MS?: string;
 	IDENTITY_ANALYZE_WINDOW_SEC?: string;

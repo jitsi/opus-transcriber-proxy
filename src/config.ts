@@ -161,6 +161,10 @@ export const config = {
 		enabled: process.env.IDENTITY_ENABLED === 'true', // Default false — feature flag
 		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '', // e.g. http://identity-sidecar:8090
 		sidecarToken: process.env.IDENTITY_SIDECAR_TOKEN || '',
+		// CF Access service token — reuse the one that fronts the proxy domain so the container's
+		// call to wss://<own-domain>/identity passes Zero Trust (no Access-policy change needed).
+		accessClientId: process.env.CF_ACCESS_CLIENT_ID || '',
+		accessClientSecret: process.env.CF_ACCESS_CLIENT_SECRET || '',
 		// Tenant scoping for enroll/identify. Placeholder default until per-customer identity
 		// is resolved from the WEBHOOK_EVENTS KV (a later step); fine for single-tenant testing.
 		tenant: process.env.IDENTITY_TENANT || 'default',
