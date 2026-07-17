@@ -40,7 +40,7 @@ export class SidecarClient {
     this.maxInFlight = o.maxInFlight ?? 8;
   }
 
-  private async call(path: string, headers: Record<string, string>, body: BodyInit): Promise<any | null> {
+  private async call(path: string, headers: Record<string, string>, body: Uint8Array | string): Promise<any | null> {
     if (this.inFlight >= this.maxInFlight) {
       logger.debug(`[identity] sidecar overloaded (${this.inFlight}), dropping ${path}`);
       return null;
@@ -52,7 +52,7 @@ export class SidecarClient {
       const res = await this.fetch(`${this.o.baseUrl}${path}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${this.o.token}`, ...headers },
-        body,
+        body: body as BodyInit,
         signal: ac.signal,
       });
       if (!res.ok) {

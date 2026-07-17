@@ -155,6 +155,18 @@ export const config = {
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
 	},
 
+	// Speaker-identity feature (single-mic multi-speaker attribution via the identity sidecar).
+	// Master kill switch: when disabled, transcription behaviour is unchanged.
+	identity: {
+		enabled: process.env.IDENTITY_ENABLED === 'true', // Default false — feature flag
+		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '', // e.g. http://identity-sidecar:8090
+		sidecarToken: process.env.IDENTITY_SIDECAR_TOKEN || '',
+		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 2000),
+		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
+		holdMs: parseIntOrDefault(process.env.IDENTITY_HOLD_MS, 3000), // hold a room final until identity resolves
+		analyzeIntervalMs: parseIntOrDefault(process.env.IDENTITY_ANALYZE_INTERVAL_MS, 4000),
+	},
+
 	// Session resumption configuration
 	sessionResumeEnabled: process.env.SESSION_RESUME_ENABLED !== 'false', // Default true
 	sessionResumeGracePeriod: parseIntOrDefault(process.env.SESSION_RESUME_GRACE_PERIOD, 15), // seconds

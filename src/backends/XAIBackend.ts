@@ -338,7 +338,8 @@ export class XAIBackend implements TranscriptionBackend {
 		const isFinal: boolean = msg.speech_final === true;
 		const confidence = this.avgConfidence(msg.words);
 		const transcript = config.xai.includeLanguage && language && isFinal ? `${text} [${language}]` : text;
-		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language);
+		const words = this.extractWords(msg.words);
+		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language, words);
 
 		if (isFinal) {
 			this.onCompleteTranscription?.(message);
@@ -519,6 +520,7 @@ export class XAIBackend implements TranscriptionBackend {
 		isInterim: boolean,
 		speaker?: number,
 		language?: string,
+		words?: Array<{ text: string; start: number; end: number }>,
 	): TranscriptionMessage {
 		return {
 			transcript: [
@@ -535,6 +537,16 @@ export class XAIBackend implements TranscriptionBackend {
 			timestamp,
 			...(speaker !== undefined && { speaker }),
 			...(language !== undefined && { language }),
+			...(words && words.length > 0 && { words }),
 		};
+	}
+
+	/** Extract per-word media-time offsets (seconds) from an xAI words[] array. */
+	private extractWords(words: any[] | undefined): Array<{ text: string; start: number; end: number }> | undefined {
+		if (!Array.isArray(words) || words.length === 0) return undefined;
+		const out = words
+			.filter((w) => typeof w.start === 'number' && typeof w.end === 'number')
+			.map((w) => ({ text: (w.punctuated_word ?? w.text ?? '') as string, start: w.start as number, end: w.end as number }));
+		return out.length > 0 ? out : undefined;
 	}
 }

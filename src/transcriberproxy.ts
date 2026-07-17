@@ -20,6 +20,8 @@ export interface TranscriptionMessage {
 	participant: { id: string; tag?: string };
 	timestamp: number;
 	speaker?: number;
+	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution. */
+	words?: Array<{ text: string; start: number; end: number }>;
 }
 
 export interface TranscriberProxyOptions {
