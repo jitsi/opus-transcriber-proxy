@@ -10,24 +10,37 @@ import { createBackend, getBackendConfig, type OpenAICustomOptions } from './bac
 import type { TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
-import { SidecarClient } from './identity/SidecarClient';
+import { SidecarClient, type ISidecarClient } from './identity/SidecarClient';
+import { SidecarWsClient } from './identity/SidecarWsClient';
 import { IdentityAttributor } from './identity/IdentityAttributor';
 import type { AttributedSegment } from './identity/RoomAttributor';
 
 // Process-wide sidecar client, built once from config when the identity feature is enabled.
-let sidecarSingleton: SidecarClient | null | undefined;
-function getSidecar(): SidecarClient | null {
+// A ws(s):// URL uses one persistent multiplexed WS (required under Cloudflare's outbound
+// connection cap); an http(s):// URL uses per-request HTTP.
+let sidecarSingleton: ISidecarClient | null | undefined;
+function getSidecar(): ISidecarClient | null {
 	if (sidecarSingleton !== undefined) return sidecarSingleton;
-	if (!config.identity?.enabled || !config.identity.sidecarUrl) {
+	const url = config.identity?.sidecarUrl;
+	if (!config.identity?.enabled || !url) {
 		sidecarSingleton = null;
 		return null;
 	}
-	sidecarSingleton = new SidecarClient({
-		baseUrl: config.identity.sidecarUrl,
-		token: config.identity.sidecarToken,
-		timeoutMs: config.identity.timeoutMs,
-		maxInFlight: config.identity.maxInFlight,
-	});
+	if (url.startsWith('ws://') || url.startsWith('wss://')) {
+		sidecarSingleton = new SidecarWsClient({
+			url,
+			token: config.identity.sidecarToken,
+			timeoutMs: config.identity.timeoutMs,
+			maxInFlight: config.identity.maxInFlight,
+		});
+	} else {
+		sidecarSingleton = new SidecarClient({
+			baseUrl: url,
+			token: config.identity.sidecarToken,
+			timeoutMs: config.identity.timeoutMs,
+			maxInFlight: config.identity.maxInFlight,
+		});
+	}
 	return sidecarSingleton;
 }
 

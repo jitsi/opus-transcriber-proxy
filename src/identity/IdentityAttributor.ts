@@ -1,4 +1,4 @@
-import type { SidecarClient } from './SidecarClient';
+import type { ISidecarClient } from './SidecarClient';
 import { attribute, type Word, type AttributedSegment } from './RoomAttributor';
 
 export interface IdentityAttributorOptions {
@@ -29,7 +29,7 @@ export class IdentityAttributor {
   private readonly windowSec: number;
 
   constructor(
-    private sidecar: SidecarClient,
+    private sidecar: ISidecarClient,
     private o: IdentityAttributorOptions,
   ) {
     const sr = o.sampleRate ?? 16000;

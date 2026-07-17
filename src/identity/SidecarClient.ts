@@ -14,6 +14,13 @@ export interface AnalyzeResult {
   turns: AnalyzeTurn[];
 }
 
+/** Transport-agnostic sidecar client surface (HTTP or WS implementations). */
+export interface ISidecarClient {
+  analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null>;
+  enroll(identity: string, tenant: string, pcm: Buffer): Promise<boolean>;
+  sessionEnd(sessionId: string, streamId: string): Promise<void>;
+}
+
 export interface SidecarClientOptions {
   baseUrl: string;
   token: string;
@@ -28,7 +35,7 @@ export interface SidecarClientOptions {
  * each call, and nothing ever throws to the caller (returns null instead), so
  * transcription is never blocked or broken by sidecar trouble.
  */
-export class SidecarClient {
+export class SidecarClient implements ISidecarClient {
   private inFlight = 0;
   private fetch: typeof fetch;
   private timeoutMs: number;

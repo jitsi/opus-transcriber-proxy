@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
@@ -15,9 +17,11 @@
   },
   "dependencies": {
     "fastify": "^5.2.0",
-    "sherpa-onnx-node": "^1.10.0"
+    "sherpa-onnx-node": "^1.10.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
