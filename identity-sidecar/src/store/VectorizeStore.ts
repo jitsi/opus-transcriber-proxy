@@ -1,4 +1,6 @@
-import { FingerprintStore } from './FingerprintStore.js';
+import { FingerprintStore, Fingerprint } from './FingerprintStore.js';
+
+const SAMPLE_WEIGHT_CAP = 50;
 
 export interface VectorizeOpts {
   accountId: string;
@@ -36,27 +38,30 @@ export class VectorizeStore implements FingerprintStore {
     return json.result;
   }
 
-  async upsert(tenant: string, identity: string, vector: Float32Array): Promise<void> {
+  async upsert(tenant: string, identity: string, vector: Float32Array, name?: string): Promise<void> {
     const existing = await this.call('getByIds', { ids: [identity] });
     const prev = existing?.vectors?.[0];
     let merged = vector;
     let n = 1;
+    let prevName: string | undefined;
     if (prev?.values) {
       const pv = Float32Array.from(prev.values);
-      const pn = Number(prev.metadata?.sampleCount ?? 1);
+      const prevN = Number(prev.metadata?.sampleCount ?? 1);
+      const w = Math.min(prevN, SAMPLE_WEIGHT_CAP);
       merged = new Float32Array(vector.length);
-      for (let i = 0; i < vector.length; i++) merged[i] = (pv[i] * pn + vector[i]) / (pn + 1);
-      n = pn + 1;
+      for (let i = 0; i < vector.length; i++) merged[i] = (pv[i] * w + vector[i]) / (w + 1);
+      n = prevN + 1;
+      prevName = prev.metadata?.name;
     }
     const values = Array.from(normalize(merged));
     await this.call('upsert', {
       id: identity,
       values,
-      metadata: { identity, tenant, sampleCount: n, updatedAt: new Date().toISOString() },
+      metadata: { identity, tenant, sampleCount: n, name: name ?? prevName, updatedAt: new Date().toISOString() },
     });
   }
 
-  async query(tenant: string): Promise<{ identity: string; vector: Float32Array }[]> {
+  async query(tenant: string): Promise<Fingerprint[]> {
     const topK = 50; // Vectorize hard cap when returnValues=true
     const result = await this.call('query', {
       vector: new Array(1).fill(0), // neutral; length must match index dim in a live index
@@ -67,7 +72,7 @@ export class VectorizeStore implements FingerprintStore {
     });
     const matches = result?.matches ?? [];
     if (matches.length === topK) console.warn(`vectorize query hit topK=${topK} for tenant ${tenant}; may be truncated`);
-    return matches.map((m: any) => ({ identity: m.id, vector: Float32Array.from(m.values) }));
+    return matches.map((m: any) => ({ identity: m.id, vector: Float32Array.from(m.values), name: m.metadata?.name }));
   }
 
   async delete(identity: string): Promise<void> {

@@ -6,6 +6,7 @@ export interface AnalyzeTurn {
   sessionSpeakerId: number;
   handle: string;
   identity: string | null;
+  name?: string;
   score: number;
 }
 export interface AnalyzeResult {
@@ -17,7 +18,7 @@ export interface AnalyzeResult {
 /** Transport-agnostic sidecar client surface (HTTP or WS implementations). */
 export interface ISidecarClient {
   analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null>;
-  enroll(identity: string, tenant: string, pcm: Buffer): Promise<boolean>;
+  enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean>;
   sessionEnd(sessionId: string, streamId: string): Promise<void>;
 }
 
@@ -87,12 +88,14 @@ export class SidecarClient implements ISidecarClient {
     );
   }
 
-  async enroll(identity: string, tenant: string, pcm: Buffer): Promise<boolean> {
-    const r = await this.call(
-      '/enroll',
-      { 'content-type': 'application/octet-stream', 'x-identity': identity, 'x-tenant': tenant },
-      pcm,
-    );
+  async enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/octet-stream',
+      'x-identity': identity,
+      'x-tenant': tenant,
+    };
+    if (name) headers['x-name'] = name;
+    const r = await this.call('/enroll', headers, pcm);
     return r !== null;
   }
 

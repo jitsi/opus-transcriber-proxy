@@ -47,7 +47,7 @@ export function attachWsServer(server: Server, deps: Deps, bearerToken: string):
           }
           case 'enroll': {
             const vec = await deps.embedder.embed(pcm16ToFloat32(Buffer.from(msg.pcm, 'base64')));
-            await deps.store.upsert(msg.tenant, msg.identity, vec);
+            await deps.store.upsert(msg.tenant, msg.identity, vec, msg.name);
             return send({ type: 'ack' });
           }
           case 'identify': {

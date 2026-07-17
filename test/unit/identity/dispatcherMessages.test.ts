@@ -3,10 +3,11 @@ import { buildDispatcherMessages, type DispatcherBase } from '../../../src/ident
 import type { AttributedSegment } from '../../../src/identity/RoomAttributor';
 
 const base: DispatcherBase = { sessionId: 's', endpointId: 'orig-a0', timestamp: 111, language: 'en' };
-const seg = (identity: string | null, handle: string | null, text: string): AttributedSegment => ({
+const seg = (identity: string | null, handle: string | null, text: string, name: string | null = null): AttributedSegment => ({
   sessionSpeakerId: identity ? 0 : 1,
   handle,
   identity,
+  name,
   score: identity ? 0.9 : 0,
   text,
   start: 0,
@@ -36,6 +37,11 @@ describe('buildDispatcherMessages', () => {
     expect(msgs[0].endpointId).toBe('orig-a0');
     expect(msgs[0].text).toBe('orig text');
     expect(msgs[0].resolvedParticipant).toBeUndefined();
+  });
+
+  it('uses the resolved display name when present', () => {
+    const msgs = buildDispatcherMessages(base, 'orig', [seg('u-123', 'Purple Otter', 'hi', 'Alice Smith')]);
+    expect(msgs[0].resolvedParticipant).toEqual({ id: 'u-123', name: 'Alice Smith' });
   });
 
   it('room (multiple speakers) → per-speaker, unknown uses handle', () => {

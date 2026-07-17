@@ -30,13 +30,15 @@ export function buildDispatcherMessages(
   if (segments.length === 1) {
     const s = segments[0];
     if (s.identity) {
-      return [{ ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.identity } }];
+      return [
+        { ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } },
+      ];
     }
     return [{ ...base, text: originalText }];
   }
   return segments.map((s) => {
     const id = s.identity ?? `unknown:${s.handle ?? 'speaker'}`;
-    const name = s.identity ?? s.handle ?? 'unknown';
+    const name = s.name ?? s.identity ?? s.handle ?? 'unknown';
     return { ...base, endpointId: id, text: s.text, resolvedParticipant: { id, name } };
   });
 }

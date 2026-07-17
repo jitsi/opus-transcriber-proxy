@@ -12,6 +12,7 @@ export interface Turn {
   sessionSpeakerId: number;
   handle: string;
   identity: string | null;
+  name?: string;
   score: number;
 }
 
@@ -77,7 +78,7 @@ export class AnalyzePipeline {
         const centroid = state.clusterer.getCentroid(id) ?? vec;
         const candidates = await this.deps.store.query(tenant);
         const m = decideMatch(centroid, candidates, this.deps.matchThreshold);
-        if (m.identity) state.identity.set(id, { identity: m.identity, score: m.score });
+        if (m.identity) state.identity.set(id, { identity: m.identity, score: m.score, name: m.name });
       }
       const resolved = state.identity.get(id);
       turns.push({
@@ -86,6 +87,7 @@ export class AnalyzePipeline {
         sessionSpeakerId: id,
         handle: state.handles.get(id)!,
         identity: resolved?.identity ?? null,
+        name: resolved?.name,
         score: resolved?.score ?? 0,
       });
     }

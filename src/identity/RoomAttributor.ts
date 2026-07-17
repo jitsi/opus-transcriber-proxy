@@ -11,6 +11,7 @@ export interface AttributedSegment {
   sessionSpeakerId: number | null;
   handle: string | null;
   identity: string | null;
+  name: string | null;
   score: number;
   text: string;
   start: number;
@@ -59,6 +60,7 @@ export function attribute(words: Word[], turns: AnalyzeTurn[]): AttributedSegmen
         sessionSpeakerId: speaker,
         handle: turn ? turn.handle : null,
         identity: turn ? turn.identity : null,
+        name: turn ? (turn.name ?? null) : null,
         score: turn ? turn.score : 0,
         text: w.text,
         start: w.start,

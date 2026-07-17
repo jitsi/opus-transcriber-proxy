@@ -138,8 +138,8 @@ export class SidecarWsClient implements ISidecarClient {
     return m && m.type === 'result' ? (m.result ?? null) : null;
   }
 
-  async enroll(identity: string, tenant: string, pcm: Buffer): Promise<boolean> {
-    const m = await this.request({ type: 'enroll', identity, tenant, pcm: pcm.toString('base64') });
+  async enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean> {
+    const m = await this.request({ type: 'enroll', identity, tenant, name, pcm: pcm.toString('base64') });
     return !!(m && m.type === 'ack');
   }
 

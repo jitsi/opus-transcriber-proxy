@@ -31,8 +31,9 @@ export function buildApp(deps: Deps): FastifyInstance {
     const identity = req.headers['x-identity'] as string | undefined;
     const tenant = req.headers['x-tenant'] as string | undefined;
     if (!identity || !tenant) return reply.code(400).send({ error: 'missing x-identity/x-tenant' });
+    const name = req.headers['x-name'] as string | undefined;
     const vec = await deps.embedder.embed(pcm16ToFloat32(req.body as Buffer));
-    await deps.store.upsert(tenant, identity, vec);
+    await deps.store.upsert(tenant, identity, vec, name);
     return reply.code(202).send({});
   });
 
@@ -42,8 +43,8 @@ export function buildApp(deps: Deps): FastifyInstance {
     if (!tenant) return reply.code(400).send({ error: 'missing x-tenant' });
     const vec = await deps.embedder.embed(pcm16ToFloat32(req.body as Buffer));
     const candidates = await deps.store.query(tenant);
-    const { identity, score } = decideMatch(vec, candidates, deps.threshold);
-    return reply.code(200).send({ identity, score, threshold: deps.threshold });
+    const { identity, score, name } = decideMatch(vec, candidates, deps.threshold);
+    return reply.code(200).send({ identity, score, name, threshold: deps.threshold });
   });
 
   app.post('/detect', async (req, reply) => {
