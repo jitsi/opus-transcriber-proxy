@@ -3,6 +3,8 @@ import { pcm16ToFloat32, type Embedder } from './embedder.js';
 import { countSpeakers, type Diarizer, type SpeakerGuard, DEFAULT_GUARD } from './diarizer.js';
 import { decideMatch } from './matcher.js';
 import { FingerprintStore } from './store/FingerprintStore.js';
+import type { AnalyzePipeline } from './pipeline/AnalyzePipeline.js';
+import type { SessionRegistry } from './pipeline/SessionRegistry.js';
 
 export interface Deps {
   embedder: Embedder;
@@ -11,6 +13,8 @@ export interface Deps {
   threshold: number;
   guard: SpeakerGuard;
   bearerToken: string;
+  pipeline?: AnalyzePipeline;
+  registry?: SessionRegistry;
 }
 
 export function buildApp(deps: Deps): FastifyInstance {
@@ -46,6 +50,26 @@ export function buildApp(deps: Deps): FastifyInstance {
     const segments = await deps.diarizer.analyze(pcm16ToFloat32(req.body as Buffer));
     const speakerCount = countSpeakers(segments, deps.guard);
     return reply.code(200).send({ speakerCount, multiple: speakerCount > 1, segments });
+  });
+
+  app.post('/analyze', async (req, reply) => {
+    if (!authed(req)) return reply.code(401).send({ error: 'unauthorized' });
+    if (!deps.pipeline) return reply.code(501).send({ error: 'pipeline not configured' });
+    const tenant = req.headers['x-tenant'] as string | undefined;
+    const sessionId = req.headers['x-session'] as string | undefined;
+    const streamId = req.headers['x-stream'] as string | undefined;
+    if (!tenant || !sessionId || !streamId) return reply.code(400).send({ error: 'missing x-tenant/x-session/x-stream' });
+    const result = await deps.pipeline.analyze(sessionId, streamId, tenant, pcm16ToFloat32(req.body as Buffer));
+    return reply.code(200).send(result);
+  });
+
+  app.post('/session-end', async (req, reply) => {
+    if (!authed(req)) return reply.code(401).send({ error: 'unauthorized' });
+    if (!deps.registry) return reply.code(501).send({ error: 'registry not configured' });
+    const { sessionId, streamId } = (req.body ?? {}) as { sessionId?: string; streamId?: string };
+    if (!sessionId || !streamId) return reply.code(400).send({ error: 'missing sessionId/streamId' });
+    deps.registry.end(sessionId, streamId);
+    return reply.code(200).send({});
   });
 
   app.post('/delete', async (req, reply) => {

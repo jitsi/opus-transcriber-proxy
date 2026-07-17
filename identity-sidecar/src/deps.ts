@@ -3,6 +3,8 @@ import { createEmbedder } from './embedder.js';
 import { createDiarizer } from './diarizer.js';
 import { MemoryStore } from './store/MemoryStore.js';
 import { VectorizeStore } from './store/VectorizeStore.js';
+import { SessionRegistry } from './pipeline/SessionRegistry.js';
+import { AnalyzePipeline } from './pipeline/AnalyzePipeline.js';
 import type { Deps } from './app.js';
 import type { FingerprintStore } from './store/FingerprintStore.js';
 
@@ -24,12 +26,24 @@ export function buildDeps(): Deps {
   } else {
     store = new MemoryStore();
   }
+  const guard = { minDurationSec: config.minSpeakerDurationSec, minShare: config.minSpeakerShare };
+  const registry = new SessionRegistry(() => Date.now(), config.sessionTtlMs, config.sessionClusterThreshold);
+  const pipeline = new AnalyzePipeline({
+    diarizer,
+    embedder,
+    store,
+    registry,
+    matchThreshold: config.matchThreshold,
+    guard,
+  });
   return {
     embedder,
     diarizer,
     store,
     threshold: config.matchThreshold,
-    guard: { minDurationSec: config.minSpeakerDurationSec, minShare: config.minSpeakerShare },
+    guard,
     bearerToken: config.bearerToken,
+    pipeline,
+    registry,
   };
 }

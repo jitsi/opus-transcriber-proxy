@@ -5,6 +5,8 @@ export interface Config {
   segClusterThreshold: number;
   minSpeakerDurationSec: number;
   minSpeakerShare: number;
+  sessionClusterThreshold: number;
+  sessionTtlMs: number;
   store: 'memory' | 'vectorize';
   embeddingModel: string;
   segModel: string;
@@ -18,6 +20,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     segClusterThreshold: parseFloat(env.SEG_CLUSTER_THRESHOLD ?? '0.8'),
     minSpeakerDurationSec: parseFloat(env.MIN_SPEAKER_DURATION_SEC ?? '2.0'),
     minSpeakerShare: parseFloat(env.MIN_SPEAKER_SHARE ?? '0.1'),
+    sessionClusterThreshold: parseFloat(env.SESSION_CLUSTER_THRESHOLD ?? '0.5'),
+    sessionTtlMs: parseInt(env.SESSION_TTL_MS ?? '300000', 10),
     store: env.STORE === 'vectorize' ? 'vectorize' : 'memory',
     embeddingModel: env.EMBEDDING_MODEL ?? 'models/campplus.onnx',
     segModel: env.SEG_MODEL ?? 'models/segmentation-3.0.onnx',
