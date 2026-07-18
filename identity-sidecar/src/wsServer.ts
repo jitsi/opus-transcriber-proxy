@@ -55,7 +55,7 @@ export function attachWsServer(server: Server, deps: Deps, bearerToken: string):
           case 'identify': {
             const vec = await deps.embedder.embed(pcm16ToFloat32(Buffer.from(msg.pcm, 'base64')));
             const { decideMatch } = await import('./matcher.js');
-            const candidates = await deps.store.query(msg.tenant);
+            const candidates = await deps.store.query(msg.tenant, vec);
             const m = decideMatch(vec, candidates, deps.threshold);
             return send({ type: 'result', result: m });
           }

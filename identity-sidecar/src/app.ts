@@ -44,7 +44,7 @@ export function buildApp(deps: Deps): FastifyInstance {
     const tenant = req.headers['x-tenant'] as string | undefined;
     if (!tenant) return reply.code(400).send({ error: 'missing x-tenant' });
     const vec = await deps.embedder.embed(pcm16ToFloat32(req.body as Buffer));
-    const candidates = await deps.store.query(tenant);
+    const candidates = await deps.store.query(tenant, vec);
     const { identity, score, name } = decideMatch(vec, candidates, deps.threshold);
     return reply.code(200).send({ identity, score, name, threshold: deps.threshold });
   });

@@ -76,7 +76,7 @@ export class AnalyzePipeline {
       // Resolve identity once per cluster; re-query while still unresolved.
       if (!state.identity.has(id)) {
         const centroid = state.clusterer.getCentroid(id) ?? vec;
-        const candidates = await this.deps.store.query(tenant);
+        const candidates = await this.deps.store.query(tenant, centroid);
         const m = decideMatch(centroid, candidates, this.deps.matchThreshold);
         if (m.identity) state.identity.set(id, { identity: m.identity, score: m.score, name: m.name });
       }

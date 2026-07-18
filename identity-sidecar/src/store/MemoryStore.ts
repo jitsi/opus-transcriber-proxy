@@ -41,7 +41,7 @@ export class MemoryStore implements FingerprintStore {
     });
   }
 
-  async query(tenant: string): Promise<Fingerprint[]> {
+  async query(tenant: string, _probe?: Float32Array): Promise<Fingerprint[]> {
     const out: Fingerprint[] = [];
     for (const [identity, e] of this.byIdentity) if (e.tenant === tenant) out.push({ identity, vector: e.vector, name: e.name });
     return out;
