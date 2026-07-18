@@ -481,6 +481,15 @@ export class XAIBackend implements TranscriptionBackend {
 		const languageSuffix = config.xai.includeLanguage && language ? ` [${language}]` : '';
 		const now = Date.now();
 
+		// Speaker-identity attribution (provider-independent diarization) runs off a final's full
+		// per-word timing. xAI's own diarization splits a turn into per-speaker messages that
+		// otherwise carry no `words`, so identityAttributeFinal would bail before ever calling the
+		// sidecar. Attach the complete word list (all speakers, with timing) to the FIRST emitted
+		// final so identity runs exactly once per turn over the whole audio window; the remaining
+		// per-speaker finals dispatch normally (they resolve to null and fall back to plain text).
+		const fullWords = isInterim ? undefined : this.extractWords(words);
+		let wordsAttached = false;
+
 		for (const segment of segments) {
 			let text = segment.words
 				.map((w: any) => w.punctuated_word ?? w.text)
@@ -496,10 +505,12 @@ export class XAIBackend implements TranscriptionBackend {
 				`Received ${isInterim ? 'interim' : 'final'} transcription from xAI for ${this.tag} speaker ${segment.speaker}: ${text}`,
 			);
 
-			const message = this.createMessage(text, confidence, now, randomUUID(), isInterim, segment.speaker, language);
+			const attachWords = fullWords && !wordsAttached ? fullWords : undefined;
+			const message = this.createMessage(text, confidence, now, randomUUID(), isInterim, segment.speaker, language, attachWords);
 			if (isInterim) {
 				this.onInterimTranscription?.(message);
 			} else {
+				if (attachWords) wordsAttached = true;
 				this.onCompleteTranscription?.(message);
 			}
 		}

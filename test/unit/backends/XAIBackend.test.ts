@@ -519,6 +519,50 @@ describe('XAIBackend', () => {
 			expect(finalResults[1].speaker).toBe(1);
 		});
 
+		it('should attach the full per-word timing to the first diarized final (for identity attribution)', () => {
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'transcript.partial',
+				is_final: true,
+				speech_final: true,
+				text: 'hello how are you',
+				language: 'English',
+				words: [
+					{ text: 'hello', speaker: 0, confidence: 0.9, start: 0, end: 0.3 },
+					{ text: 'how', speaker: 1, confidence: 0.85, start: 0.5, end: 0.7 },
+					{ text: 'are', speaker: 1, confidence: 0.88, start: 0.7, end: 0.9 },
+					{ text: 'you', speaker: 1, confidence: 0.92, start: 0.9, end: 1.1 },
+				],
+			}));
+
+			expect(finalResults).toHaveLength(2);
+			// Only the FIRST emitted final carries the complete word list (all speakers), so
+			// identityAttributeFinal runs exactly once per turn over the whole audio window.
+			expect(finalResults[0].words).toEqual([
+				{ text: 'hello', start: 0, end: 0.3 },
+				{ text: 'how', start: 0.5, end: 0.7 },
+				{ text: 'are', start: 0.7, end: 0.9 },
+				{ text: 'you', start: 0.9, end: 1.1 },
+			]);
+			expect(finalResults[1].words).toBeUndefined();
+		});
+
+		it('should not attach words to diarized interims', () => {
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'transcript.partial',
+				is_final: false,
+				text: 'hello how',
+				language: 'English',
+				words: [
+					{ text: 'hello', speaker: 0, confidence: 0.9, start: 0, end: 0.3 },
+					{ text: 'how', speaker: 1, confidence: 0.85, start: 0.5, end: 0.7 },
+				],
+			}));
+
+			expect(interimResults).toHaveLength(2);
+			expect(interimResults[0].words).toBeUndefined();
+			expect(interimResults[1].words).toBeUndefined();
+		});
+
 		it('should emit single final message when words have no speaker', () => {
 			getMockWs().simulateMessage(JSON.stringify({
 				type: 'transcript.partial',
