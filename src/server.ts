@@ -271,6 +271,49 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
 	});
+
+	// Speaker-identity attribution → client. Arrives after the plain transcription-result (identity
+	// is resolved async), so it's a follow-up per-speaker transcript carrying the resolved identity
+	// in `participant` (name = resolved name, else provisional handle). No client change needed — a
+	// client that ignores the extra `name`/duplicate still works; proper in-place reconciliation of
+	// the earlier line is a later step.
+	session.on(
+		'identity_attribution',
+		(data: {
+			participantId: string;
+			messageId: string;
+			timestamp: number;
+			language?: string;
+			segments: Array<{ identity: string | null; name: string | null; handle: string | null; text: string }>;
+		}) => {
+			if (!sendBack) return;
+			const currentWs = session.getWebSocket();
+			if (!currentWs || currentWs.readyState !== 1) return;
+			data.segments.forEach((s, i) => {
+				const id = s.identity ?? (s.handle ? `unknown:${s.handle}` : data.participantId);
+				const name = s.name ?? s.handle ?? undefined;
+				const msg: TranscriptionMessage = {
+					type: 'transcription-result',
+					event: 'transcription-result',
+					is_interim: false,
+					transcript: [{ text: s.text }],
+					participant: { id, ...(name && { name }) },
+					timestamp: data.timestamp,
+					...(data.language && { language: data.language }),
+					message_id: `${data.messageId}-id-${i}`,
+				};
+				try {
+					currentWs.send(JSON.stringify(msg));
+					getInstruments().transcriptionsDeliveredTotal.add(1, {
+						provider: options.provider || 'unknown',
+						is_interim: 'false',
+					});
+				} catch (error) {
+					logger.error(`[WS-${connectionId}] Failed to send identity attribution:`, error);
+				}
+			});
+		},
+	);
 }
 
 function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters, translationToken?: string) {

@@ -18,7 +18,7 @@ export interface TranscriptionMessage {
 	message_id: string;
 	type: 'transcription-result';
 	event: 'transcription-result';
-	participant: { id: string; tag?: string };
+	participant: { id: string; tag?: string; name?: string };
 	timestamp: number;
 	speaker?: number;
 	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution. */
@@ -259,6 +259,8 @@ export class TranscriberProxy extends EventEmitter {
 								tag,
 								participantId: message.participant?.id || tag,
 								messageId: message.message_id,
+								timestamp: message.timestamp,
+								language: message.language,
 								segments,
 							});
 							logger.info(
