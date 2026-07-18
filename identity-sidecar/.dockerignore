@@ -1,6 +1,5 @@
 node_modules
 dist
-models
 test
 scripts/gate-*.ts
 scripts/sweep-*.ts

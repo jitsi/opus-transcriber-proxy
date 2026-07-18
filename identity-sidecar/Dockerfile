@@ -14,14 +14,10 @@ COPY src ./src
 COPY scripts ./scripts
 RUN npm run build
 # Speaker-embedding (CAM++, 3D-Speaker) + segmentation (pyannote-3.0) ONNX models.
-RUN mkdir -p models \
-  && curl -fL -o models/campplus.onnx \
-     https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx \
-  && curl -fL -o /tmp/seg.tar.bz2 \
-     https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2 \
-  && tar xjf /tmp/seg.tar.bz2 -C /tmp \
-  && cp /tmp/sherpa-onnx-pyannote-segmentation-3-0/model.onnx models/segmentation-3.0.onnx \
-  && rm -rf /tmp/seg.tar.bz2 /tmp/sherpa-onnx-pyannote-segmentation-3-0
+# Baked from the host build context (arch-independent, like the WASM artifacts) rather than
+# curl'd in-build: the buildkit/QEMU builder's network to github.com is unreliable, and copying
+# is deterministic and makes rebuilds faster. Fetch the source models with scripts/fetch-models.sh.
+COPY models ./models
 
 # ---- runtime: prod deps + compiled output + models ----
 FROM node:22-bookworm-slim AS runtime
