@@ -11,6 +11,11 @@ export interface DispatcherTranscriptionMessage {
 	text: string;
 	timestamp: number;
 	language?: string;
+	// Set for identity-attributed finals (single-mic speaker id). Tells the dispatcher to
+	// resolve the real session participant by email (Tier 2), falling back to synthesizing
+	// this record — instead of the per-endpoint KV lookup, which has no entry for the
+	// resolved speaker. id/email are both the resolved fingerprint email (see IdentitySource).
+	resolvedParticipant?: { id: string; name?: string; email?: string };
 }
 
 /**
@@ -28,6 +33,7 @@ interface TranscriptionMessage {
 	is_interim: boolean;
 	participant: {
 		id?: string;
+		name?: string;
 	};
 	transcript: Array<{
 		text: string;
@@ -527,6 +533,18 @@ async function handleWebSocketWithDispatcher(
 						timestamp: data.timestamp,
 						language: data.language,
 					};
+
+					// An identity-attributed final carries a resolved speaker name (id = fingerprint
+					// email). Forward it as resolvedParticipant so the dispatcher attributes to that
+					// speaker instead of the KV lookup for a synthetic/absent endpoint. Normal
+					// transcriptions have no name → left untouched, keeping the standard KV path.
+					if (data.participant?.name && data.participant?.id) {
+						dispatcherMessage.resolvedParticipant = {
+							id: data.participant.id,
+							name: data.participant.name,
+							email: data.participant.id,
+						};
+					}
 
 					if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
 						dispatcherWs.send(JSON.stringify(dispatcherMessage));
