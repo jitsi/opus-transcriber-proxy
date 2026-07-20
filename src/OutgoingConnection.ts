@@ -657,12 +657,20 @@ export class OutgoingConnection {
 
 	/** Resolve (once, cached) this participant's stable identity + tenant from the identity source. */
 	private resolveIdentity(): Promise<ResolvedIdentity | null> {
+		// Reuse the in-flight/resolved promise to dedupe concurrent finals — but only KEEP it once it
+		// resolves non-null. A null (KV record not written yet) must not stick for the whole session,
+		// or an early first final permanently disables identity/enrollment; clearing it lets a later
+		// final retry (the source layer rate-limits the re-query via its negative TTL). JIT-16065.
 		if (this.resolvedIdentityP) return this.resolvedIdentityP;
 		const src = getIdentitySource();
 		const sessionId = this.options.sessionId;
-		this.resolvedIdentityP =
-			src && sessionId ? src.resolve(sessionId, this.participantId).catch(() => null) : Promise.resolve(null);
-		return this.resolvedIdentityP;
+		if (!src || !sessionId) return Promise.resolve(null);
+		const p = src.resolve(sessionId, this.participantId).catch(() => null);
+		this.resolvedIdentityP = p;
+		void p.then((r) => {
+			if (!r) this.resolvedIdentityP = undefined;
+		});
+		return p;
 	}
 
 	/**

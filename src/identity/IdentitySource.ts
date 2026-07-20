@@ -16,6 +16,10 @@ export interface KvRestOptions {
   accountId: string;
   namespaceId: string;
   apiToken: string;
+  /** How long (ms) a miss is remembered before we re-query KV. Default 5000. Hits cache forever. */
+  negativeTtlMs?: number;
+  /** Injectable clock (ms) for tests. */
+  now?: () => number;
   fetchImpl?: typeof fetch;
 }
 
@@ -27,16 +31,26 @@ export interface KvRestOptions {
  * Any failure resolves to null (→ default tenant, no auto-enroll).
  */
 export class KvRestIdentitySource implements IdentitySource {
-  private cache = new Map<string, ResolvedIdentity | null>();
+  // Hits are cached forever (participant metadata is immutable for a session). Misses are cached
+  // only until `retryAt` — a not-yet-written KV record (the ingest pipeline is async) must be
+  // retryable, or a slightly-early first lookup would disable identity for the whole session.
+  private hits = new Map<string, ResolvedIdentity>();
+  private retryAt = new Map<string, number>();
   private fetch: typeof fetch;
+  private negativeTtlMs: number;
+  private now: () => number;
   constructor(private o: KvRestOptions) {
     this.fetch = o.fetchImpl ?? fetch.bind(globalThis);
+    this.negativeTtlMs = o.negativeTtlMs ?? 5000;
+    this.now = o.now ?? Date.now;
   }
 
   async resolve(sessionId: string, participantId: string): Promise<ResolvedIdentity | null> {
     const key = `${sessionId}-${participantId}`;
-    const cached = this.cache.get(key);
-    if (cached !== undefined) return cached;
+    const hit = this.hits.get(key);
+    if (hit) return hit;
+    const retryAt = this.retryAt.get(key);
+    if (retryAt !== undefined && this.now() < retryAt) return null; // still within the negative TTL
     let result: ResolvedIdentity | null = null;
     try {
       const url = `https://api.cloudflare.com/client/v4/accounts/${this.o.accountId}/storage/kv/namespaces/${this.o.namespaceId}/values/${encodeURIComponent(key)}`;
@@ -54,14 +68,20 @@ export class KvRestIdentitySource implements IdentitySource {
     } catch (err) {
       logger.debug(`[identity] KV resolve ${key} failed: ${(err as Error).message}`);
     }
-    this.cache.set(key, result);
+    if (result) this.hits.set(key, result);
+    else this.retryAt.set(key, this.now() + this.negativeTtlMs);
     return result;
   }
 }
 
 /** Build the identity source from config, or null when KV creds are unset. */
 export function createIdentitySource(): IdentitySource | null {
-  const { kvAccountId, kvNamespaceId, kvApiToken } = config.identity ?? ({} as any);
+  const { kvAccountId, kvNamespaceId, kvApiToken, kvNegativeTtlMs } = config.identity ?? ({} as any);
   if (!kvAccountId || !kvNamespaceId || !kvApiToken) return null;
-  return new KvRestIdentitySource({ accountId: kvAccountId, namespaceId: kvNamespaceId, apiToken: kvApiToken });
+  return new KvRestIdentitySource({
+    accountId: kvAccountId,
+    namespaceId: kvNamespaceId,
+    apiToken: kvApiToken,
+    negativeTtlMs: kvNegativeTtlMs,
+  });
 }

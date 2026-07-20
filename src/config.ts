@@ -181,6 +181,10 @@ export const config = {
 		kvAccountId: process.env.IDENTITY_KV_ACCOUNT_ID || '',
 		kvNamespaceId: process.env.IDENTITY_KV_NAMESPACE_ID || '',
 		kvApiToken: process.env.IDENTITY_KV_API_TOKEN || '',
+		// A miss (participant's PARTICIPANT_JOINED KV record not written yet — the KV pipeline is
+		// async and multi-hop) is only cached this long, so a slightly-early first lookup self-heals
+		// once the record lands instead of poisoning identity for the whole session. Hits cache forever.
+		kvNegativeTtlMs: parseIntOrDefault(process.env.IDENTITY_KV_NEGATIVE_TTL_MS, 5000),
 		// Auto-enrollment from normal (single-speaker) streams — quality-gated + rate-limited.
 		enrollMinSpeechSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_MIN_SPEECH_SEC, 8),
 		enrollCooldownMs: parseIntOrDefault(process.env.IDENTITY_ENROLL_COOLDOWN_MS, 20000),
