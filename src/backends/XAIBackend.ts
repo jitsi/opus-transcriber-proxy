@@ -531,7 +531,7 @@ export class XAIBackend implements TranscriptionBackend {
 		isInterim: boolean,
 		speaker?: number,
 		language?: string,
-		words?: Array<{ text: string; start: number; end: number }>,
+		words?: Array<{ text: string; start: number; end: number; speaker?: number }>,
 	): TranscriptionMessage {
 		return {
 			transcript: [
@@ -552,12 +552,19 @@ export class XAIBackend implements TranscriptionBackend {
 		};
 	}
 
-	/** Extract per-word media-time offsets (seconds) from an xAI words[] array. */
-	private extractWords(words: any[] | undefined): Array<{ text: string; start: number; end: number }> | undefined {
+	/** Extract per-word media-time offsets (seconds) + diarization speaker from an xAI words[] array. */
+	private extractWords(
+		words: any[] | undefined,
+	): Array<{ text: string; start: number; end: number; speaker?: number }> | undefined {
 		if (!Array.isArray(words) || words.length === 0) return undefined;
 		const out = words
 			.filter((w) => typeof w.start === 'number' && typeof w.end === 'number')
-			.map((w) => ({ text: (w.punctuated_word ?? w.text ?? '') as string, start: w.start as number, end: w.end as number }));
+			.map((w) => ({
+				text: (w.punctuated_word ?? w.text ?? '') as string,
+				start: w.start as number,
+				end: w.end as number,
+				...(typeof w.speaker === 'number' && { speaker: w.speaker as number }),
+			}));
 		return out.length > 0 ? out : undefined;
 	}
 }

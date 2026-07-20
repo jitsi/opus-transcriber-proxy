@@ -537,11 +537,12 @@ describe('XAIBackend', () => {
 			expect(finalResults).toHaveLength(2);
 			// Only the FIRST emitted final carries the complete word list (all speakers), so
 			// identityAttributeFinal runs exactly once per turn over the whole audio window.
+			// Words carry the backend diarization `speaker` label — the identity attributor groups by it.
 			expect(finalResults[0].words).toEqual([
-				{ text: 'hello', start: 0, end: 0.3 },
-				{ text: 'how', start: 0.5, end: 0.7 },
-				{ text: 'are', start: 0.7, end: 0.9 },
-				{ text: 'you', start: 0.9, end: 1.1 },
+				{ text: 'hello', start: 0, end: 0.3, speaker: 0 },
+				{ text: 'how', start: 0.5, end: 0.7, speaker: 1 },
+				{ text: 'are', start: 0.7, end: 0.9, speaker: 1 },
+				{ text: 'you', start: 0.9, end: 1.1, speaker: 1 },
 			]);
 			expect(finalResults[1].words).toBeUndefined();
 		});

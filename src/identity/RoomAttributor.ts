@@ -5,6 +5,8 @@ export interface Word {
   text: string;
   start: number;
   end: number;
+  /** Backend-provided diarization speaker label (xAI/Deepgram), when available. */
+  speaker?: number;
 }
 
 export interface AttributedSegment {

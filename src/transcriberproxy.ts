@@ -22,8 +22,9 @@ export interface TranscriptionMessage {
 	participant: { id: string; tag?: string; name?: string };
 	timestamp: number;
 	speaker?: number;
-	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution. */
-	words?: Array<{ text: string; start: number; end: number }>;
+	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution.
+	 *  `speaker` is the backend diarization label when the backend diarizes (xAI/Deepgram). */
+	words?: Array<{ text: string; start: number; end: number; speaker?: number }>;
 	/**
 	 * When true, this final is for live display only and must NOT be forwarded to the dispatcher/store.
 	 * Set on the raw (mic-owner-attributed) final while identity is enabled: the per-speaker identity

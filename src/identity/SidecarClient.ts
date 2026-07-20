@@ -15,9 +15,18 @@ export interface AnalyzeResult {
   turns: AnalyzeTurn[];
 }
 
+/** Result of a voice-embedding identity match (embed + cosine vs enrolled fingerprints). */
+export interface IdentifyResult {
+  identity: string | null;
+  score: number;
+  name?: string;
+}
+
 /** Transport-agnostic sidecar client surface (HTTP or WS implementations). */
 export interface ISidecarClient {
   analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null>;
+  /** Embed a single audio slice and match it against the tenant's enrolled fingerprints (no diarization). */
+  identify(tenant: string, pcm: Buffer): Promise<IdentifyResult | null>;
   enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean>;
   sessionEnd(sessionId: string, streamId: string): Promise<void>;
 }
@@ -86,6 +95,11 @@ export class SidecarClient implements ISidecarClient {
       { 'content-type': 'application/octet-stream', 'x-tenant': tenant, 'x-session': sessionId, 'x-stream': streamId },
       pcm,
     );
+  }
+
+  async identify(tenant: string, pcm: Buffer): Promise<IdentifyResult | null> {
+    const r = await this.call('/identify', { 'content-type': 'application/octet-stream', 'x-tenant': tenant }, pcm);
+    return r ? { identity: r.identity ?? null, score: r.score ?? 0, name: r.name } : null;
   }
 
   async enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean> {

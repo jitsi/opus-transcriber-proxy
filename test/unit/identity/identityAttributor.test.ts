@@ -1,62 +1,83 @@
 import { describe, it, expect } from 'vitest';
 import { IdentityAttributor } from '../../../src/identity/IdentityAttributor';
-import type { SidecarClient, AnalyzeResult } from '../../../src/identity/SidecarClient';
+import type { ISidecarClient, IdentifyResult } from '../../../src/identity/SidecarClient';
 import type { Word } from '../../../src/identity/RoomAttributor';
 
-function fakeSidecar(turns: AnalyzeResult['turns'], seen: { bytes?: number }): SidecarClient {
+// Sidecar mock exposing only identify (embed+match) — the new attributor uses backend diarization
+// (word.speaker) and calls identify once per distinct speaker.
+function fakeSidecar(identify: (pcm: Buffer) => IdentifyResult | null, seen: { calls: number[] }): ISidecarClient {
   return {
-    async analyze(_s: string, _st: string, _t: string, pcm: Buffer) {
-      seen.bytes = pcm.length;
-      return { speakerCount: turns.length, multiple: turns.length > 1, turns };
+    async identify(_tenant: string, pcm: Buffer) {
+      seen.calls.push(pcm.length);
+      return identify(pcm);
     },
-  } as unknown as SidecarClient;
+  } as unknown as ISidecarClient;
 }
 
 const pcmSeconds = (sec: number): Uint8Array => new Uint8Array(sec * 16000 * 2);
+const alice: IdentifyResult = { identity: 'alice', name: 'Alice', score: 0.9 };
 
 describe('IdentityAttributor', () => {
-  it('slices the window, reports speakerCount, and attributes words (absolute time)', async () => {
-    const seen: { bytes?: number } = {};
-    const turns = [
-      { sessionSpeakerId: 0, handle: 'Purple Otter', identity: 'alice', score: 0.9, start: 0, end: 2 },
-      { sessionSpeakerId: 1, handle: 'Amber Falcon', identity: null, score: 0, start: 2, end: 4 },
-    ];
-    const att = new IdentityAttributor(fakeSidecar(turns, seen), { sessionId: 's', streamId: 'st' });
-    att.appendPcm(pcmSeconds(5));
+  it('groups consecutive words by backend speaker, identifies each distinct speaker, and orders runs', async () => {
+    const seen = { calls: [] as number[] };
+    const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st' });
+    att.appendPcm(pcmSeconds(6));
 
     const words: Word[] = [
-      { text: 'hello', start: 0.1, end: 0.5 },
-      { text: 'there', start: 0.5, end: 1.0 },
-      { text: 'hi', start: 2.5, end: 3.0 },
+      { text: 'hello', start: 0.1, end: 0.6, speaker: 0 },
+      { text: 'there', start: 0.6, end: 1.2, speaker: 0 },
+      { text: 'hi', start: 2.5, end: 3.3, speaker: 1 },
+      { text: 'bye', start: 3.5, end: 4.2, speaker: 0 },
     ];
     const a = await att.analyze(words, 't1');
     expect(a).not.toBeNull();
-    expect(a!.speakerCount).toBe(2);
-    expect(a!.segments.map((s) => s.identity)).toEqual(['alice', null]);
-    expect(a!.segments[0].text).toBe('hello there');
-    expect(seen.bytes! % 2).toBe(0);
-    expect(a!.windowSec).toBeGreaterThan(0);
+    expect(a!.speakerCount).toBe(2); // two distinct backend speakers
+    expect(a!.segments.map((s) => s.text)).toEqual(['hello there', 'hi', 'bye']); // consecutive runs, in order
+    expect(a!.segments.map((s) => s.sessionSpeakerId)).toEqual([0, 1, 0]);
+    expect(a!.segments.every((s) => s.identity === 'alice')).toBe(true);
+    expect(seen.calls.length).toBe(2); // identify called once per distinct speaker, not per run
+    expect(seen.calls.every((n) => n % 2 === 0)).toBe(true); // even byte (s16le) slices
   });
 
-  it('returns null when the sidecar yields no turns', async () => {
-    const att = new IdentityAttributor(fakeSidecar([], {}), { sessionId: 's', streamId: 'st' });
+  it('collapses to a single speaker when words carry no backend speaker label', async () => {
+    const seen = { calls: [] as number[] };
+    const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st' });
     att.appendPcm(pcmSeconds(3));
-    expect(await att.analyze([{ text: 'x', start: 0, end: 1 }], 't1')).toBeNull();
+    const a = await att.analyze(
+      [
+        { text: 'one', start: 0.1, end: 0.9 },
+        { text: 'two', start: 0.9, end: 1.6 },
+      ],
+      't1',
+    );
+    expect(a!.speakerCount).toBe(1);
+    expect(a!.segments).toHaveLength(1);
+    expect(a!.segments[0].text).toBe('one two');
+    expect(a!.segments[0].identity).toBe('alice');
+    expect(seen.calls.length).toBe(1);
+  });
+
+  it('leaves identity null when the sidecar does not match', async () => {
+    const att = new IdentityAttributor(fakeSidecar(() => null, { calls: [] }), { sessionId: 's', streamId: 'st' });
+    att.appendPcm(pcmSeconds(3));
+    const a = await att.analyze([{ text: 'x', start: 0.1, end: 1.0, speaker: 0 }], 't1');
+    expect(a!.segments[0].identity).toBeNull();
+    expect(a!.segments[0].name).toBeNull();
   });
 
   it('returns null for an empty utterance', async () => {
-    const att = new IdentityAttributor(fakeSidecar([], {}), { sessionId: 's', streamId: 'st' });
+    const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
     expect(await att.analyze([], 't1')).toBeNull();
   });
 
   it('slices from the retained tail after the ring drops old audio', async () => {
-    const seen: { bytes?: number } = {};
-    const turns = [{ sessionSpeakerId: 0, handle: 'Purple Otter', identity: 'alice', score: 0.9, start: 0, end: 1 }];
-    const att = new IdentityAttributor(fakeSidecar(turns, seen), { sessionId: 's', streamId: 'st', maxBufferSec: 2 });
+    const seen = { calls: [] as number[] };
+    const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st', maxBufferSec: 2 });
     att.appendPcm(pcmSeconds(2));
     att.appendPcm(pcmSeconds(2)); // drops first → buffer covers 2..4
-    const a = await att.analyze([{ text: 'y', start: 3.0, end: 3.5 }], 't1');
+    const a = await att.analyze([{ text: 'y', start: 3.0, end: 3.8, speaker: 0 }], 't1');
     expect(a).not.toBeNull();
     expect(a!.segments[0].identity).toBe('alice');
+    expect(seen.calls[0]).toBeGreaterThan(0);
   });
 });

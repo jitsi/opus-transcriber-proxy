@@ -1,5 +1,5 @@
-import type { ISidecarClient } from './SidecarClient';
-import { attribute, type Word, type AttributedSegment } from './RoomAttributor';
+import type { ISidecarClient, IdentifyResult } from './SidecarClient';
+import type { Word, AttributedSegment } from './RoomAttributor';
 
 export interface IdentityAttributorOptions {
   sessionId: string;
@@ -66,21 +66,76 @@ export class IdentityAttributor {
   }
 
   /**
-   * Analyze an utterance: slice a rolling window ending at the utterance end (cross-speaker
-   * context → stabler clustering), diarize+identify via the sidecar, and attribute words to
-   * speakers. Returns speakerCount + per-speaker segments + the analyzed PCM (reusable for
-   * enrollment). Null on any failure. `tenant` scopes enroll/identify.
+   * Attribute an utterance to speakers using the TRANSCRIPTION BACKEND's diarization labels
+   * (`word.speaker`), and the sidecar only to IDENTIFY each speaker's voice (embed + match — no
+   * pyannote). This removes the sidecar's diarization from the hot path (the ~15-25s latency source
+   * that caused laggy CC + end-of-meeting store tail-loss). Words with no `speaker` collapse to a
+   * single speaker (0), so non-diarizing backends still get a fast single-speaker identify. JIT-16065.
+   *
+   * Returns speakerCount + per-run segments (in order, each labelled with its speaker's resolved
+   * identity) + the whole-utterance PCM (reusable for auto-enrollment). Null when there are no words.
    */
   async analyze(words: Word[], tenant: string): Promise<UtteranceAnalysis | null> {
     if (!words.length) return null;
-    const uEnd = words[words.length - 1].end;
-    const windowStart = Math.max(this.bufStartSec, uEnd - this.windowSec);
-    const pcm = this.sliceSec(windowStart, uEnd);
-    if (!pcm || pcm.length < this.bytesPerSec * 0.5) return null; // need >= 0.5s of audio
-    const res = await this.sidecar.analyze(this.o.sessionId, this.o.streamId, tenant, pcm);
-    if (!res || res.turns.length === 0) return null;
-    // Turns are relative to the sliced window; shift to absolute media time to match the words.
-    const absTurns = res.turns.map((t) => ({ ...t, start: t.start + windowStart, end: t.end + windowStart }));
-    return { speakerCount: res.speakerCount, segments: attribute(words, absTurns), pcm, windowSec: pcm.length / this.bytesPerSec };
+
+    // Group consecutive words into runs by backend speaker label.
+    interface Run {
+      speaker: number;
+      words: Word[];
+    }
+    const runs: Run[] = [];
+    for (const w of words) {
+      const spk = w.speaker ?? 0;
+      const last = runs[runs.length - 1];
+      if (last && last.speaker === spk) last.words.push(w);
+      else runs.push({ speaker: spk, words: [w] });
+    }
+
+    // Identify each distinct speaker from the concatenation of all their runs' audio.
+    const runsBySpeaker = new Map<number, Run[]>();
+    for (const r of runs) {
+      const arr = runsBySpeaker.get(r.speaker) ?? [];
+      arr.push(r);
+      runsBySpeaker.set(r.speaker, arr);
+    }
+    const minBytes = this.bytesPerSec * 0.5; // need >= 0.5s of audio to attempt a match
+    const idBySpeaker = new Map<number, IdentifyResult>();
+    await Promise.all(
+      [...runsBySpeaker.entries()].map(async ([spk, spkRuns]) => {
+        const slice = this.concatSlices(spkRuns.map((r) => [r.words[0].start, r.words[r.words.length - 1].end] as [number, number]));
+        if (!slice || slice.length < minBytes) return;
+        const m = await this.sidecar.identify(tenant, slice);
+        if (m && m.identity) idBySpeaker.set(spk, m);
+      }),
+    );
+
+    // Per-run attributed segments, in order, each labelled with its speaker's resolved identity.
+    const segments: AttributedSegment[] = runs.map((run) => {
+      const m = idBySpeaker.get(run.speaker);
+      return {
+        sessionSpeakerId: run.speaker,
+        handle: null,
+        identity: m?.identity ?? null,
+        name: m?.name ?? null,
+        score: m?.score ?? 0,
+        text: run.words.map((w) => w.text).join(' '),
+        start: run.words[0].start,
+        end: run.words[run.words.length - 1].end,
+      };
+    });
+
+    const speakerCount = runsBySpeaker.size;
+    const pcm = this.sliceSec(words[0].start, words[words.length - 1].end) ?? Buffer.alloc(0);
+    return { speakerCount, segments, pcm, windowSec: pcm.length / this.bytesPerSec };
+  }
+
+  /** Concatenate PCM slices for a set of [startSec, endSec] ranges (one speaker's runs). */
+  private concatSlices(ranges: Array<[number, number]>): Buffer | null {
+    const parts: Buffer[] = [];
+    for (const [s, e] of ranges) {
+      const b = this.sliceSec(s, e);
+      if (b) parts.push(b);
+    }
+    return parts.length ? Buffer.concat(parts) : null;
   }
 }
