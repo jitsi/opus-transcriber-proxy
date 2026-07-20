@@ -31,6 +31,14 @@ export interface TranscriptionMessage {
 	 * shared-mic speaker's words to the mic owner (JIT-16065).
 	 */
 	noDispatch?: boolean;
+	/**
+	 * When true, this final is for the STORE only and must NOT be shown in the live CC. Set on the
+	 * per-speaker identity-attributed finals: the identified speaker isn't in the XMPP room, so the
+	 * client would render it as "Guest" and duplicate the raw line. Keeping it out of the UI leaves the
+	 * live CC identical to pre-identity behaviour; the attribution still reaches the stored transcript
+	 * via the Worker's dispatch path (JIT-16065).
+	 */
+	dispatchOnly?: boolean;
 }
 
 export interface TranscriberProxyOptions {

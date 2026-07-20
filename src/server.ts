@@ -305,6 +305,10 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 					timestamp: data.timestamp,
 					...(data.language && { language: data.language }),
 					message_id: `${data.messageId}-id-${i}`,
+					// Store-only: the Worker dispatches this to the transcript store but does NOT show it in
+					// the live CC (the identified speaker isn't in the XMPP room → would render as "Guest" and
+					// duplicate the raw line). Keeps the live CC identical to pre-identity behaviour. JIT-16065.
+					dispatchOnly: true,
 				};
 				try {
 					currentWs.send(JSON.stringify(msg));

@@ -40,9 +40,12 @@ interface TranscriptionMessage {
 	}>;
 	timestamp: number;
 	language?: string;
-	// Set by the container on the raw mic-owner final while identity is enabled: display-only, do NOT
-	// forward to the dispatcher (the per-speaker identity follow-up is the authoritative store record).
+	event?: string;
+	// Display-only raw final: forward to the client (live CC) but do NOT dispatch to the store.
 	noDispatch?: boolean;
+	// Store-only identity final: dispatch to the store but do NOT forward to the client (keeps the live
+	// CC identical to pre-identity behaviour — the identified speaker isn't in the XMPP roster).
+	dispatchOnly?: boolean;
 }
 
 /**
@@ -498,34 +501,38 @@ async function handleWebSocketWithDispatcher(
 
 	// Pipe: container → client (downstream, intercept for dispatcher)
 	containerWs.addEventListener('message', (event) => {
-		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
-		// details) and forward the combined message, so the client sees the whole path in one message.
+		// Parse once (string messages only). Non-JSON / binary (media) → parsed stays null and is
+		// forwarded verbatim below.
+		let parsed: (TranscriptionMessage & { event?: string; worker?: unknown }) | null = null;
 		if (typeof event.data === 'string') {
-			let parsedInfo: Record<string, unknown> | null = null;
 			try {
-				const p = JSON.parse(event.data);
-				if (p && p.event === 'info') parsedInfo = p;
+				parsed = JSON.parse(event.data);
 			} catch {
-				parsedInfo = null;
-			}
-			if (parsedInfo) {
-				parsedInfo.worker = buildWorkerInfo(request, env);
-				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
-					serverWs.send(JSON.stringify(parsedInfo));
-				}
-				return;
+				parsed = null;
 			}
 		}
 
-		// Forward to client immediately
-		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (parsed && parsed.event === 'info') {
+			parsed.worker = buildWorkerInfo(request, env);
+			if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+				serverWs.send(JSON.stringify(parsed));
+			}
+			return;
+		}
+
+		// Forward to client — UNLESS this is a store-only identity final (dispatchOnly): showing it
+		// would render the identified speaker as "Guest" and duplicate the raw line. Keeping it out of
+		// the client stream leaves the live CC identical to pre-identity behaviour.
+		if (!parsed?.dispatchOnly && serverWs.readyState === WebSocket.READY_STATE_OPEN) {
 			serverWs.send(event.data);
 		}
 
 		// Dispatch transcriptions via DO WebSocket
-		if (typeof event.data === 'string') {
+		if (parsed) {
 			try {
-				const data = JSON.parse(event.data) as TranscriptionMessage;
+				const data = parsed;
 				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
 				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
 				if (
