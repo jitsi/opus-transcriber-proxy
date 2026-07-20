@@ -290,8 +290,12 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 			const currentWs = session.getWebSocket();
 			if (!currentWs || currentWs.readyState !== 1) return;
 			data.segments.forEach((s, i) => {
-				const id = s.identity ?? (s.handle ? `unknown:${s.handle}` : data.participantId);
-				const name = s.name ?? s.handle ?? undefined;
+				// Only a RESOLVED (known-enrolled) identity overrides the speaker. An unresolved cluster
+				// (provisional handle like "Crimson Otter") is attributed to the mic-owner endpoint — NOT a
+				// synthetic "unknown:<handle>" id, which the dispatcher would turn into a phantom virtual
+				// participant (mis-attribution + inflated meeting roster). JIT-16065.
+				const id = s.identity ?? data.participantId;
+				const name = s.identity ? (s.name ?? undefined) : undefined;
 				const msg: TranscriptionMessage = {
 					type: 'transcription-result',
 					event: 'transcription-result',
