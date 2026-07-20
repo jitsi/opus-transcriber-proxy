@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { buildDispatcherMessages } from './identity/dispatcherMessages';
+import type { AttributedSegment } from './identity/RoomAttributor';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';
@@ -23,6 +24,13 @@ export interface TranscriptionMessage {
 	speaker?: number;
 	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution. */
 	words?: Array<{ text: string; start: number; end: number }>;
+	/**
+	 * When true, this final is for live display only and must NOT be forwarded to the dispatcher/store.
+	 * Set on the raw (mic-owner-attributed) final while identity is enabled: the per-speaker identity
+	 * follow-up is the authoritative store attribution, so dispatching the raw too would mis-attribute a
+	 * shared-mic speaker's words to the mic owner (JIT-16065).
+	 */
+	noDispatch?: boolean;
 }
 
 export interface TranscriberProxyOptions {
@@ -219,12 +227,19 @@ export class TranscriberProxy extends EventEmitter {
 				}
 			}
 
+			const identityEnabled = config.identity?.enabled === true;
+
+			// While identity is enabled, the raw (mic-owner) final is for live display only — the
+			// per-speaker identity follow-up below is the authoritative store attribution. Flag it so the
+			// Worker forwards it to the client but NOT to the dispatcher (otherwise a shared-mic speaker's
+			// words get stored under the mic owner). JIT-16065.
+			if (identityEnabled) message.noDispatch = true;
+
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
 			const transcriptText = message.transcript.map((t) => t.text).join(' ');
 			const sourceTag = message.participant?.id || tag;
-			const identityEnabled = config.identity?.enabled === true;
 
 			// Send to dispatcher immediately — UNLESS identity is enabled, in which case the
 			// dispatcher send is deferred to the attribution result below (per-speaker + identity).
@@ -250,25 +265,37 @@ export class TranscriberProxy extends EventEmitter {
 			// resolved). Any failure is swallowed — transcription is never affected. Gated by
 			// IDENTITY_ENABLED.
 			if (identityEnabled) {
+				// A single fallback segment carrying the whole transcript under the mic owner — used when
+				// attribution can't run (no words / non-16k backend / error) so the store never loses the
+				// utterance. This identity_attribution (not the noDispatch'd raw) is what the Worker forwards.
+				const fallbackSegment = (): AttributedSegment[] => [
+					{ sessionSpeakerId: null, handle: null, identity: null, name: null, score: 0, text: transcriptText, start: 0, end: 0 },
+				];
+				const emitAttribution = (segments: AttributedSegment[]) => {
+					this.emit('identity_attribution', {
+						sessionId: this.sessionId,
+						tag,
+						participantId: message.participant?.id || tag,
+						messageId: message.message_id,
+						timestamp: message.timestamp,
+						language: message.language,
+						segments,
+					});
+				};
 				newConnection
 					.identityAttributeFinal(message)
 					.then((segments) => {
+						const effective = segments && segments.length > 0 ? segments : fallbackSegment();
+						emitAttribution(effective);
 						if (segments && segments.length > 0) {
-							this.emit('identity_attribution', {
-								sessionId: this.sessionId,
-								tag,
-								participantId: message.participant?.id || tag,
-								messageId: message.message_id,
-								timestamp: message.timestamp,
-								language: message.language,
-								segments,
-							});
 							logger.info(
 								`[identity] ${tag}: ${segments
 									.map((s) => `${s.name ?? s.identity ?? s.handle ?? '?'}="${s.text}"`)
 									.join(' | ')}`,
 							);
 						}
+						// Standalone-Node dispatcher path (unused under the CF Worker, which re-dispatches
+						// the client-bound messages). buildDispatcherMessages already handles null → raw.
 						if (this.dispatcherConnection && this.sessionId) {
 							const base = {
 								sessionId: this.sessionId,
@@ -281,7 +308,7 @@ export class TranscriberProxy extends EventEmitter {
 							}
 						}
 					})
-					.catch(() => {});
+					.catch(() => emitAttribution(fallbackSegment()));
 			}
 		};
 		newConnection.onClosed = (tag) => {

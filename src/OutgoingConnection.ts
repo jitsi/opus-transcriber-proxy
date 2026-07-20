@@ -685,12 +685,15 @@ export class OutgoingConnection {
 			const resolved = await this.resolveIdentity();
 			const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
 			const a = await this.identityAttributor.analyze(message.words, tenant);
-			if (!a) return null;
-			if (a.speakerCount > 1) this.everSawMultipleSpeakers = true;
-			if (a.speakerCount <= 1) {
-				// Normal single-person stream → auto-enroll (guarded); no room attribution/override.
+			if (!a || a.segments.length === 0) return null;
+			if (a.speakerCount > 1) {
+				this.everSawMultipleSpeakers = true;
+			} else {
+				// Single-speaker window → auto-enroll (guarded). Still return the attributed segment: it
+				// carries the resolved identity of whoever actually spoke (which on a shared mic may be a
+				// non-owner), so the store attributes it correctly instead of to the mic owner. Unresolved
+				// → identity null → downstream falls back to the mic-owner endpoint. JIT-16065.
 				this.maybeAutoEnroll(resolved, tenant, a.pcm, a.windowSec);
-				return null;
 			}
 			return a.segments;
 		} catch {

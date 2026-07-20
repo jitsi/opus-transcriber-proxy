@@ -40,6 +40,9 @@ interface TranscriptionMessage {
 	}>;
 	timestamp: number;
 	language?: string;
+	// Set by the container on the raw mic-owner final while identity is enabled: display-only, do NOT
+	// forward to the dispatcher (the per-speaker identity follow-up is the authoritative store record).
+	noDispatch?: boolean;
 }
 
 /**
@@ -525,7 +528,11 @@ async function handleWebSocketWithDispatcher(
 				const data = JSON.parse(event.data) as TranscriptionMessage;
 				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
 				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
-				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
+				if (
+					(data.type === 'transcription-result' || data.type === 'realtime-translation-result') &&
+					!data.is_interim &&
+					!data.noDispatch
+				) {
 					const dispatcherMessage: DispatcherTranscriptionMessage = {
 						sessionId,
 						endpointId: data.participant?.id || 'unknown',
