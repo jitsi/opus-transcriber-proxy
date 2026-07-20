@@ -44,7 +44,9 @@ export class KvRestIdentitySource implements IdentitySource {
       if (res.ok) {
         const ev: any = await res.json();
         const d = ev?.data ?? {};
-        const identity = d.id || d.participantId || participantId;
+        // Anchor on email — it's the one stable id across meetings (participant ids are
+        // regenerated per meeting). Fall back to the per-meeting id only when no email.
+        const identity = d.email || d.id || d.participantId || participantId;
         result = { identity, name: d.name, email: d.email, tenant: ev?.customerId || 'default' };
       } else if (res.status !== 404) {
         logger.debug(`[identity] KV resolve ${key} -> ${res.status}`);

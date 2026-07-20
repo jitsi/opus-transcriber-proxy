@@ -4,7 +4,7 @@ import { KvRestIdentitySource } from '../../../src/identity/IdentitySource';
 const opts = (fetchImpl: any) => ({ accountId: 'acc', namespaceId: 'ns', apiToken: 'tok', fetchImpl });
 
 describe('KvRestIdentitySource', () => {
-  it('maps a PARTICIPANT_JOINED KV record to a ResolvedIdentity', async () => {
+  it('anchors identity on EMAIL (stable across meetings) when present', async () => {
     const f = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -12,8 +12,19 @@ describe('KvRestIdentitySource', () => {
     }));
     const src = new KvRestIdentitySource(opts(f));
     const r = await src.resolve('sess', 'p-a0');
-    expect(r).toEqual({ identity: 'u-1', name: 'Alice', email: 'a@x.com', tenant: 'cust1' });
+    // email wins over the per-meeting id so the same person matches across sessions
+    expect(r).toEqual({ identity: 'a@x.com', name: 'Alice', email: 'a@x.com', tenant: 'cust1' });
     expect(String(f.mock.calls[0][0])).toContain('/values/sess-p-a0');
+  });
+
+  it('falls back to id then participantId when email is absent', async () => {
+    const f = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ customerId: 'cust1', data: { id: 'u-1', name: 'Alice' } }),
+    }));
+    const r = await new KvRestIdentitySource(opts(f)).resolve('sess', 'p-a0');
+    expect(r?.identity).toBe('u-1');
   });
 
   it('caches by key (one fetch for repeated resolves)', async () => {
