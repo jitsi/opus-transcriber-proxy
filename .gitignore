@@ -164,6 +164,12 @@ dist
 !.dev.vars.example
 .env*
 .wrangler/
+# Deploy config holds account/namespace IDs + CF Access client id (secrets live in CF/Vault, not here);
+# never commit it or its backups to this PUBLIC repo.
+wrangler-deploy.jsonc
+wrangler-deploy.jsonc.*
+# Local, machine-specific instructions (vault paths, internal infra notes).
+CLAUDE.local.md
 
 # Native addon build output (node-gyp) and bundle/compiled output
 build/
