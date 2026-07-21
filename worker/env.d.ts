@@ -98,4 +98,7 @@ export interface Env {
 	SIDECAR_BEARER_TOKEN?: string;
 	MATCH_THRESHOLD?: string;
 	SEG_CLUSTER_THRESHOLD?: string;
+	// In-container CAM++ embedding model path (LocalIdentityClient). Has a Dockerfile default;
+	// only set to override.
+	EMBEDDING_MODEL?: string;
 }

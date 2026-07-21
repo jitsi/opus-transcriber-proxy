@@ -54,6 +54,14 @@ COPY --from=builder /usr/src/app/dist/bundle ./dist/bundle
 # Prebuilt, architecture-independent WASM artifacts (from the build context; built by build:wasm).
 COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/
 
+# CAM++ speaker-embedding model for the in-container identity path (LocalIdentityClient -> embedder,
+# sherpa-onnx-node). Architecture-independent, so it is fetched on the host (npm run fetch-models)
+# and baked in via COPY — like the WASM artifacts. Only used when Vectorize creds are configured;
+# harmless otherwise. sherpa-onnx-node itself is a prod dependency installed above (its platform
+# binary is a prebuilt optional dep, so --ignore-scripts is fine — no native build needed).
+COPY models/campplus.onnx ./models/campplus.onnx
+ENV EMBEDDING_MODEL=/usr/src/app/models/campplus.onnx
+
 # Expose the port
 EXPOSE 8080
 
