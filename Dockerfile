@@ -27,17 +27,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Sources required to compile libopus + the addon and to bundle the server.
-# src/ carries the libopus submodule (src/OpusDecoder/opus) that node-gyp builds.
-COPY binding.gyp build.mjs ./
+# Sources for the NATIVE build only: binding.gyp + native/ + the libopus submodule
+# (src/OpusDecoder/opus). These are copied BEFORE `build:native` and deliberately exclude the
+# rest of src/, so editing TypeScript does NOT invalidate this layer — libopus (a slow, QEMU-
+# emulated amd64 compile) is only rebuilt when the opus/addon sources actually change.
+COPY binding.gyp ./
 COPY native ./native
-COPY src ./src
+COPY src/OpusDecoder/opus ./src/OpusDecoder/opus
 
-# Compile build/Release/opus_native.node, then bundle dist/bundle/server.js.
+# Compile build/Release/opus_native.node (cached across TS-only edits per the note above).
 RUN npm run build:native
+
+# Now the rest of the sources, needed only for the esbuild bundle. A code edit invalidates from
+# here — build:bundle is fast (seconds), unlike the native compile above.
 # GIT_HASH is baked into the bundle (build.mjs -> __GIT_HASH__) so the running commit is observable
 # in the server `info` message. .git isn't in the build context, so pass it as a build-arg (CI sets
 # it to the commit SHA); falls back to "unknown" for a plain `docker build`.
+COPY build.mjs ./
+COPY src ./src
 ARG GIT_HASH=unknown
 RUN GIT_HASH="$GIT_HASH" npm run build:bundle
 
