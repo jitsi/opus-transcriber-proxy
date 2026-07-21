@@ -59,6 +59,10 @@ export class XAIBackend implements TranscriptionBackend {
 	async connect(backendConfig: BackendConfig): Promise<void> {
 		this.backendConfig = backendConfig;
 
+		// Per-endpoint diarization override (start event's `diarize`) takes precedence
+		// over the global XAI_DIARIZE config.
+		const diarize = backendConfig.diarize ?? config.xai.diarize;
+
 		if (!this.apiKey) {
 			throw new Error('XAI_API_KEY not configured');
 		}
@@ -68,7 +72,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// turned into finals. Gated by config/per-connection flag; scoped to the non-diarized path
 		// (one WS per participant), since diarization needs per-speaker hypotheses.
 		const granularEnabled = backendConfig.xaiGranularFinals ?? config.xai.granularFinals;
-		if (granularEnabled && config.xai.diarize) {
+		if (granularEnabled && diarize) {
 			logger.warn(`xAI granular finals requested but diarize is on for tag ${this.tag}; disabled (per-speaker hypotheses unsupported)`);
 		} else if (granularEnabled) {
 			const stabilityMs = backendConfig.xaiGranularStabilityMs ?? config.xai.granularStabilityMs;
@@ -93,7 +97,7 @@ export class XAIBackend implements TranscriptionBackend {
 					params.set('language', language);
 				}
 
-				if (config.xai.diarize) {
+				if (diarize) {
 					params.set('diarize', 'true');
 				}
 
@@ -315,7 +319,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Diarization re-splits per speaker. Granular finals are not initialized on the diarized
 		// path (they need per-speaker hypotheses), so this branch is reached only in default mode.
 		if (
-			config.xai.diarize &&
+			(this.backendConfig?.diarize ?? config.xai.diarize) &&
 			Array.isArray(msg.words) &&
 			msg.words.length > 0 &&
 			msg.words[0].speaker !== undefined
@@ -436,7 +440,7 @@ export class XAIBackend implements TranscriptionBackend {
 		const language: string | undefined = msg.language || undefined;
 
 		if (
-			config.xai.diarize &&
+			(this.backendConfig?.diarize ?? config.xai.diarize) &&
 			Array.isArray(msg.words) &&
 			msg.words.length > 0 &&
 			msg.words[0].speaker !== undefined

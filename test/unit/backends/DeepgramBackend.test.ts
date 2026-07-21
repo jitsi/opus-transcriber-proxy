@@ -86,6 +86,32 @@ describe('DeepgramBackend', () => {
 			expect(mockWsManager.mockWs.protocols).toEqual(['token', 'test-deepgram-key']);
 		});
 
+		it('should let per-endpoint backendConfig.diarize=true override the global diarize=false', async () => {
+			// global config mock has diarize:false; the start-event override enables it
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const backendConfig: BackendConfig = { model: 'nova-2', diarize: true };
+
+			const connectPromise = backend.connect(backendConfig);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			expect(mockWsManager.mockWs.url).toContain('diarize=true');
+		});
+
+		it('should let per-endpoint backendConfig.diarize=false override a globally-enabled diarize', async () => {
+			(config.deepgram as any).diarize = true;
+			try {
+				const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+				const connectPromise = backend.connect({ model: 'nova-2', diarize: false });
+				mockWsManager.mockWs.simulateOpen();
+				await connectPromise;
+
+				expect(mockWsManager.mockWs.url).toContain('diarize=false');
+			} finally {
+				(config.deepgram as any).diarize = false;
+			}
+		});
+
 		it('should use linear16 encoding params when DEEPGRAM_ENCODING=linear16', async () => {
 			(config.deepgram as any).encoding = 'linear16';
 			try {

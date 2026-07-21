@@ -291,7 +291,7 @@ Live-translation audio duration is metered so it can be billed downstream. It's 
 - Passes raw Opus/Ogg through by default (`DEEPGRAM_ENCODING=opus`); set `DEEPGRAM_ENCODING=linear16` to decode to PCM first
 - Supports punctuation, diarization, language detection
 - Streaming results with interim and final transcripts
-- When `DEEPGRAM_DIARIZE=true` and word-level `speaker` indices are present, results are split per speaker segment; each message carries a `speaker: number` field
+- When diarization is enabled and word-level `speaker` indices are present, results are split per speaker segment; each message carries a `speaker: number` field. Diarization is enabled per-endpoint by the `start` event's `diarize` field (→ `BackendConfig.diarize`), which overrides the global `DEEPGRAM_DIARIZE`; `DeepgramBackend` resolves `backendConfig.diarize ?? config.deepgram.diarize` for both the connect-time `diarize` URL param and the split-by-speaker gate
 - `DEEPGRAM_MIP_OPT_OUT=true` adds `mip_opt_out=true` to the WS URL (opts out of Deepgram's Model Improvement Program; default false). Overridable per-connection via the `deepgram_mip_opt_out` URL query param, which flows `ISessionParameters` → `TranscriberProxyOptions` → `BackendConfig.deepgramMipOptOut`; `DeepgramBackend` resolves `backendConfig.deepgramMipOptOut ?? config.deepgram.mipOptOut`. The CF Worker forwards `DEEPGRAM_MIP_OPT_OUT` to the container via `buildContainerEnvVars`
 - When Deepgram provides `alternative.languages`, the first entry is always set as the `language` property on the `TranscriptionMessage` (both standard and diarized paths), unconditionally. `DEEPGRAM_INCLUDE_LANGUAGE=true` additionally appends the language as a text suffix (e.g. `[en]`) — these are independent behaviours
 
@@ -308,7 +308,7 @@ Live-translation audio duration is metered so it can be billed downstream. It's 
 - xAI closes the ASR stream after a stretch of silence with `{type:error, message:"ASR stream timed out"}`. `handleMessage` detects this (message matches `/timed out/i`) and calls `onError('api_error', message, /* recoverable */ true)` (metric `errorType: 'stream_timeout'`); other `type:error` messages are non-recoverable (`errorType: 'api_error'`, `recoverable === false`). Either way the dead WS is still `close()`d — the in-place reconnect happens on the `OutgoingConnection` side (JIT-15901)
 - `transcript.partial` with `speech_final=false` → interim; `transcript.partial` with `speech_final=true` → final (true utterance end); multiple `is_final=true` partials may arrive for a single utterance with accumulating text — only `speech_final=true` is the definitive end; `transcript.done` fires at stream end with empty text and is ignored
 - Detected `language` is a BCP-47 code (e.g. `"en"`) and is present on `transcript.partial` events. It is passed through verbatim from xAI (no transformation)
-- When `XAI_DIARIZE=true` and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram)
+- When diarization is enabled and words carry `speaker` indices, results are split per speaker segment (same pattern as Deepgram). Enabled per-endpoint via the `start` event's `diarize` field (→ `BackendConfig.diarize`), overriding the global `XAI_DIARIZE`; `XAIBackend` resolves `backendConfig.diarize ?? config.xai.diarize` (used for the connect URL param, the granular-finals guard, and both diarized emit gates)
 - `XAI_INCLUDE_LANGUAGE=true` appends language suffix (e.g. `[en]`) to final transcript text; `language` field is always set on final messages when detected
 - **Segmentation = `endpointing` (silence), not `smart_turn`.** `endpointing` (silence ms before a final) is **always sent**, default **850ms** (`XAI_ENDPOINTING`; xAI's own default of 10ms is far too choppy). `smart_turn` is end-of-turn detection for a *multi-speaker single stream*; we run one WS per participant (no turns), and enabling it holds finals across mid-sentence pauses → very long chunks. So `smart_turn`/`smart_turn_timeout` are **opt-in**: sent only when `XAI_SMART_TURN` is explicitly set (`config.xai.smartTurn` defaults to `undefined`). `smart_turn_timeout` (default 500) is only sent alongside `smart_turn`.
 - All three segmentation knobs are **per-connection overridable** via URL query params — `endpointing`, `smart_turn`, `smart_turn_timeout` — flowing `ISessionParameters` (`xaiEndpointing`/`xaiSmartTurn`/`xaiSmartTurnTimeout`) → `TranscriberProxyOptions` → `BackendConfig`; `XAIBackend` resolves `backendConfig.xaiX ?? config.xai.X` (same pattern as `language`/`deepgram_mip_opt_out`)
@@ -481,6 +481,22 @@ npm run mix-audio -- /tmp/session123/media.jsonl output.wav
 
 ### Client → Server
 
+**Start event** (per participant/endpoint; opens/updates its `OutgoingConnection`):
+```json
+{
+  "event": "start",
+  "start": {
+    "tag": "participant-id",
+    "mediaFormat": { "encoding": "opus" },
+    "diarize": true
+  }
+}
+```
+`diarize` is optional and per-endpoint: only an explicit boolean overrides the global
+`DEEPGRAM_DIARIZE` / `XAI_DIARIZE` config; anything else falls back to it. A re-`start`
+for the same endpoint can change it (the backend reconnects to apply the new value). Set
+it to `true` only for endpoints that carry multiple speakers (room systems, dial-in legs).
+
 **Audio packet:**
 ```json
 {
@@ -586,6 +602,7 @@ Do not leave stale descriptions. If a note says "only X happens" and you change 
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant's media source within a session. Format is a sourceId — `{id}-{mediaType}` (e.g. `abc123-a0`, where the suffix encodes media type: `a`=audio, `v`=video) or just `{id}`. The hex `{id}` prefix is parsed out (via `/^([0-9a-fA-F]+)-/`) as the participant id, while the full tag is retained on `participant.tag`. Tags whose prefix isn't hex fall back to `id === tag === <whole tag>`.
+- Diarization is enabled **per-endpoint**, not per-session: the `start` event's `diarize` field flows `handleStartEvent` → `createConnection(tag, mediaFormat, diarize)` → `new OutgoingConnection(..., diarize)` → `BackendConfig.diarize`, and each backend resolves `backendConfig.diarize ?? config.<provider>.diarize`. Only an explicit boolean overrides the global env config; a re-`start` for the same tag can change it (via `updateInputFormat`, which reconnects the backend to apply it). Enable it only for multi-speaker streams (room systems, dial-in legs) — on a single-speaker stream the diarizer can spuriously split one talker.
 - Deepgram is the only backend that supports raw Opus/Ogg pass-through (controlled by `DEEPGRAM_ENCODING`, default `opus`). It returns the input encoding unchanged from `getDesiredAudioFormat()` when pass-through is active. The old `wantsRawOpus()` method has been replaced by `getDesiredAudioFormat()`.
 - `openai_custom` is a provider that reuses `OpenAIBackend` but with a per-request WebSocket URL (from the `openaiCustomUrl` URL query parameter) and API key (from the `X-Custom-Openai-Api-Key` HTTP header). It is gated by `ENABLE_OPENAI_CUSTOM_PROVIDER=true` (similar to `ENABLE_DUMMY_PROVIDER`). The URL and key are stored in `TranscriberProxyOptions` (`openaiCustomUrl`, `openaiCustomApiKey`) and passed to `BackendFactory.createBackend` via `OpenAICustomOptions`. `BackendFactory` instantiates `OpenAIBackend(tag, participantInfo, wsUrl, apiKey)` for this provider.
 - `DecodedAudio.audioData` is a `Uint8Array` of raw bytes (PCM for decoded audio, raw frames for pass-through). The old `pcmData: Int16Array` field no longer exists.

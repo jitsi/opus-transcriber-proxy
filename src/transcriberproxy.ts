@@ -213,9 +213,11 @@ export class TranscriberProxy extends EventEmitter {
 		return this.outgoingConnections.get(tag);
 	}
 
-	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
-		// Create a new connection for this tag (no limit, no reuse)
-		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
+	private createConnection(tag: string, mediaFormat: AudioFormat, diarize?: boolean): OutgoingConnection {
+		// Create a new connection for this tag (no limit, no reuse).
+		// `diarize` is a per-endpoint override from the start event (undefined = use
+		// the global DEEPGRAM_DIARIZE / XAI_DIARIZE config).
+		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options, diarize);
 
 		newConnection.onInterimTranscription = (message) => {
 			this.interimTranscriptionCount++;
@@ -358,6 +360,11 @@ export class TranscriberProxy extends EventEmitter {
 
 		this.failedStartTags.delete(tag);
 
+		// Per-endpoint diarization flag. The bridge sets `start.diarize: true` only for
+		// endpoints that carry multiple speakers (room systems, dial-in legs). Only an
+		// explicit boolean overrides the global config; anything else falls back to it.
+		const diarize = typeof parsedMessage.start?.diarize === 'boolean' ? parsedMessage.start.diarize : undefined;
+
 		// If the start event says 'opus' but the URL parameter says 'ogg-opus', the
 		// stream is containerised Ogg-Opus.  Some clients send a generic 'opus'
 		// encoding in the start event without specifying the framing; the URL parameter
@@ -369,9 +376,12 @@ export class TranscriberProxy extends EventEmitter {
 
 		const connection = this.getConnection(tag);
 		if (connection) {
-			connection.updateInputFormat(mediaFormat);
+			// A re-start updates the media format and may also change the per-endpoint
+			// diarize flag; updateInputFormat applies the new diarize (reconnecting the
+			// backend if it changed).
+			connection.updateInputFormat(mediaFormat, diarize);
 		} else {
-			this.createConnection(tag, mediaFormat);
+			this.createConnection(tag, mediaFormat, diarize);
 		}
 	}
 
