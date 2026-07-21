@@ -39,15 +39,15 @@ describe('SidecarWsClient', () => {
         return mock;
       },
     });
-    const p = c.analyze('s', 'st', 'ten', Buffer.from([1, 2, 3, 4]));
+    const p = c.identify('ten', Buffer.from([1, 2, 3, 4]));
     mock.open();
     await tick();
     expect(seenUrl).toBe('ws://sidecar:8090/ws?token=tok');
     const sent = JSON.parse(mock.sent[0]);
-    expect(sent.type).toBe('analyze');
-    expect(sent.sessionId).toBe('s');
-    mock.reply({ id: sent.id, type: 'result', result: { speakerCount: 2, multiple: true, turns: [] } });
-    expect(await p).toEqual({ speakerCount: 2, multiple: true, turns: [] });
+    expect(sent.type).toBe('identify');
+    expect(sent.tenant).toBe('ten');
+    mock.reply({ id: sent.id, type: 'result', result: { identity: 'alice', score: 0.9, name: 'Alice' } });
+    expect(await p).toEqual({ identity: 'alice', score: 0.9, name: 'Alice' });
   });
 
   it('enroll resolves true on ack', async () => {
@@ -64,7 +64,7 @@ describe('SidecarWsClient', () => {
   it('returns null on timeout', async () => {
     const mock = new MockWs();
     const c = new SidecarWsClient({ url: 'ws://x/', token: 't', timeoutMs: 40, wsFactory: () => mock });
-    const p = c.analyze('s', 'st', 'ten', Buffer.from([0, 0]));
+    const p = c.identify('ten', Buffer.from([0, 0]));
     mock.open();
     expect(await p).toBeNull(); // never replied
   });
@@ -77,6 +77,6 @@ describe('SidecarWsClient', () => {
         throw new Error('refused');
       },
     });
-    expect(await c.analyze('s', 'st', 'ten', Buffer.from([0, 0]))).toBeNull();
+    expect(await c.identify('ten', Buffer.from([0, 0]))).toBeNull();
   });
 });

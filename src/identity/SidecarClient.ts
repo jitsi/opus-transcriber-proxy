@@ -22,13 +22,15 @@ export interface IdentifyResult {
   name?: string;
 }
 
-/** Transport-agnostic sidecar client surface (HTTP or WS implementations). */
+/** Transport-agnostic identity client surface (in-process, or HTTP/WS sidecar implementations). */
 export interface ISidecarClient {
-  analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null>;
   /** Embed a single audio slice and match it against the tenant's enrolled fingerprints (no diarization). */
   identify(tenant: string, pcm: Buffer): Promise<IdentifyResult | null>;
   enroll(identity: string, tenant: string, pcm: Buffer, name?: string): Promise<boolean>;
   sessionEnd(sessionId: string, streamId: string): Promise<void>;
+  /** Raw speaker embedding of an audio slice (L2-normalized), when the client can compute it locally.
+   *  Used for the single-speaker enrollment guard. Absent on remote clients that expose no embed op. */
+  embed?(pcm: Buffer): Promise<Float32Array | null>;
 }
 
 export interface SidecarClientOptions {
@@ -87,14 +89,6 @@ export class SidecarClient implements ISidecarClient {
       clearTimeout(timer);
       this.inFlight--;
     }
-  }
-
-  async analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null> {
-    return this.call(
-      '/analyze',
-      { 'content-type': 'application/octet-stream', 'x-tenant': tenant, 'x-session': sessionId, 'x-stream': streamId },
-      pcm,
-    );
   }
 
   async identify(tenant: string, pcm: Buffer): Promise<IdentifyResult | null> {

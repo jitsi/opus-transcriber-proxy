@@ -185,6 +185,14 @@ export const config = {
 		// async and multi-hop) is only cached this long, so a slightly-early first lookup self-heals
 		// once the record lands instead of poisoning identity for the whole session. Hits cache forever.
 		kvNegativeTtlMs: parseIntOrDefault(process.env.IDENTITY_KV_NEGATIVE_TTL_MS, 5000),
+		// In-container CAM++ embedding + Vectorize match (replaces the identity-sidecar hop). When the
+		// Vectorize creds are all set, the proxy embeds + matches in-process (LocalIdentityClient);
+		// otherwise it falls back to the sidecarUrl WS/HTTP client.
+		embeddingModel: process.env.EMBEDDING_MODEL || 'models/campplus.onnx',
+		matchThreshold: parseFloat(process.env.MATCH_THRESHOLD ?? '0.5'),
+		vectorizeAccountId: process.env.VECTORIZE_ACCOUNT_ID || '',
+		vectorizeIndex: process.env.VECTORIZE_INDEX || '',
+		vectorizeApiToken: process.env.VECTORIZE_API_TOKEN || '',
 		// Auto-enrollment from normal (single-speaker) streams — quality-gated + rate-limited.
 		enrollMinSpeechSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_MIN_SPEECH_SEC, 8),
 		enrollCooldownMs: parseIntOrDefault(process.env.IDENTITY_ENROLL_COOLDOWN_MS, 20000),

@@ -12,6 +12,7 @@ import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { SidecarClient, type ISidecarClient } from './identity/SidecarClient';
 import { SidecarWsClient } from './identity/SidecarWsClient';
+import { LocalIdentityClient } from './identity/LocalIdentityClient';
 import { IdentityAttributor } from './identity/IdentityAttributor';
 import { createIdentitySource, type IdentitySource, type ResolvedIdentity } from './identity/IdentitySource';
 import type { AttributedSegment } from './identity/RoomAttributor';
@@ -22,8 +23,23 @@ import type { AttributedSegment } from './identity/RoomAttributor';
 let sidecarSingleton: ISidecarClient | null | undefined;
 function getSidecar(): ISidecarClient | null {
 	if (sidecarSingleton !== undefined) return sidecarSingleton;
+	if (!config.identity?.enabled) {
+		sidecarSingleton = null;
+		return null;
+	}
+	// Prefer the in-container client (CAM++ embed + Vectorize match, no sidecar hop) when Vectorize
+	// creds are configured. Falls back to the WS/HTTP sidecar otherwise.
+	const { vectorizeAccountId, vectorizeIndex, vectorizeApiToken } = config.identity;
+	if (vectorizeAccountId && vectorizeIndex && vectorizeApiToken) {
+		sidecarSingleton = new LocalIdentityClient({
+			embeddingModel: config.identity.embeddingModel,
+			vectorize: { accountId: vectorizeAccountId, indexName: vectorizeIndex, apiToken: vectorizeApiToken },
+			matchThreshold: config.identity.matchThreshold,
+		});
+		return sidecarSingleton;
+	}
 	const url = config.identity?.sidecarUrl;
-	if (!config.identity?.enabled || !url) {
+	if (!url) {
 		sidecarSingleton = null;
 		return null;
 	}

@@ -1,6 +1,6 @@
 import WsWebSocket from 'ws';
 import logger from '../logger';
-import type { ISidecarClient, AnalyzeResult, IdentifyResult } from './SidecarClient';
+import type { ISidecarClient, IdentifyResult } from './SidecarClient';
 
 /** Minimal WHATWG-WebSocket surface (Node's global WebSocket, or a test double). */
 export interface WsLike {
@@ -144,11 +144,6 @@ export class SidecarWsClient implements ISidecarClient {
         resolve(null);
       }
     });
-  }
-
-  async analyze(sessionId: string, streamId: string, tenant: string, pcm: Buffer): Promise<AnalyzeResult | null> {
-    const m = await this.request({ type: 'analyze', sessionId, streamId, tenant, pcm: pcm.toString('base64') });
-    return m && m.type === 'result' ? (m.result ?? null) : null;
   }
 
   async identify(tenant: string, pcm: Buffer): Promise<IdentifyResult | null> {
