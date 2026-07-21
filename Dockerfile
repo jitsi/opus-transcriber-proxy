@@ -9,12 +9,18 @@
 #   image would run under QEMU emulation on arm64 and be far too slow. `npm run docker:build` builds
 #   them first; CI does the same before `docker build`.
 
+# Base is Debian (bookworm-slim, glibc) — NOT Alpine — because the in-container identity path
+# uses sherpa-onnx-node, whose prebuilt native binaries are built against glibc (no musl variant
+# is published). On Alpine/musl the sherpa .so fails to dlopen at runtime. The identity sidecar
+# uses the same base for the same reason. libopus/node-gyp build fine on Debian.
+
 # ---- Builder: compile the native Opus addon and bundle the server ----
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /usr/src/app
 
 # Toolchain for node-gyp + libopus (C/C++).
-RUN apk add --no-cache python3 make g++ git
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 # Install all dependencies (incl. dev: node-gyp, node-addon-api, esbuild).
 # binding.gyp is copied afterwards so this install does not trigger a build.
@@ -36,14 +42,14 @@ ARG GIT_HASH=unknown
 RUN GIT_HASH="$GIT_HASH" npm run build:bundle
 
 # ---- Runtime: slim image with production deps + both backends' artifacts ----
-FROM node:22-alpine AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /usr/src/app
 
-# libstdc++ is required at runtime by the compiled C++ addon.
-RUN apk add --no-cache libstdc++
+# libstdc++6 (needed by the compiled C++ addon and by sherpa-onnx) ships in the Debian base.
 
 # Production dependencies only. --ignore-scripts avoids any native rebuild
-# (binding.gyp is intentionally not present in this stage).
+# (binding.gyp is intentionally not present in this stage). Optional platform deps
+# (incl. sherpa-onnx-linux-<arch>, glibc prebuilt) are still installed.
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 
@@ -61,6 +67,9 @@ COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opu
 # binary is a prebuilt optional dep, so --ignore-scripts is fine — no native build needed).
 COPY models/campplus.onnx ./models/campplus.onnx
 ENV EMBEDDING_MODEL=/usr/src/app/models/campplus.onnx
+# So the sherpa-onnx native addon can resolve its sibling shared libraries (libonnxruntime.so, ...)
+# in the prebuilt platform package. CF Containers run linux/amd64 -> sherpa-onnx-linux-x64.
+ENV LD_LIBRARY_PATH=/usr/src/app/node_modules/sherpa-onnx-linux-x64
 
 # Expose the port
 EXPOSE 8080
