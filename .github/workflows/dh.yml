@@ -69,6 +69,12 @@ jobs:
                 source "$EMSDK/emsdk_env.sh"
                 npm run build:wasm
 
+            # CAM++ speaker-embedding model for the in-container identity path. Architecture-
+            # independent (like the WASM artifacts), so it's fetched on the host and baked into the
+            # image via COPY — the Dockerfile's `COPY models/campplus.onnx` fails without this.
+            - name: Fetch identity model
+              run: npm run fetch-models
+
             - name: Login to Docker Hub
               uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
               with:
