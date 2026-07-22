@@ -35,6 +35,19 @@ describe('KvRestIdentitySource', () => {
     expect(f).toHaveBeenCalledTimes(1);
   });
 
+  it('bounds the hit cache (oldest-first eviction) so a long-lived container cannot grow unbounded', async () => {
+    const f = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ customerId: 'c', data: { id: 'u' } }) }));
+    const src = new KvRestIdentitySource({ ...opts(f), maxEntries: 2 });
+    await src.resolve('s', 'a'); // cache: a
+    await src.resolve('s', 'b'); // cache: a,b
+    await src.resolve('s', 'c'); // cache: b,c (a evicted)
+    expect(f).toHaveBeenCalledTimes(3);
+    await src.resolve('s', 'b'); // still cached → no fetch
+    expect(f).toHaveBeenCalledTimes(3);
+    await src.resolve('s', 'a'); // evicted → re-queries KV
+    expect(f).toHaveBeenCalledTimes(4);
+  });
+
   it('does NOT permanently cache a 404 miss — re-queries after the negative TTL (self-heals when KV lands)', async () => {
     let clock = 1000;
     const f = vi

@@ -20,6 +20,8 @@ export interface KvRestOptions {
   negativeTtlMs?: number;
   /** Injectable clock (ms) for tests. */
   now?: () => number;
+  /** Max cached keys per map before oldest-first eviction (bounds a long-lived pool container). Default 5000. */
+  maxEntries?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -39,10 +41,22 @@ export class KvRestIdentitySource implements IdentitySource {
   private fetch: typeof fetch;
   private negativeTtlMs: number;
   private now: () => number;
+  private maxEntries: number;
   constructor(private o: KvRestOptions) {
     this.fetch = o.fetchImpl ?? fetch.bind(globalThis);
     this.negativeTtlMs = o.negativeTtlMs ?? 5000;
     this.now = o.now ?? Date.now;
+    this.maxEntries = o.maxEntries ?? 5000;
+  }
+
+  /** Insert with an oldest-first size cap so a long-lived (pool-mode) container can't grow the map
+   *  without bound; an evicted still-active key simply re-queries KV on its next lookup. */
+  private capSet<V>(m: Map<string, V>, key: string, value: V): void {
+    m.set(key, value);
+    if (m.size > this.maxEntries) {
+      const oldest = m.keys().next().value;
+      if (oldest !== undefined) m.delete(oldest);
+    }
   }
 
   async resolve(sessionId: string, participantId: string): Promise<ResolvedIdentity | null> {
@@ -68,8 +82,8 @@ export class KvRestIdentitySource implements IdentitySource {
     } catch (err) {
       logger.debug(`[identity] KV resolve ${key} failed: ${(err as Error).message}`);
     }
-    if (result) this.hits.set(key, result);
-    else this.retryAt.set(key, this.now() + this.negativeTtlMs);
+    if (result) this.capSet(this.hits, key, result);
+    else this.capSet(this.retryAt, key, this.now() + this.negativeTtlMs);
     return result;
   }
 }
