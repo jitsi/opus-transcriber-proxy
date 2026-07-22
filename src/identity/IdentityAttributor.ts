@@ -130,15 +130,18 @@ export class IdentityAttributor {
   }
 
   /**
-   * Slice the whole-utterance PCM for a set of words WITHOUT identifying anyone — used on
-   * individual (non-diarized) endpoints, which enroll in the background but must NOT run an
-   * open-set identify (the owner is already known, and a spurious match would misattribute).
-   * Returns null when there are no words or the window is empty. JIT-16065.
+   * The most recent `seconds` of buffered PCM (or all buffered audio, if less) — used to auto-enroll
+   * individual (non-diarized) endpoints in the background. It reads from the rolling ring buffer, NOT
+   * from a single final's word span, so enrollment gets a stable >= enrollMinSpeechSec window
+   * regardless of how the backend chunks its finals: granular finals emit ~short spans that would
+   * otherwise never reach the enroll threshold and silently disable enrollment. No identify is run
+   * (the endpoint owner is already known; a spurious open-set match would misattribute). JIT-16065.
    */
-  extractWindow(words: Word[]): { pcm: Buffer; windowSec: number } | null {
-    if (!words.length) return null;
-    const pcm = this.sliceSec(words[0].start, words[words.length - 1].end);
-    if (!pcm || pcm.length === 0) return null;
+  recentWindow(seconds: number): { pcm: Buffer; windowSec: number } | null {
+    const all = Buffer.concat(this.chunks);
+    if (all.length === 0) return null;
+    const want = Math.max(0, Math.floor(seconds * this.bytesPerSec)) & ~1; // even (s16le)
+    const pcm = want > 0 && all.length > want ? all.subarray(all.length - want) : all;
     return { pcm, windowSec: pcm.length / this.bytesPerSec };
   }
 

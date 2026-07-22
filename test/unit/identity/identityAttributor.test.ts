@@ -70,23 +70,28 @@ describe('IdentityAttributor', () => {
     expect(await att.analyze([], 't1')).toBeNull();
   });
 
-  it('extractWindow returns the utterance PCM + duration without calling identify', async () => {
+  it('recentWindow returns the last N seconds of buffered audio without calling identify', async () => {
     const seen = { calls: [] as number[] };
     const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st' });
-    att.appendPcm(pcmSeconds(6));
-    const w = att.extractWindow([
-      { text: 'hello', start: 1.0, end: 1.6 },
-      { text: 'world', start: 1.6, end: 3.0 },
-    ]);
+    att.appendPcm(pcmSeconds(12)); // 12s buffered
+    const w = att.recentWindow(8);
     expect(w).not.toBeNull();
     expect(seen.calls.length).toBe(0); // no identify — individual endpoint, owner already known
-    expect(w!.windowSec).toBeCloseTo(2.0, 1); // 1.0s..3.0s
+    expect(w!.windowSec).toBeCloseTo(8.0, 2); // trailing 8s, independent of any final span
     expect(w!.pcm.length % 2).toBe(0);
   });
 
-  it('extractWindow returns null for an empty utterance', () => {
+  it('recentWindow returns all buffered audio when less than requested (short session)', async () => {
     const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
-    expect(att.extractWindow([])).toBeNull();
+    att.appendPcm(pcmSeconds(3)); // only 3s so far
+    const w = att.recentWindow(8);
+    expect(w).not.toBeNull();
+    expect(w!.windowSec).toBeCloseTo(3.0, 2); // caller's enrollMinSpeechSec gate then skips enroll
+  });
+
+  it('recentWindow returns null when nothing is buffered', () => {
+    const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
+    expect(att.recentWindow(8)).toBeNull();
   });
 
   it('slices from the retained tail after the ring drops old audio', async () => {

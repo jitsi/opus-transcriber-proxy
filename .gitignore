@@ -189,3 +189,6 @@ poc-recordings/
 
 # Speaker-embedding ONNX model (fetched by scripts/fetch-models.sh, baked into the image via COPY)
 models/
+
+# Local-only test streamer (references local, non-committed recordings)
+scripts/stream-pcm.cjs

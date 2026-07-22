@@ -727,8 +727,10 @@ export class OutgoingConnection {
 				if (a.speakerCount > 1) this.everSawMultipleSpeakers = true;
 				return a.segments;
 			}
-			// INDIVIDUAL: background enroll only (no identify, no attribution override).
-			const w = this.identityAttributor.extractWindow(message.words);
+			// INDIVIDUAL: background enroll only (no identify, no attribution override). Enroll from a
+			// ROLLING window of recent audio (not this final's span) so it works regardless of how the
+			// backend chunks finals — short granular finals would otherwise never reach enrollMinSpeechSec.
+			const w = this.identityAttributor.recentWindow(config.identity?.enrollMinSpeechSec ?? 8);
 			if (w) {
 				const resolved = await this.resolveIdentity();
 				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
