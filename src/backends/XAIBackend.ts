@@ -346,7 +346,10 @@ export class XAIBackend implements TranscriptionBackend {
 		const isFinal: boolean = msg.speech_final === true;
 		const confidence = this.avgConfidence(msg.words);
 		const transcript = config.xai.includeLanguage && language && isFinal ? `${text} [${language}]` : text;
-		const words = this.extractWords(msg.words);
+		// Per-word timing is only consumed by the speaker-identity attributor. Attach it solely when the
+		// identity feature is enabled — otherwise it's dead payload on the wire, and keeping it off makes
+		// IDENTITY_ENABLED a true master switch (no identity-specific data leaves the backend when off).
+		const words = config.identity?.enabled ? this.extractWords(msg.words) : undefined;
 		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language, words);
 
 		if (isFinal) {
@@ -495,7 +498,9 @@ export class XAIBackend implements TranscriptionBackend {
 		// sidecar. Attach the complete word list (all speakers, with timing) to the FIRST emitted
 		// final so identity runs exactly once per turn over the whole audio window; the remaining
 		// per-speaker finals dispatch normally (they resolve to null and fall back to plain text).
-		const fullWords = isInterim ? undefined : this.extractWords(words);
+		// Only attach words (and thus set attributionDeferred) when identity is enabled — they exist
+		// solely for the attributor, so IDENTITY_ENABLED off = pre-identity diarized output.
+		const fullWords = !isInterim && config.identity?.enabled ? this.extractWords(words) : undefined;
 		let wordsAttached = false;
 
 		for (const segment of segments) {

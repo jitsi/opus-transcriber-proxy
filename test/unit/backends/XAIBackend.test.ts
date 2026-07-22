@@ -92,6 +92,9 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 		},
+		// Identity enabled by default here so the word-attachment tests exercise the identity-on path;
+		// individual tests flip `config.identity.enabled` to check the off (no-words) behaviour.
+		identity: { enabled: true },
 	},
 }));
 
@@ -575,6 +578,31 @@ describe('XAIBackend', () => {
 			// twice (once in the first final's per-speaker segments, once via its own fallback). JIT-16065.
 			expect(finalResults[0].attributionDeferred).toBeUndefined();
 			expect(finalResults[1].attributionDeferred).toBe(true);
+		});
+
+		it('attaches NO words when identity is disabled (master flag → pre-identity output)', () => {
+			(config as any).identity.enabled = false;
+			try {
+				getMockWs().simulateMessage(JSON.stringify({
+					type: 'transcript.partial',
+					is_final: true,
+					speech_final: true,
+					text: 'hello how are you',
+					words: [
+						{ text: 'hello', speaker: 0, start: 0, end: 0.3 },
+						{ text: 'how', speaker: 1, start: 0.5, end: 0.7 },
+					],
+				}));
+				// Still split per speaker (diarization is independent of identity)...
+				expect(finalResults).toHaveLength(2);
+				// ...but no identity-only payload leaves the backend.
+				expect(finalResults[0].words).toBeUndefined();
+				expect(finalResults[1].words).toBeUndefined();
+				expect(finalResults[0].attributionDeferred).toBeUndefined();
+				expect(finalResults[1].attributionDeferred).toBeUndefined();
+			} finally {
+				(config as any).identity.enabled = true;
+			}
 		});
 
 		it('should not attach words to diarized interims', () => {
