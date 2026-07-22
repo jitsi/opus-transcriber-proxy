@@ -10,6 +10,15 @@ function parseIntOrDefault(value: string | undefined, defaultValue: number): num
 	return isNaN(parsed) ? defaultValue : parsed;
 }
 
+// Float env parse that falls back to the default on unset/NaN/non-finite. Used for threshold/limit
+// knobs where a malformed value must never silently become NaN — e.g. IDENTITY_MAX_EMBED_SEC=NaN
+// would otherwise disable the embed cap (fail-open on the very knob that bounds it).
+function parseFloatOrDefault(value: string | undefined, defaultValue: number): number {
+	if (!value) return defaultValue;
+	const parsed = parseFloat(value);
+	return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
 function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	if (!value) return defaultValue;
 	try {
@@ -189,12 +198,12 @@ export const config = {
 		// Vectorize creds are all set, the proxy embeds + matches in-process (LocalIdentityClient);
 		// otherwise it falls back to the sidecarUrl WS/HTTP client.
 		embeddingModel: process.env.EMBEDDING_MODEL || 'models/campplus.onnx',
-		matchThreshold: parseFloat(process.env.MATCH_THRESHOLD ?? '0.5'),
+		matchThreshold: parseFloatOrDefault(process.env.MATCH_THRESHOLD, 0.5),
 		// Cap the audio fed to a single CAM++ embed. `compute()` is a synchronous native call on the
 		// container's event loop, so an unbounded slice (a long monologue turn, or the full enroll
 		// window) can stall every session on the container for seconds. ~4s is plenty for a speaker
 		// embedding; this bounds each embed to ~100-200ms. <= 0 disables the cap. JIT-16065.
-		maxEmbedSec: parseFloat(process.env.IDENTITY_MAX_EMBED_SEC ?? '4'),
+		maxEmbedSec: parseFloatOrDefault(process.env.IDENTITY_MAX_EMBED_SEC, 4),
 		vectorizeAccountId: process.env.VECTORIZE_ACCOUNT_ID || '',
 		vectorizeIndex: process.env.VECTORIZE_INDEX || '',
 		vectorizeApiToken: process.env.VECTORIZE_API_TOKEN || '',
@@ -207,7 +216,7 @@ export const config = {
 		// A second voice on a shared mic diverges → enroll aborted + disabled for the stream. Only
 		// active when the client can embed locally (LocalIdentityClient). Threshold is tuned live.
 		enrollConsistencySubWindowSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC, 2),
-		enrollConsistencyThreshold: parseFloat(process.env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD ?? '0.5'),
+		enrollConsistencyThreshold: parseFloatOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD, 0.5),
 		// Consecutive divergent enroll windows before enrollment is disabled for the stream. A single
 		// noisy window (cough, music, a long pause) must not permanently disable a genuine single
 		// speaker, so we skip (not disable) on the first divergence and only latch after this many
