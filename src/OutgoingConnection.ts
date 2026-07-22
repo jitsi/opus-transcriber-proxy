@@ -1016,6 +1016,12 @@ export class OutgoingConnection {
 			}
 		}
 
+		// Release any sidecar-side per-session state (no-op for the in-process LocalIdentityClient;
+		// frees per-stream state on the WS/HTTP fallback sidecar). Fire-and-forget, never throws.
+		if (this.identitySidecar && this.options.sessionId) {
+			void this.identitySidecar.sessionEnd(this.options.sessionId, this.localTag).catch(() => {});
+		}
+
 		if (notify) {
 			this.onClosed?.(this.localTag);
 		}
