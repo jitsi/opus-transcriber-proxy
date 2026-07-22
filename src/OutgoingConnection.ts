@@ -719,10 +719,25 @@ export class OutgoingConnection {
 	 * Returns null when the feature is off / no per-word timing / any failure. Never throws — runs
 	 * off the transcription hot path.
 	 */
+	/**
+	 * Whether the backend is diarizing for this connection — mirrors the backend's own resolution
+	 * (`backendConfig.diarize ?? config.<provider>.diarize`): the per-endpoint flag when set, else the
+	 * provider's global. The identity room path relies on the backend's per-word `speaker` labels, so
+	 * this gate must match exactly when those labels are actually produced (else a globally-diarized
+	 * endpoint with no per-endpoint flag would wrongly take the individual/enroll path). JIT-16065.
+	 */
+	private diarizeActive(): boolean {
+		if (this.diarize !== undefined) return this.diarize;
+		const provider = this.options.provider ?? getDefaultProvider();
+		if (provider === 'deepgram') return config.deepgram.diarize;
+		if (provider === 'xai') return config.xai.diarize;
+		return false;
+	}
+
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
 		if (!this.identityAttributor || message.is_interim || !message.words?.length) return null;
 		try {
-			if (this.diarize === true) {
+			if (this.diarizeActive()) {
 				// ROOM: per-speaker identify + attribution override.
 				const resolved = await this.resolveIdentity();
 				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
