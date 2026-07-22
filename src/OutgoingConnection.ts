@@ -439,6 +439,14 @@ export class OutgoingConnection {
 	 * stale (a newer reinitializeDecoder took over) or a fatal error occurred.
 	 */
 	private async reconnectBackend(generation: number, reason?: string): Promise<boolean> {
+		// Reset the identity ring up front — BEFORE the connect await below. The fresh backend stream
+		// restarts its per-word media clock at 0, so the ring's clock must too. It has to happen here
+		// (not after connect): on the recover path the decoder stays alive, so audio arriving during
+		// the reconnect is decoded into the ring AND queued, then flushed to the new backend afterwards
+		// (recoverBackend). Resetting after connect would wipe that queued gap audio from the ring while
+		// the new backend still receives it → every later word time runs ahead of the ring. JIT-16065.
+		this.identityAttributor?.reset();
+
 		// Detach all handlers from the old backend before closing it so that its
 		// onClosed / onError callbacks don't trigger OutgoingConnection teardown
 		// while we're replacing it.
@@ -497,10 +505,6 @@ export class OutgoingConnection {
 			const instruments = getInstruments();
 			instruments.backendConnectionsActive.add(1);
 			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
-
-			// A fresh backend stream restarts its per-word media clock at 0; drop the ring so the
-			// identity attributor's clock realigns with it (else post-reconnect words map to wrong audio).
-			this.identityAttributor?.reset();
 
 			logger.info(`Backend reconnected for tag: ${this.localTag}`);
 			return true;
