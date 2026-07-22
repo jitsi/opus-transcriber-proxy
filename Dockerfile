@@ -75,8 +75,10 @@ COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opu
 COPY models/campplus.onnx ./models/campplus.onnx
 ENV EMBEDDING_MODEL=/usr/src/app/models/campplus.onnx
 # So the sherpa-onnx native addon can resolve its sibling shared libraries (libonnxruntime.so, ...)
-# in the prebuilt platform package. CF Containers run linux/amd64 -> sherpa-onnx-linux-x64.
-ENV LD_LIBRARY_PATH=/usr/src/app/node_modules/sherpa-onnx-linux-x64
+# in the prebuilt platform package. Both arch dirs are listed (only the image's arch is actually
+# installed — sherpa's platform packages are per-os/cpu optional deps — the other path is skipped);
+# the image is published for both linux/amd64 and linux/arm64.
+ENV LD_LIBRARY_PATH=/usr/src/app/node_modules/sherpa-onnx-linux-x64:/usr/src/app/node_modules/sherpa-onnx-linux-arm64
 
 # Expose the port
 EXPOSE 8080
