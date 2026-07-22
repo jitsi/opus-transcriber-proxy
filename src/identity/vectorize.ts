@@ -60,8 +60,19 @@ export class VectorizeStore {
 		if (!res.ok) throw new Error(`vectorize upsert failed: ${res.status}`);
 	}
 
+	/**
+	 * Vector storage key. Fingerprints are scoped per tenant so the same person (same identity, e.g.
+	 * an email) enrolled under two tenants keeps two independent vectors — otherwise one tenant's
+	 * enroll merges into and rewrites the other's (`get_by_ids`/`delete` don't filter by tenant, only
+	 * `query` does). The bare identity is preserved in metadata and returned from `query`. JIT-16065.
+	 */
+	private key(tenant: string, identity: string): string {
+		return `${tenant}:${identity}`;
+	}
+
 	async upsert(tenant: string, identity: string, vector: Float32Array, name?: string): Promise<void> {
-		const existing = await this.call('get_by_ids', { ids: [identity], returnValues: true, returnMetadata: 'all' });
+		const id = this.key(tenant, identity);
+		const existing = await this.call('get_by_ids', { ids: [id], returnValues: true, returnMetadata: 'all' });
 		const prev = existing?.[0];
 		let merged = vector;
 		let n = 1;
@@ -78,7 +89,7 @@ export class VectorizeStore {
 		const values = Array.from(normalize(merged));
 		await this.upsertNdjson([
 			{
-				id: identity,
+				id,
 				values,
 				metadata: { identity, tenant, sampleCount: n, name: name ?? prevName, updatedAt: new Date().toISOString() },
 			},
@@ -90,10 +101,15 @@ export class VectorizeStore {
 		const vector = probe && probe.length ? Array.from(probe) : new Array(this.dimensions).fill(0);
 		const result = await this.call('query', { vector, topK, returnValues: true, returnMetadata: 'all', filter: { tenant } });
 		const matches = result?.matches ?? [];
-		return matches.map((m: any) => ({ identity: m.id, vector: Float32Array.from(m.values), name: m.metadata?.name }));
+		// Return the bare identity (from metadata), not the tenant-scoped row id.
+		return matches.map((m: any) => ({
+			identity: m.metadata?.identity ?? m.id,
+			vector: Float32Array.from(m.values),
+			name: m.metadata?.name,
+		}));
 	}
 
-	async delete(identity: string): Promise<void> {
-		await this.call('delete_by_ids', { ids: [identity] });
+	async delete(tenant: string, identity: string): Promise<void> {
+		await this.call('delete_by_ids', { ids: [this.key(tenant, identity)] });
 	}
 }
