@@ -70,6 +70,25 @@ describe('IdentityAttributor', () => {
     expect(await att.analyze([], 't1')).toBeNull();
   });
 
+  it('extractWindow returns the utterance PCM + duration without calling identify', async () => {
+    const seen = { calls: [] as number[] };
+    const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st' });
+    att.appendPcm(pcmSeconds(6));
+    const w = att.extractWindow([
+      { text: 'hello', start: 1.0, end: 1.6 },
+      { text: 'world', start: 1.6, end: 3.0 },
+    ]);
+    expect(w).not.toBeNull();
+    expect(seen.calls.length).toBe(0); // no identify — individual endpoint, owner already known
+    expect(w!.windowSec).toBeCloseTo(2.0, 1); // 1.0s..3.0s
+    expect(w!.pcm.length % 2).toBe(0);
+  });
+
+  it('extractWindow returns null for an empty utterance', () => {
+    const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
+    expect(att.extractWindow([])).toBeNull();
+  });
+
   it('slices from the retained tail after the ring drops old audio', async () => {
     const seen = { calls: [] as number[] };
     const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st', maxBufferSec: 2 });

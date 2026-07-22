@@ -129,6 +129,19 @@ export class IdentityAttributor {
     return { speakerCount, segments, pcm, windowSec: pcm.length / this.bytesPerSec };
   }
 
+  /**
+   * Slice the whole-utterance PCM for a set of words WITHOUT identifying anyone — used on
+   * individual (non-diarized) endpoints, which enroll in the background but must NOT run an
+   * open-set identify (the owner is already known, and a spurious match would misattribute).
+   * Returns null when there are no words or the window is empty. JIT-16065.
+   */
+  extractWindow(words: Word[]): { pcm: Buffer; windowSec: number } | null {
+    if (!words.length) return null;
+    const pcm = this.sliceSec(words[0].start, words[words.length - 1].end);
+    if (!pcm || pcm.length === 0) return null;
+    return { pcm, windowSec: pcm.length / this.bytesPerSec };
+  }
+
   /** Concatenate PCM slices for a set of [startSec, endSec] ranges (one speaker's runs). */
   private concatSlices(ranges: Array<[number, number]>): Buffer | null {
     const parts: Buffer[] = [];

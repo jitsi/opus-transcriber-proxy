@@ -197,6 +197,12 @@ export const config = {
 		enrollMinSpeechSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_MIN_SPEECH_SEC, 8),
 		enrollCooldownMs: parseIntOrDefault(process.env.IDENTITY_ENROLL_COOLDOWN_MS, 20000),
 		maxEnrollsPerSession: parseIntOrDefault(process.env.IDENTITY_MAX_ENROLLS_PER_SESSION, 10),
+		// Single-mic enroll guard (JIT-16065): before enrolling a non-diarized ("individual") stream,
+		// split the window into sub-windows, embed each, and require min pairwise cosine >= threshold.
+		// A second voice on a shared mic diverges → enroll aborted + disabled for the stream. Only
+		// active when the client can embed locally (LocalIdentityClient). Threshold is tuned live.
+		enrollConsistencySubWindowSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC, 2),
+		enrollConsistencyThreshold: parseFloat(process.env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD ?? '0.5'),
 	},
 
 	// Session resumption configuration

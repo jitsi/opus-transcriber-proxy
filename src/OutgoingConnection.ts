@@ -14,6 +14,7 @@ import { SidecarClient, type ISidecarClient } from './identity/SidecarClient';
 import { SidecarWsClient } from './identity/SidecarWsClient';
 import { LocalIdentityClient } from './identity/LocalIdentityClient';
 import { IdentityAttributor } from './identity/IdentityAttributor';
+import { checkEnrollConsistency } from './identity/enrollGuard';
 import { createIdentitySource, type IdentitySource, type ResolvedIdentity } from './identity/IdentitySource';
 import type { AttributedSegment } from './identity/RoomAttributor';
 
@@ -703,43 +704,80 @@ export class OutgoingConnection {
 	}
 
 	/**
-	 * Analyze a final and either auto-enroll (single-speaker stream) or return per-speaker
-	 * segments (room). Returns null when the feature is off / no per-word timing / single
-	 * speaker / any failure → the caller then uses the normal (non-overridden) dispatch path.
-	 * Never throws — runs off the transcription hot path.
+	 * Handle a final, gated by the per-endpoint `diarize` flag (the room-vs-individual discriminator,
+	 * Emil #106 — true only for endpoints carrying multiple speakers). JIT-16065:
+	 *  - diarize === true  (room): identify each backend-diarized speaker and return per-speaker
+	 *    segments so the store attributes speech to whoever actually spoke. NEVER enroll (a shared
+	 *    mic must not pollute a fingerprint).
+	 *  - diarize !== true  (individual): the owner is already known from the join, so DON'T run an
+	 *    open-set identify (a spurious match would misattribute). Just enroll in the background
+	 *    (guarded) and return null → normal mic-owner dispatch.
+	 * Returns null when the feature is off / no per-word timing / any failure. Never throws — runs
+	 * off the transcription hot path.
 	 */
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
 		if (!this.identityAttributor || message.is_interim || !message.words?.length) return null;
 		try {
-			const resolved = await this.resolveIdentity();
-			const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
-			const a = await this.identityAttributor.analyze(message.words, tenant);
-			if (!a || a.segments.length === 0) return null;
-			if (a.speakerCount > 1) {
-				this.everSawMultipleSpeakers = true;
-			} else {
-				// Single-speaker window → auto-enroll (guarded). Still return the attributed segment: it
-				// carries the resolved identity of whoever actually spoke (which on a shared mic may be a
-				// non-owner), so the store attributes it correctly instead of to the mic owner. Unresolved
-				// → identity null → downstream falls back to the mic-owner endpoint. JIT-16065.
-				this.maybeAutoEnroll(resolved, tenant, a.pcm, a.windowSec);
+			if (this.diarize === true) {
+				// ROOM: per-speaker identify + attribution override.
+				const resolved = await this.resolveIdentity();
+				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
+				const a = await this.identityAttributor.analyze(message.words, tenant);
+				if (!a || a.segments.length === 0) return null;
+				if (a.speakerCount > 1) this.everSawMultipleSpeakers = true;
+				return a.segments;
 			}
-			return a.segments;
+			// INDIVIDUAL: background enroll only (no identify, no attribution override).
+			const w = this.identityAttributor.extractWindow(message.words);
+			if (w) {
+				const resolved = await this.resolveIdentity();
+				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
+				void this.maybeAutoEnroll(resolved, tenant, w.pcm, w.windowSec);
+			}
+			return null;
 		} catch {
 			return null;
 		}
 	}
 
-	/** Quality-gated + rate-limited enrollment of a single-person stream's audio. */
-	private maybeAutoEnroll(resolved: ResolvedIdentity | null, tenant: string, pcm: Buffer, windowSec: number): void {
+	/**
+	 * Quality-gated + rate-limited enrollment of a single-person (non-diarized) stream's audio.
+	 * Before enrolling, the single-mic guard (checkEnrollConsistency) verifies the window is one
+	 * consistent voice; a second voice (shared mic) aborts the enroll and disables enrollment for
+	 * this stream for the rest of the session. JIT-16065.
+	 */
+	private async maybeAutoEnroll(resolved: ResolvedIdentity | null, tenant: string, pcm: Buffer, windowSec: number): Promise<void> {
 		const c = config.identity;
 		if (!resolved || !this.identitySidecar || !c) return;
-		if (this.everSawMultipleSpeakers) return; // this stream has shown a room — don't pollute the fingerprint
+		if (this.everSawMultipleSpeakers) return; // this stream has shown >1 voice — don't pollute the fingerprint
 		if (windowSec < c.enrollMinSpeechSec) return;
 		const now = Date.now();
 		if (now - this.lastEnrollAt < c.enrollCooldownMs) return;
 		if (this.enrollCount >= c.maxEnrollsPerSession) return;
+		// Set synchronously (before any await) so overlapping finals don't both pass the cooldown gate.
 		this.lastEnrollAt = now;
+
+		// Single-mic guard — only when the client can embed locally (LocalIdentityClient).
+		const embed = this.identitySidecar.embed?.bind(this.identitySidecar);
+		if (embed) {
+			const r = await checkEnrollConsistency(pcm, embed, {
+				subWindowSec: c.enrollConsistencySubWindowSec,
+				threshold: c.enrollConsistencyThreshold,
+			});
+			logger.debug(
+				`[identity] ${this.localTag} enroll-consistency reason=${r.reason} ` +
+					`minCos=${Number.isNaN(r.minCosine) ? 'n/a' : r.minCosine.toFixed(3)} windows=${r.windows}`,
+			);
+			if (!r.consistent) {
+				this.everSawMultipleSpeakers = true;
+				logger.info(
+					`[identity] ${this.localTag} enroll aborted — multi-voice window (minCos=${r.minCosine.toFixed(3)}); ` +
+						`disabling enroll for this stream`,
+				);
+				return;
+			}
+		}
+
 		this.enrollCount++;
 		void this.identitySidecar.enroll(resolved.identity, tenant, pcm, resolved.name).catch(() => {});
 	}

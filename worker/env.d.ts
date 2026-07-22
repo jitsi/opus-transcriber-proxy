@@ -91,6 +91,8 @@ export interface Env {
 	IDENTITY_ENROLL_MIN_SPEECH_SEC?: string;
 	IDENTITY_ENROLL_COOLDOWN_MS?: string;
 	IDENTITY_MAX_ENROLLS_PER_SESSION?: string;
+	IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC?: string;
+	IDENTITY_ENROLL_CONSISTENCY_THRESHOLD?: string;
 	// Identity sidecar container config (forwarded to the IdentityContainer)
 	VECTORIZE_ACCOUNT_ID?: string;
 	VECTORIZE_INDEX?: string;

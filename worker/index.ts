@@ -122,6 +122,8 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.IDENTITY_ENROLL_MIN_SPEECH_SEC && { IDENTITY_ENROLL_MIN_SPEECH_SEC: env.IDENTITY_ENROLL_MIN_SPEECH_SEC }),
 		...(env.IDENTITY_ENROLL_COOLDOWN_MS && { IDENTITY_ENROLL_COOLDOWN_MS: env.IDENTITY_ENROLL_COOLDOWN_MS }),
 		...(env.IDENTITY_MAX_ENROLLS_PER_SESSION && { IDENTITY_MAX_ENROLLS_PER_SESSION: env.IDENTITY_MAX_ENROLLS_PER_SESSION }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC && { IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC: env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD && { IDENTITY_ENROLL_CONSISTENCY_THRESHOLD: env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD }),
 		// In-container identity path (LocalIdentityClient): when Vectorize creds are present the
 		// container embeds+matches locally (CAM++ via sherpa-onnx-node) instead of calling the sidecar.
 		// EMBEDDING_MODEL has a Dockerfile default; only forwarded when an operator overrides it.
