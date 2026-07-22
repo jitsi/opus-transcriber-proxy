@@ -321,6 +321,9 @@ async function handleWebSocketWithDispatcher(
 	env: Env,
 	ctx: ExecutionContext,
 	sessionId: string,
+	// When false, this proxy still runs (to strip store-only `dispatchOnly` identity finals from the
+	// client stream) but does NOT connect to or dispatch to the Dispatcher DO. JIT-16065.
+	dispatchToStore: boolean,
 ): Promise<Response> {
 	// Create WebSocket pair for the client
 	const clientPair = new WebSocketPair();
@@ -356,7 +359,7 @@ async function handleWebSocketWithDispatcher(
 	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
 	// Each session gets its own DO instance for isolation.
 	let dispatcherWs: WebSocket | null = null;
-	if (env.DISPATCHER_DO) {
+	if (dispatchToStore && env.DISPATCHER_DO) {
 		try {
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
@@ -413,7 +416,7 @@ async function handleWebSocketWithDispatcher(
 
 	// Function to connect/reconnect to dispatcher DO
 	async function connectToDispatcher(allowDuringClose = false): Promise<WebSocket | null> {
-		if (!env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
+		if (!dispatchToStore || !env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
 
 		try {
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
@@ -522,8 +525,8 @@ async function handleWebSocketWithDispatcher(
 			serverWs.send(event.data);
 		}
 
-		// Dispatch transcriptions via DO WebSocket
-		if (parsed) {
+		// Dispatch transcriptions via DO WebSocket (skipped entirely on the strip-only path)
+		if (dispatchToStore && parsed) {
 			try {
 				const data = parsed;
 				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
@@ -744,9 +747,14 @@ export default {
 			);
 		}
 
-		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && env.DISPATCHER_DO) {
-			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
+		// Intercept a WebSocket upgrade through the inspecting proxy when we either dispatch to the
+		// store OR must strip store-only (dispatchOnly) identity finals from the client stream (identity
+		// enabled). Otherwise pass through verbatim below. Without this, the verbatim path would forward
+		// dispatchOnly finals to the client — exposing the resolved speaker's email + a duplicate "Guest"
+		// line (JIT-16065).
+		const dispatchToStore = useDispatcher && !!env.DISPATCHER_DO;
+		if (upgradeHeader === 'websocket' && (dispatchToStore || env.IDENTITY_ENABLED === 'true')) {
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, dispatchToStore);
 		}
 
 		// Forward request directly to container (pass-through mode)
