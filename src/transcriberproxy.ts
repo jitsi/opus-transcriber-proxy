@@ -286,11 +286,17 @@ export class TranscriberProxy extends EventEmitter {
 			// stored by the sibling final that carries the turn's full words, so running attribution here
 			// too would store those speakers' words twice. The raw final is still shown live (noDispatch).
 			if (identityEnabled && !message.attributionDeferred) {
-				// A single fallback segment carrying the whole transcript under the mic owner — used when
-				// attribution can't run (no words / non-16k backend / error) so the store never loses the
-				// utterance. This identity_attribution (not the noDispatch'd raw) is what the Worker forwards.
+				// Fallback text under the mic owner — used when attribution can't run (no words / non-16k
+				// backend / error) so the store never loses the utterance. On the FIRST diarized final the
+				// message carries the whole turn's `words` (all speakers) but its own `transcript` is just
+				// the first speaker's text; the other speakers' finals are attributionDeferred (skipped
+				// here). So reconstruct the whole-turn text from `words` when present — otherwise a failed
+				// attribution on that final would drop speakers #2..N from the store entirely. JIT-16065.
+				const fallbackText = message.words?.length ? message.words.map((w) => w.text).join(' ') : transcriptText;
+				// A single fallback segment carrying that text. This identity_attribution (not the
+				// noDispatch'd raw) is what the Worker forwards to the store.
 				const fallbackSegment = (): AttributedSegment[] => [
-					{ sessionSpeakerId: null, handle: null, identity: null, name: null, score: 0, text: transcriptText, start: 0, end: 0 },
+					{ sessionSpeakerId: null, handle: null, identity: null, name: null, score: 0, text: fallbackText, start: 0, end: 0 },
 				];
 				const emitAttribution = (segments: AttributedSegment[]) => {
 					this.emit('identity_attribution', {
@@ -324,7 +330,7 @@ export class TranscriberProxy extends EventEmitter {
 								timestamp: message.timestamp,
 								language: message.language,
 							};
-							for (const dm of buildDispatcherMessages(base, transcriptText, segments)) {
+							for (const dm of buildDispatcherMessages(base, fallbackText, segments)) {
 								this.dispatcherConnection.send(dm);
 							}
 						}
