@@ -495,6 +495,10 @@ export class OutgoingConnection {
 			instruments.backendConnectionsActive.add(1);
 			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
 
+			// A fresh backend stream restarts its per-word media clock at 0; drop the ring so the
+			// identity attributor's clock realigns with it (else post-reconnect words map to wrong audio).
+			this.identityAttributor?.reset();
+
 			logger.info(`Backend reconnected for tag: ${this.localTag}`);
 			return true;
 		} catch (error) {
@@ -868,7 +872,10 @@ export class OutgoingConnection {
 		}
 
 		logger.debug(`Forcing commit for idle connection ${this.localTag}`);
-		this.backend.forceCommit();
+		const injectedSilenceSec = this.backend.forceCommit();
+		// Mirror any provider-injected idle silence into the identity ring so its media clock stays
+		// aligned with what the backend received (xAI injects silence to flush a trailing final).
+		if (injectedSilenceSec > 0) this.identityAttributor?.appendSilence(injectedSilenceSec);
 		this.idleCommitTimeout = null;
 	}
 

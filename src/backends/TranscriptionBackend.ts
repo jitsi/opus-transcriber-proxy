@@ -82,10 +82,13 @@ export interface TranscriptionBackend {
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat;
 
 	/**
-	 * Force the backend to commit/finalize pending audio and generate transcription
-	 * Used when audio stream goes idle
+	 * Force the backend to commit/finalize pending audio and generate transcription.
+	 * Used when audio stream goes idle.
+	 * @returns seconds of synthetic silence injected into the provider's audio stream (0 if none).
+	 *   The xAI backend injects idle silence to flush a trailing utterance; the caller mirrors that
+	 *   into the identity PCM ring so its media clock stays aligned with what the backend received.
 	 */
-	forceCommit(): void;
+	forceCommit(): number;
 
 	/**
 	 * Update the transcription prompt with additional context

@@ -94,6 +94,24 @@ describe('IdentityAttributor', () => {
     expect(att.recentWindow(8)).toBeNull();
   });
 
+  it('appendSilence advances the media clock (mirrors provider-injected idle silence)', () => {
+    const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
+    att.appendPcm(pcmSeconds(2));
+    att.appendSilence(1); // xAI forceCommit injected 1s of silence the ring never saw
+    const w = att.recentWindow(60);
+    expect(w!.windowSec).toBeCloseTo(3.0, 2); // 2s audio + 1s silence
+  });
+
+  it('reset drops all buffered audio (realign after a backend reconnect)', () => {
+    const att = new IdentityAttributor(fakeSidecar(() => alice, { calls: [] }), { sessionId: 's', streamId: 'st' });
+    att.appendPcm(pcmSeconds(5));
+    att.reset();
+    expect(att.recentWindow(8)).toBeNull();
+    // A fresh append after reset starts a new timeline from 0.
+    att.appendPcm(pcmSeconds(2));
+    expect(att.recentWindow(60)!.windowSec).toBeCloseTo(2.0, 2);
+  });
+
   it('slices from the retained tail after the ring drops old audio', async () => {
     const seen = { calls: [] as number[] };
     const att = new IdentityAttributor(fakeSidecar(() => alice, seen), { sessionId: 's', streamId: 'st', maxBufferSec: 2 });

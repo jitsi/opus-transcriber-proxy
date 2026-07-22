@@ -116,14 +116,15 @@ export class OpenAIBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
+	forceCommit(): number {
 		if (this.status !== 'connected' || !this.ws) {
-			return;
+			return 0;
 		}
 
 		logger.debug(`Forcing commit for idle connection ${this.tag}`);
 		const commitMessage = { type: 'input_audio_buffer.commit' };
 		this.ws.send(JSON.stringify(commitMessage));
+		return 0; // commit message, no synthetic silence injected
 	}
 
 	updatePrompt(prompt: string): void {

@@ -198,8 +198,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
-		// Send a Finalize message to flush any pending audio
+	forceCommit(): number {
+		// Send a Finalize message to flush any pending audio (no silence injected → 0)
 		if (this.ws && this.status === 'connected') {
 			try {
 				this.ws.send(JSON.stringify({ type: 'Finalize' }));
@@ -208,6 +208,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 				logger.error(`Failed to send Finalize message for tag ${this.tag}`, error);
 			}
 		}
+		return 0;
 	}
 
 	updatePrompt(prompt: string): void {

@@ -55,6 +55,29 @@ export class IdentityAttributor {
     }
   }
 
+  /**
+   * Append `seconds` of digital silence so the ring's media clock stays aligned with what the ASR
+   * backend actually received. The xAI backend injects idle silence to flush a trailing utterance
+   * (forceCommit) — audio the ring never saw — which would otherwise shift every later word's time
+   * ahead of the ring and misattribute the wrong span. JIT-16065.
+   */
+  appendSilence(seconds: number): void {
+    if (!(seconds > 0)) return;
+    const bytes = Math.round(seconds * this.bytesPerSec) & ~1; // even (s16le)
+    if (bytes > 0) this.appendPcm(new Uint8Array(bytes));
+  }
+
+  /**
+   * Drop all buffered audio and reset the media clock to 0. Called on every backend reconnect: a
+   * fresh ASR stream restarts its per-word clock at 0, but the ring clock keeps counting, so without
+   * this the two diverge and post-reconnect words map to entirely wrong audio. JIT-16065.
+   */
+  reset(): void {
+    this.chunks = [];
+    this.bufferedBytes = 0;
+    this.bufStartSec = 0;
+  }
+
   private sliceSec(startSec: number, endSec: number): Buffer | null {
     const all = Buffer.concat(this.chunks);
     let rs = Math.floor((startSec - this.bufStartSec) * this.bytesPerSec);

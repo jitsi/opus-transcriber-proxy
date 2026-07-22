@@ -191,7 +191,7 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
+	forceCommit(): number {
 		// Finalize the trailing utterance when the stream goes idle WITHOUT closing it.
 		//
 		// xAI exposes no flush/commit message (unlike OpenAI's input_audio_buffer.commit
@@ -209,7 +209,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// the WS stays open for the next one. (Same idea as jitsi/skynet's idle flush
 		// worker, adapted: we can't force-transcribe xAI's model locally.)
 		if (!this.ws || this.status !== 'connected') {
-			return;
+			return 0;
 		}
 		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
 		const silenceMs = endpointingMs + XAI_IDLE_SILENCE_MARGIN_MS;
@@ -218,8 +218,12 @@ export class XAIBackend implements TranscriptionBackend {
 		try {
 			this.ws.send(silence);
 			logger.debug(`Injected ${silenceMs}ms idle silence to flush xAI final (WS kept open) for tag ${this.tag}`);
+			// Report the injected duration so the caller keeps the identity PCM ring aligned with the
+			// xAI stream (which now contains this silence the ring never saw).
+			return silenceMs / 1000;
 		} catch (error) {
 			logger.error(`Failed to inject idle silence for tag ${this.tag}`, error);
+			return 0;
 		}
 	}
 

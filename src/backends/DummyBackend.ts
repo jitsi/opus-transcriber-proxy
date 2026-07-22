@@ -58,8 +58,9 @@ export class DummyBackend implements TranscriptionBackend {
 		this.stats.packetCount++;
 	}
 
-	forceCommit(): void {
+	forceCommit(): number {
 		logger.debug(`Force commit called for dummy backend ${this.tag} (no-op)`);
+		return 0;
 	}
 
 	updatePrompt(prompt: string): void {
