@@ -15,9 +15,11 @@ export interface DispatcherBase {
  *   UNresolved speaker) → one message, no override → the dispatcher resolves the
  *   real endpoint from KV as usual (never clobber a normal participant's identity).
  * - Single speaker resolved to a known identity → one message overriding to it.
- * - Multiple speakers (a room) → one message per speaker segment, each overriding
- *   to the resolved identity, or to the provisional handle for unknown speakers
- *   (so downstream isn't dropped for a speaker with no KV entry).
+ * - Multiple speakers (a room) → one message per speaker segment: resolved speakers
+ *   override to their identity; an UNresolved speaker falls back to the mic-owner
+ *   endpoint (base.endpointId), never a synthetic `unknown:<handle>` id (which the
+ *   dispatcher would turn into a phantom virtual participant). Matches the server.ts
+ *   client path and the worker dispatch path. JIT-16065.
  */
 export function buildDispatcherMessages(
   base: DispatcherBase,
@@ -37,8 +39,9 @@ export function buildDispatcherMessages(
     return [{ ...base, text: originalText }];
   }
   return segments.map((s) => {
-    const id = s.identity ?? `unknown:${s.handle ?? 'speaker'}`;
-    const name = s.name ?? s.identity ?? s.handle ?? 'unknown';
-    return { ...base, endpointId: id, text: s.text, resolvedParticipant: { id, name } };
+    // Unresolved speaker → mic-owner endpoint (no override), so the dispatcher resolves it from KV
+    // instead of inventing a phantom participant. Resolved → override to the identity.
+    if (!s.identity) return { ...base, text: s.text };
+    return { ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } };
   });
 }

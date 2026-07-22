@@ -44,15 +44,16 @@ describe('buildDispatcherMessages', () => {
     expect(msgs[0].resolvedParticipant).toEqual({ id: 'u-123', name: 'Alice Smith' });
   });
 
-  it('room (multiple speakers) → per-speaker, unknown uses handle', () => {
+  it('room (multiple speakers) → resolved overrides, unresolved falls back to mic owner', () => {
     const msgs = buildDispatcherMessages(base, 'orig', [
       seg('alice', 'Purple Otter', 'first part'),
       seg(null, 'Amber Falcon', 'second part'),
     ]);
     expect(msgs).toHaveLength(2);
     expect(msgs[0]).toMatchObject({ endpointId: 'alice', text: 'first part', resolvedParticipant: { id: 'alice', name: 'alice' } });
-    expect(msgs[1].endpointId).toBe('unknown:Amber Falcon');
-    expect(msgs[1].resolvedParticipant).toEqual({ id: 'unknown:Amber Falcon', name: 'Amber Falcon' });
+    // Unresolved speaker → mic-owner endpoint, no synthetic unknown:<handle>, no override.
+    expect(msgs[1].endpointId).toBe('orig-a0');
+    expect(msgs[1].resolvedParticipant).toBeUndefined();
     expect(msgs[1].text).toBe('second part');
   });
 });
