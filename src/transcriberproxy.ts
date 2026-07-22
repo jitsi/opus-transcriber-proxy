@@ -40,6 +40,13 @@ export interface TranscriptionMessage {
 	 * via the Worker's dispatch path (JIT-16065).
 	 */
 	dispatchOnly?: boolean;
+	/**
+	 * When true, a sibling final in the same diarized turn carries this turn's full per-word list and
+	 * runs identity attribution over the whole window, so this (secondary per-speaker) final's content
+	 * is already stored via that sibling. Skip its store-attribution to avoid duplicating speakers'
+	 * words; the raw final is still shown live (noDispatch). Set on xAI diarized finals #2..N (JIT-16065).
+	 */
+	attributionDeferred?: boolean;
 }
 
 export interface TranscriberProxyOptions {
@@ -275,7 +282,10 @@ export class TranscriberProxy extends EventEmitter {
 			// a resolved-identity override (falling back to the plain transcript when nothing
 			// resolved). Any failure is swallowed — transcription is never affected. Gated by
 			// IDENTITY_ENABLED.
-			if (identityEnabled) {
+			// Secondary per-speaker finals of a diarized turn: their content is already attributed +
+			// stored by the sibling final that carries the turn's full words, so running attribution here
+			// too would store those speakers' words twice. The raw final is still shown live (noDispatch).
+			if (identityEnabled && !message.attributionDeferred) {
 				// A single fallback segment carrying the whole transcript under the mic owner — used when
 				// attribution can't run (no words / non-16k backend / error) so the store never loses the
 				// utterance. This identity_attribution (not the noDispatch'd raw) is what the Worker forwards.

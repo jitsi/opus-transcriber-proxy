@@ -510,11 +510,16 @@ export class XAIBackend implements TranscriptionBackend {
 			);
 
 			const attachWords = fullWords && !wordsAttached ? fullWords : undefined;
+			// A secondary per-speaker final of this turn (the turn's words went to an earlier segment).
+			// Its content is attributed + stored via that sibling, so flag it to skip store-attribution
+			// (otherwise every non-first speaker's words are stored twice). Only meaningful for finals.
+			const attributionDeferred = !isInterim && !!fullWords && wordsAttached;
 			const message = this.createMessage(text, confidence, now, randomUUID(), isInterim, segment.speaker, language, attachWords);
 			if (isInterim) {
 				this.onInterimTranscription?.(message);
 			} else {
 				if (attachWords) wordsAttached = true;
+				if (attributionDeferred) message.attributionDeferred = true;
 				this.onCompleteTranscription?.(message);
 			}
 		}

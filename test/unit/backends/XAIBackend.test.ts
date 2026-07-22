@@ -570,6 +570,11 @@ describe('XAIBackend', () => {
 				{ text: 'you', start: 0.9, end: 1.1, speaker: 1 },
 			]);
 			expect(finalResults[1].words).toBeUndefined();
+			// The first final attributes the whole turn (all speakers); the secondary final is flagged
+			// so the proxy skips its store-attribution — otherwise speaker 1's words would be stored
+			// twice (once in the first final's per-speaker segments, once via its own fallback). JIT-16065.
+			expect(finalResults[0].attributionDeferred).toBeUndefined();
+			expect(finalResults[1].attributionDeferred).toBe(true);
 		});
 
 		it('should not attach words to diarized interims', () => {
