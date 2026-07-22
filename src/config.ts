@@ -190,6 +190,11 @@ export const config = {
 		// otherwise it falls back to the sidecarUrl WS/HTTP client.
 		embeddingModel: process.env.EMBEDDING_MODEL || 'models/campplus.onnx',
 		matchThreshold: parseFloat(process.env.MATCH_THRESHOLD ?? '0.5'),
+		// Cap the audio fed to a single CAM++ embed. `compute()` is a synchronous native call on the
+		// container's event loop, so an unbounded slice (a long monologue turn, or the full enroll
+		// window) can stall every session on the container for seconds. ~4s is plenty for a speaker
+		// embedding; this bounds each embed to ~100-200ms. <= 0 disables the cap. JIT-16065.
+		maxEmbedSec: parseFloat(process.env.IDENTITY_MAX_EMBED_SEC ?? '4'),
 		vectorizeAccountId: process.env.VECTORIZE_ACCOUNT_ID || '',
 		vectorizeIndex: process.env.VECTORIZE_INDEX || '',
 		vectorizeApiToken: process.env.VECTORIZE_API_TOKEN || '',

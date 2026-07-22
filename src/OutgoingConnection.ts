@@ -36,6 +36,7 @@ function getSidecar(): ISidecarClient | null {
 			embeddingModel: config.identity.embeddingModel,
 			vectorize: { accountId: vectorizeAccountId, indexName: vectorizeIndex, apiToken: vectorizeApiToken },
 			matchThreshold: config.identity.matchThreshold,
+			maxEmbedSec: config.identity.maxEmbedSec,
 		});
 		return sidecarSingleton;
 	}
