@@ -75,6 +75,29 @@ describe('SidecarWsClient', () => {
     expect(await c.identify('ten', Buffer.from([0, 0]))).toBeNull();
   });
 
+  it('retries after a synchronous factory throw (the connect memo is cleared, not latched)', async () => {
+    const mock = new MockWs();
+    let calls = 0;
+    const c = new SidecarWsClient({
+      url: 'ws://x/',
+      token: 't',
+      timeoutMs: 1000,
+      wsFactory: () => {
+        calls++;
+        if (calls === 1) throw new Error('refused'); // first attempt throws synchronously
+        return mock;
+      },
+    });
+    expect(await c.identify('ten', Buffer.from([0, 0]))).toBeNull(); // first → null
+    const p = c.identify('ten', Buffer.from([1, 2, 3, 4])); // second must retry, not return latched null
+    mock.open();
+    await tick();
+    expect(calls).toBe(2); // factory invoked again → memo was cleared
+    const sent = JSON.parse(mock.sent[0]);
+    mock.reply({ id: sent.id, type: 'result', result: { identity: 'alice', score: 0.9, name: 'Alice' } });
+    expect(await p).toEqual({ identity: 'alice', score: 0.9, name: 'Alice' });
+  });
+
   it('returns null when the socket fails to connect', async () => {
     const c = new SidecarWsClient({
       url: 'ws://x/',

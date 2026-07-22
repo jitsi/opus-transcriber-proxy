@@ -63,13 +63,12 @@ export class SidecarWsClient implements ISidecarClient {
   private connect(): Promise<WsLike | null> {
     if (this.ws && this.ws.readyState === 1) return Promise.resolve(this.ws);
     if (this.connecting) return this.connecting;
-    this.connecting = new Promise<WsLike | null>((resolve) => {
+    const p = new Promise<WsLike | null>((resolve) => {
       let settled = false;
       const settle = (v: WsLike | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(connectTimer);
-        this.connecting = null;
         resolve(v);
       };
       // Bound the CONNECT itself: the per-request timeout only starts after connect() resolves, so a
@@ -103,7 +102,14 @@ export class SidecarWsClient implements ISidecarClient {
       });
       ws.addEventListener('error', () => settle(null));
     });
-    return this.connecting;
+    this.connecting = p;
+    // Clear the memo once the attempt settles — via .then (not inside the executor), so it also fires
+    // for a SYNCHRONOUS factory throw, where an in-executor `this.connecting = null` would be clobbered
+    // by this assignment and latch a resolved-null promise forever. A later request then reconnects.
+    void p.then(() => {
+      if (this.connecting === p) this.connecting = null;
+    });
+    return p;
   }
 
   private handleMessage(data: unknown): void {
