@@ -128,6 +128,9 @@ export class OutgoingConnection {
 	private resolvedIdentityP?: Promise<ResolvedIdentity | null>;
 	private lastEnrollAt = 0;
 	private enrollCount = 0;
+	/** Consecutive divergent enroll windows; latches everSawMultipleSpeakers only past the configured
+	 *  strike count so one noisy window doesn't permanently disable a genuine single speaker. */
+	private enrollDivergenceStrikes = 0;
 
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -764,8 +767,9 @@ export class OutgoingConnection {
 	/**
 	 * Quality-gated + rate-limited enrollment of a single-person (non-diarized) stream's audio.
 	 * Before enrolling, the single-mic guard (checkEnrollConsistency) verifies the window is one
-	 * consistent voice; a second voice (shared mic) aborts the enroll and disables enrollment for
-	 * this stream for the rest of the session. JIT-16065.
+	 * consistent voice. A divergent window skips that enroll; only after `enrollConsistencyMaxStrikes`
+	 * consecutive divergent windows is enrollment disabled for the stream (so a transient cough/pause
+	 * doesn't permanently disable a genuine single speaker). JIT-16065.
 	 */
 	private async maybeAutoEnroll(resolved: ResolvedIdentity | null, tenant: string, pcm: Buffer, windowSec: number): Promise<void> {
 		const c = config.identity;
@@ -790,13 +794,26 @@ export class OutgoingConnection {
 					`minCos=${Number.isNaN(r.minCosine) ? 'n/a' : r.minCosine.toFixed(3)} windows=${r.windows}`,
 			);
 			if (!r.consistent) {
-				this.everSawMultipleSpeakers = true;
-				logger.info(
-					`[identity] ${this.localTag} enroll aborted — multi-voice window (minCos=${r.minCosine.toFixed(3)}); ` +
-						`disabling enroll for this stream`,
-				);
+				// Skip THIS enroll, but only disable the stream after enough consecutive divergent
+				// windows — a single cough/pause/music window must not permanently disable a genuine
+				// single speaker. A consistent window (below) resets the strike count.
+				this.enrollDivergenceStrikes++;
+				const maxStrikes = c.enrollConsistencyMaxStrikes;
+				if (this.enrollDivergenceStrikes >= maxStrikes) {
+					this.everSawMultipleSpeakers = true;
+					logger.info(
+						`[identity] ${this.localTag} enroll disabled — ${this.enrollDivergenceStrikes} consecutive ` +
+							`multi-voice windows (last minCos=${r.minCosine.toFixed(3)})`,
+					);
+				} else {
+					logger.debug(
+						`[identity] ${this.localTag} enroll skipped — multi-voice window ` +
+							`(minCos=${r.minCosine.toFixed(3)}, strike ${this.enrollDivergenceStrikes}/${maxStrikes})`,
+					);
+				}
 				return;
 			}
+			this.enrollDivergenceStrikes = 0; // consistent window → reset the streak
 		}
 
 		this.enrollCount++;

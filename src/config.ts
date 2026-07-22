@@ -203,6 +203,11 @@ export const config = {
 		// active when the client can embed locally (LocalIdentityClient). Threshold is tuned live.
 		enrollConsistencySubWindowSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC, 2),
 		enrollConsistencyThreshold: parseFloat(process.env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD ?? '0.5'),
+		// Consecutive divergent enroll windows before enrollment is disabled for the stream. A single
+		// noisy window (cough, music, a long pause) must not permanently disable a genuine single
+		// speaker, so we skip (not disable) on the first divergence and only latch after this many
+		// in a row; any consistent window resets the count. Default 3.
+		enrollConsistencyMaxStrikes: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES, 3),
 	},
 
 	// Session resumption configuration
