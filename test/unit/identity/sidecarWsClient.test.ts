@@ -69,6 +69,12 @@ describe('SidecarWsClient', () => {
     expect(await p).toBeNull(); // never replied
   });
 
+  it('returns null when the connect hangs (never opens) — bounded by the connect timeout', async () => {
+    const mock = new MockWs(); // never .open()ed → no open/error/close ever fires
+    const c = new SidecarWsClient({ url: 'ws://x/', token: 't', timeoutMs: 30, wsFactory: () => mock });
+    expect(await c.identify('ten', Buffer.from([0, 0]))).toBeNull();
+  });
+
   it('returns null when the socket fails to connect', async () => {
     const c = new SidecarWsClient({
       url: 'ws://x/',

@@ -65,37 +65,43 @@ export class SidecarWsClient implements ISidecarClient {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise<WsLike | null>((resolve) => {
       let settled = false;
+      const settle = (v: WsLike | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        this.connecting = null;
+        resolve(v);
+      };
+      // Bound the CONNECT itself: the per-request timeout only starts after connect() resolves, so a
+      // TCP connect that hangs (no open/error/close) would otherwise park every request forever and
+      // never clear this.connecting. On timeout, give up this attempt (best-effort close) → null.
+      const connectTimer = setTimeout(() => {
+        logger.debug('[identity] sidecar WS connect timed out');
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+        settle(null);
+      }, this.timeoutMs);
       let ws: WsLike;
       try {
         ws = this.factory(this.wsUrl);
       } catch (err) {
         logger.debug(`[identity] sidecar WS connect failed: ${(err as Error).message}`);
-        this.connecting = null;
-        return resolve(null);
+        return settle(null);
       }
       ws.addEventListener('open', () => {
         this.ws = ws;
-        settled = true;
-        this.connecting = null;
-        resolve(ws);
+        settle(ws);
       });
       ws.addEventListener('message', (ev: any) => this.handleMessage(typeof ev === 'string' ? ev : ev?.data));
       ws.addEventListener('close', () => {
         if (this.ws === ws) this.ws = null;
-        if (!settled) {
-          settled = true;
-          this.connecting = null;
-          resolve(null);
-        }
+        settle(null);
         this.failAllPending();
       });
-      ws.addEventListener('error', () => {
-        if (!settled) {
-          settled = true;
-          this.connecting = null;
-          resolve(null);
-        }
-      });
+      ws.addEventListener('error', () => settle(null));
     });
     return this.connecting;
   }
