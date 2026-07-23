@@ -73,30 +73,14 @@ function runReplayOnce(): Promise<boolean> {
 		const sessionId = 'monitor-' + crypto.randomBytes(6).toString('hex');
 		const url = (URL_TEMPLATE as string).replace('__SESSION_ID__', sessionId);
 		const args = [REPLAY_SCRIPT, SAMPLE, url, '0', '--ci', `--connect-timeout=${CONNECT_TIMEOUT}`, `--assert-min-finals=${MIN_FINALS}`];
-		for (const [name, value] of Object.entries(HEADERS)) {
-			args.push('-H', `${name}: ${value}`);
+		// Pass headers to the replay via the environment (REPLAY_HEADERS), never on the command
+		// line, so credential-bearing values stay out of the process argument list.
+		const childEnv = { ...process.env };
+		if (Object.keys(HEADERS).length > 0) {
+			childEnv.REPLAY_HEADERS = JSON.stringify(HEADERS);
 		}
 		console.log(`monitor: starting check sessionId=${sessionId}`);
-		const child = spawn('node', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-		// Forward the replay's output line by line, but never echo its "Custom headers:" line:
-		// the configured headers may carry credentials and must not reach the logs.
-		const forward = (stream: NodeJS.ReadableStream, out: NodeJS.WritableStream) => {
-			let buf = '';
-			stream.on('data', (chunk) => {
-				buf += chunk.toString();
-				let nl: number;
-				while ((nl = buf.indexOf('\n')) >= 0) {
-					const line = buf.slice(0, nl);
-					buf = buf.slice(nl + 1);
-					if (!line.startsWith('Custom headers:')) out.write(line + '\n');
-				}
-			});
-			stream.on('end', () => {
-				if (buf && !buf.startsWith('Custom headers:')) out.write(buf + '\n');
-			});
-		};
-		if (child.stdout) forward(child.stdout, process.stdout);
-		if (child.stderr) forward(child.stderr, process.stderr);
+		const child = spawn('node', args, { stdio: ['ignore', 'inherit', 'inherit'], env: childEnv });
 		child.on('exit', (code) => resolve(code === 0));
 		child.on('error', (err) => {
 			console.error(`monitor: failed to spawn replay: ${err.message}`);
