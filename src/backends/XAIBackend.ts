@@ -346,10 +346,11 @@ export class XAIBackend implements TranscriptionBackend {
 		const isFinal: boolean = msg.speech_final === true;
 		const confidence = this.avgConfidence(msg.words);
 		const transcript = config.xai.includeLanguage && language && isFinal ? `${text} [${language}]` : text;
-		// Per-word timing is only consumed by the speaker-identity attributor. Attach it solely when the
-		// identity feature is enabled — otherwise it's dead payload on the wire, and keeping it off makes
-		// IDENTITY_ENABLED a true master switch (no identity-specific data leaves the backend when off).
-		const words = config.identity?.enabled ? this.extractWords(msg.words) : undefined;
+		// Per-word timing is only consumed by the speaker-identity attributor, and only on FINALS
+		// (identityAttributeFinal ignores interims). Attach it solely when identity is enabled AND this
+		// is a final — otherwise it's dead payload on every interim, and keeping it off when the feature
+		// is disabled makes IDENTITY_ENABLED a true master switch.
+		const words = config.identity?.enabled && isFinal ? this.extractWords(msg.words) : undefined;
 		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language, words);
 
 		if (isFinal) {
