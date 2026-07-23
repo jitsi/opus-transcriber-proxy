@@ -309,9 +309,14 @@ export class TranscriberProxy extends EventEmitter {
 						segments,
 					});
 				};
+				// `handled` scopes the .catch to a rejection of identityAttributeFinal itself. Without it,
+				// a throw INSIDE the .then (an 'identity_attribution' listener, or dispatcherConnection.send)
+				// would fall through to .catch and emit the fallback a SECOND time — double-storing the turn.
+				let handled = false;
 				newConnection
 					.identityAttributeFinal(message)
 					.then((segments) => {
+						handled = true;
 						const effective = segments && segments.length > 0 ? segments : fallbackSegment();
 						emitAttribution(effective);
 						if (segments && segments.length > 0) {
@@ -335,7 +340,9 @@ export class TranscriberProxy extends EventEmitter {
 							}
 						}
 					})
-					.catch(() => emitAttribution(fallbackSegment()));
+					.catch(() => {
+						if (!handled) emitAttribution(fallbackSegment());
+					});
 			}
 		};
 		newConnection.onClosed = (tag) => {
