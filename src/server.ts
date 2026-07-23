@@ -295,7 +295,12 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 				// synthetic "unknown:<handle>" id, which the dispatcher would turn into a phantom virtual
 				// participant (mis-attribution + inflated meeting roster). JIT-16065.
 				const id = s.identity ?? data.participantId;
-				const name = s.identity ? (s.name ?? undefined) : undefined;
+				// A resolved speaker ALWAYS carries a name (fall back to the identity itself when the
+				// fingerprint has no display name), mirroring the Node dispatcher builder. Otherwise the
+				// worker — which detects identity finals by name presence — would miss it and the
+				// dispatcher's KV lookup of the email endpoint finds nothing → the utterance is dropped
+				// from the store. Unresolved segments stay name-less (mic-owner, normal KV path). JIT-16065.
+				const name = s.identity ? (s.name ?? s.identity) : undefined;
 				const msg: TranscriptionMessage = {
 					type: 'transcription-result',
 					event: 'transcription-result',

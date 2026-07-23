@@ -544,11 +544,13 @@ async function handleWebSocketWithDispatcher(
 						language: data.language,
 					};
 
-					// An identity-attributed final carries a resolved speaker name (id = fingerprint
-					// email). Forward it as resolvedParticipant so the dispatcher attributes to that
-					// speaker instead of the KV lookup for a synthetic/absent endpoint. Normal
-					// transcriptions have no name → left untouched, keeping the standard KV path.
-					if (data.participant?.name && data.participant?.id) {
+					// An identity-attributed final (dispatchOnly, resolved id = fingerprint email + name)
+					// is forwarded as resolvedParticipant so the dispatcher attributes to that speaker
+					// instead of a KV lookup for the synthetic/absent email endpoint. Keyed on the explicit
+					// dispatchOnly marker (not just name presence) so an ordinary transcription that happens
+					// to carry a participant.name is never misread as an identity override. Unresolved
+					// identity segments are mic-owner-attributed (no name) → normal KV path. JIT-16065.
+					if (data.dispatchOnly && data.participant?.name && data.participant?.id) {
 						dispatcherMessage.resolvedParticipant = {
 							id: data.participant.id,
 							name: data.participant.name,
