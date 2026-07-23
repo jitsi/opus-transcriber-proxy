@@ -284,7 +284,7 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 			messageId: string;
 			timestamp: number;
 			language?: string;
-			segments: Array<{ identity: string | null; name: string | null; handle: string | null; text: string }>;
+			segments: Array<{ identity: string | null; name: string | null; text: string }>;
 		}) => {
 			if (!sendBack) return;
 			// These are STORE-ONLY (dispatchOnly) finals, relayed over the client WS purely so the
@@ -298,10 +298,10 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 			const currentWs = session.getWebSocket();
 			if (!currentWs || currentWs.readyState !== 1) return;
 			data.segments.forEach((s, i) => {
-				// Only a RESOLVED (known-enrolled) identity overrides the speaker. An unresolved cluster
-				// (provisional handle like "Crimson Otter") is attributed to the mic-owner endpoint — NOT a
-				// synthetic "unknown:<handle>" id, which the dispatcher would turn into a phantom virtual
-				// participant (mis-attribution + inflated meeting roster). JIT-16065.
+				// Only a RESOLVED (known-enrolled) identity overrides the speaker. An unresolved cluster is
+				// attributed to the mic-owner endpoint — NOT a synthetic "unknown:<id>" id, which the
+				// dispatcher would turn into a phantom virtual participant (mis-attribution + inflated
+				// meeting roster). JIT-16065.
 				const id = s.identity ?? data.participantId;
 				// A resolved speaker ALWAYS carries a name (fall back to the identity itself when the
 				// fingerprint has no display name), mirroring the Node dispatcher builder. Otherwise the

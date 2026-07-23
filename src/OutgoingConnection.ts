@@ -733,18 +733,6 @@ export class OutgoingConnection {
 	}
 
 	/**
-	 * Handle a final, gated by the per-endpoint `diarize` flag (the room-vs-individual discriminator,
-	 * Emil #106 — true only for endpoints carrying multiple speakers). JIT-16065:
-	 *  - diarize === true  (room): identify each backend-diarized speaker and return per-speaker
-	 *    segments so the store attributes speech to whoever actually spoke. NEVER enroll (a shared
-	 *    mic must not pollute a fingerprint).
-	 *  - diarize !== true  (individual): the owner is already known from the join, so DON'T run an
-	 *    open-set identify (a spurious match would misattribute). Just enroll in the background
-	 *    (guarded) and return null → normal mic-owner dispatch.
-	 * Returns null when the feature is off / no per-word timing / any failure. Never throws — runs
-	 * off the transcription hot path.
-	 */
-	/**
 	 * Whether the backend is diarizing for this connection — mirrors the backend's own resolution
 	 * (`backendConfig.diarize ?? config.<provider>.diarize`): the per-endpoint flag when set, else the
 	 * provider's global. The identity room path relies on the backend's per-word `speaker` labels, so
@@ -759,6 +747,18 @@ export class OutgoingConnection {
 		return false;
 	}
 
+	/**
+	 * Handle a final, gated by the per-endpoint `diarize` flag (the room-vs-individual discriminator,
+	 * Emil #106 — true only for endpoints carrying multiple speakers). JIT-16065:
+	 *  - diarize === true  (room): identify each backend-diarized speaker and return per-speaker
+	 *    segments so the store attributes speech to whoever actually spoke. NEVER enroll (a shared
+	 *    mic must not pollute a fingerprint).
+	 *  - diarize !== true  (individual): the owner is already known from the join, so DON'T run an
+	 *    open-set identify (a spurious match would misattribute). Just enroll in the background
+	 *    (guarded) and return null → normal mic-owner dispatch.
+	 * Returns null when the feature is off / no per-word timing / any failure. Never throws — runs
+	 * off the transcription hot path.
+	 */
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
 		if (!this.identityAttributor || message.is_interim) return null;
 		// Snapshot the reconnect generation: resolveIdentity() below awaits a KV fetch (up to seconds),
@@ -1077,6 +1077,10 @@ export class OutgoingConnection {
 		if (this.identitySidecar && this.options.sessionId) {
 			void this.identitySidecar.sessionEnd(this.options.sessionId, this.localTag).catch(() => {});
 		}
+		// Drop the per-stream PCM ring (up to ~120s of s16le audio ≈ 3.8 MB) so it's reclaimed at close
+		// rather than lingering until the whole connection object is GC'd. JIT-16065.
+		this.identityAttributor?.reset();
+		this.identityAttributor = undefined;
 
 		if (notify) {
 			this.onClosed?.(this.localTag);

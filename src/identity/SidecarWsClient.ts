@@ -42,10 +42,13 @@ export class SidecarWsClient implements ISidecarClient {
 	constructor(o: SidecarWsClientOptions) {
 		this.timeoutMs = o.timeoutMs ?? 30000;
 		this.maxInFlight = o.maxInFlight ?? 8;
-		// CF Access service-token headers (reuses the token that already fronts the proxy domain),
-		// so the container's call to wss://<own-domain>/identity passes Zero Trust. The `ws` package
-		// is used because the global (undici) WebSocket can't set custom headers.
+		// Auth via request headers (the `ws` package supports them; the global undici WebSocket can't):
+		//  - Authorization: Bearer <token> — the app-level sidecar token, in a header rather than the URL
+		//    query so it never lands in access/proxy logs (matches the HTTP SidecarClient).
+		//  - CF-Access-Client-Id/Secret — the CF Access service token that fronts the proxy domain, so a
+		//    container→wss://<own-domain>/identity call passes Zero Trust.
 		const headers: Record<string, string> = {};
+		if (o.token) headers['Authorization'] = `Bearer ${o.token}`;
 		if (o.accessClientId) headers['CF-Access-Client-Id'] = o.accessClientId;
 		if (o.accessClientSecret) headers['CF-Access-Client-Secret'] = o.accessClientSecret;
 		this.factory =
@@ -55,7 +58,6 @@ export class SidecarWsClient implements ISidecarClient {
 		// Append /ws to the base path so a co-located route (…/identity) becomes …/identity/ws,
 		// and a bare host (/) becomes /ws.
 		u.pathname = `${u.pathname.replace(/\/$/, '')}/ws`;
-		if (o.token) u.searchParams.set('token', o.token);
 		this.wsUrl = u.toString();
 	}
 

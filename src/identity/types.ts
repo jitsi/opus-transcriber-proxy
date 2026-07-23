@@ -14,7 +14,6 @@ export interface Word {
 /** A per-speaker slice of an utterance, with the resolved identity (or nulls when unresolved). */
 export interface AttributedSegment {
 	sessionSpeakerId: number | null;
-	handle: string | null;
 	identity: string | null;
 	name: string | null;
 	score: number;

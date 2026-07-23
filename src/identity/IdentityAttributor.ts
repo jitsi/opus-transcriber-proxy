@@ -137,7 +137,6 @@ export class IdentityAttributor {
 			const m = idBySpeaker.get(run.speaker);
 			return {
 				sessionSpeakerId: run.speaker,
-				handle: null,
 				identity: m?.identity ?? null,
 				name: m?.name ?? null,
 				score: m?.score ?? 0,

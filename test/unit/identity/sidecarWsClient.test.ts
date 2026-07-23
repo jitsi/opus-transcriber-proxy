@@ -27,7 +27,7 @@ class MockWs implements WsLike {
 }
 
 describe('SidecarWsClient', () => {
-  it('normalizes the URL to ws(s)://host/ws?token= and multiplexes a request', async () => {
+  it('normalizes the URL to ws(s)://host/ws (token rides the Authorization header, not the query) and multiplexes a request', async () => {
     const mock = new MockWs();
     let seenUrl = '';
     const c = new SidecarWsClient({
@@ -42,7 +42,9 @@ describe('SidecarWsClient', () => {
     const p = c.identify('ten', Buffer.from([1, 2, 3, 4]));
     mock.open();
     await tick();
-    expect(seenUrl).toBe('ws://sidecar:8090/ws?token=tok');
+    // Token is no longer in the URL (it would land in access/proxy logs) — it's an Authorization
+    // header set by the default factory; the injected wsFactory only sees the URL.
+    expect(seenUrl).toBe('ws://sidecar:8090/ws');
     const sent = JSON.parse(mock.sent[0]);
     expect(sent.type).toBe('identify');
     expect(sent.tenant).toBe('ten');

@@ -296,7 +296,7 @@ export class TranscriberProxy extends EventEmitter {
 				// A single fallback segment carrying that text. This identity_attribution (not the
 				// noDispatch'd raw) is what the Worker forwards to the store.
 				const fallbackSegment = (): AttributedSegment[] => [
-					{ sessionSpeakerId: null, handle: null, identity: null, name: null, score: 0, text: fallbackText, start: 0, end: 0 },
+					{ sessionSpeakerId: null, identity: null, name: null, score: 0, text: fallbackText, start: 0, end: 0 },
 				];
 				const emitAttribution = (segments: AttributedSegment[]) => {
 					this.emit('identity_attribution', {
@@ -324,7 +324,7 @@ export class TranscriberProxy extends EventEmitter {
 							// (PII). All other transcript logging is debug too; don't stream it to Loki at info.
 							logger.debug(
 								`[identity] ${tag}: ${segments
-									.map((s) => `${s.name ?? s.identity ?? s.handle ?? '?'}="${s.text}"`)
+									.map((s) => `${s.name ?? s.identity ?? '?'}="${s.text}"`)
 									.join(' | ')}`,
 							);
 						}
@@ -342,8 +342,13 @@ export class TranscriberProxy extends EventEmitter {
 							}
 						}
 					})
-					.catch(() => {
+					.catch((err) => {
+						// Two rejection sources land here: (a) identityAttributeFinal itself rejecting before
+						// `handled` is set — recover by emitting the fallback once; (b) a throw from inside the
+						// .then above (an 'identity_attribution' listener or dispatcherConnection.send) AFTER
+						// `handled` — suppress the double-emit but surface it, or it would vanish silently.
 						if (!handled) emitAttribution(fallbackSegment());
+						else logger.error(`[identity] ${tag}: post-attribution emit/dispatch failed: ${(err as Error)?.message ?? err}`);
 					});
 			}
 		};
