@@ -90,6 +90,10 @@ export interface Env {
 	IDENTITY_MAX_ENROLLS_PER_SESSION?: string;
 	IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC?: string;
 	IDENTITY_ENROLL_CONSISTENCY_THRESHOLD?: string;
+	IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES?: string;
+	IDENTITY_MAX_EMBED_SEC?: string;
+	IDENTITY_KV_NEGATIVE_TTL_MS?: string;
+	IDENTITY_MAX_INFLIGHT?: string;
 	// Vectorize fingerprint store — forwarded to the transcriber container, which embeds + matches
 	// in-process (LocalIdentityClient).
 	VECTORIZE_ACCOUNT_ID?: string;

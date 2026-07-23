@@ -124,6 +124,12 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.IDENTITY_MAX_ENROLLS_PER_SESSION && { IDENTITY_MAX_ENROLLS_PER_SESSION: env.IDENTITY_MAX_ENROLLS_PER_SESSION }),
 		...(env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC && { IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC: env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC }),
 		...(env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD && { IDENTITY_ENROLL_CONSISTENCY_THRESHOLD: env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES && { IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES: env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES }),
+		// Embed cap (event-loop-stall mitigation), KV negative-cache TTL, and sidecar in-flight cap —
+		// all read by the container's config; forward so they're tunable in the CF deployment.
+		...(env.IDENTITY_MAX_EMBED_SEC && { IDENTITY_MAX_EMBED_SEC: env.IDENTITY_MAX_EMBED_SEC }),
+		...(env.IDENTITY_KV_NEGATIVE_TTL_MS && { IDENTITY_KV_NEGATIVE_TTL_MS: env.IDENTITY_KV_NEGATIVE_TTL_MS }),
+		...(env.IDENTITY_MAX_INFLIGHT && { IDENTITY_MAX_INFLIGHT: env.IDENTITY_MAX_INFLIGHT }),
 		// In-container identity path (LocalIdentityClient): when Vectorize creds are present the
 		// container embeds+matches locally (CAM++ via sherpa-onnx-node) instead of calling the sidecar.
 		// EMBEDDING_MODEL has a Dockerfile default; only forwarded when an operator overrides it.
