@@ -96,6 +96,9 @@ export class VectorizeStore {
 
 	async query(tenant: string, probe?: Float32Array): Promise<Fingerprint[]> {
 		const topK = 50;
+		// The zero-vector fallback is defensive only: every current caller passes a real probe. It exists
+		// so a probe-less "list this tenant's fingerprints" call can't send an invalid empty vector (a
+		// zero vector matches nothing meaningfully but is a well-formed request). Not dead — just unused today.
 		const vector = probe && probe.length ? Array.from(probe) : new Array(this.dimensions).fill(0);
 		const result = await this.call('query', { vector, topK, returnValues: true, returnMetadata: 'all', filter: { tenant } });
 		const matches = result?.matches ?? [];

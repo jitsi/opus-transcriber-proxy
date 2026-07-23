@@ -46,6 +46,10 @@ export async function checkEnrollConsistency(
 	const n = Math.floor(pcm.length / subBytes);
 	if (n < 2) return { consistent: true, minCosine: NaN, windows: n, reason: 'insufficient-audio' };
 
+	// Sequential, not Promise.all: each embed is a SYNCHRONOUS native compute (see embedder.ts), so
+	// parallelism can't overlap them — they'd stall the loop back-to-back either way. This guard
+	// therefore multiplies that stall by `n` (e.g. 4 sub-windows) on top of a normal single identify.
+	// Off the transcription hot path; the worker_threads follow-up (JIT-16065) is what removes it.
 	const vecs: Float32Array[] = [];
 	for (let i = 0; i < n; i++) {
 		const v = await embed(pcm.subarray(i * subBytes, (i + 1) * subBytes));

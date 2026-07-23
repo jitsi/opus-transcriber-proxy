@@ -43,6 +43,9 @@ export class IdentityAttributor {
 		// Copy — the decoder may reuse the underlying buffer after this returns.
 		this.chunks.push(Buffer.from(pcm));
 		this.bufferedBytes += pcm.byteLength;
+		// `chunks.length > 1` keeps at least one chunk — a single chunk larger than maxBytes is never
+		// evicted (dropping it would strand bufStartSec). Safe because appends are small: decoded frames
+		// and xAI's idle-silence injection (~1.15 s ≈ 37 KB) are orders of magnitude below the ~3.8 MB cap.
 		while (this.bufferedBytes > this.maxBytes && this.chunks.length > 1) {
 			const dropped = this.chunks.shift()!;
 			this.bufferedBytes -= dropped.length;
@@ -119,6 +122,11 @@ export class IdentityAttributor {
 		}
 		const minBytes = this.bytesPerSec * 0.5; // need >= 0.5s of audio to attempt a match
 		const idBySpeaker = new Map<number, IdentifyResult>();
+		// Snapshot the ring ONCE here, before the first await. This is also the staleness boundary: if a
+		// backend reconnect calls reset() mid-analyze, `all` still holds the pre-reset audio, so the slice
+		// stays self-consistent — it's just the old stream's audio, which Vectorize won't match, and
+		// attribution falls back to null gracefully (the caller's post-resolve reinitGeneration guard is
+		// the belt-and-braces check for the identity that matters). JIT-16065.
 		const all = Buffer.concat(this.chunks); // concatenate the ring once, reused across all speakers
 		await Promise.all(
 			[...runsBySpeaker.entries()].map(async ([spk, spkRuns]) => {

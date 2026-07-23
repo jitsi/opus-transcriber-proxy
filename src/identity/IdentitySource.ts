@@ -50,7 +50,10 @@ export class KvRestIdentitySource implements IdentitySource {
 	}
 
 	/** Insert with an oldest-first size cap so a long-lived (pool-mode) container can't grow the map
-	 *  without bound; an evicted still-active key simply re-queries KV on its next lookup. */
+	 *  without bound; an evicted still-active key simply re-queries KV on its next lookup.
+	 *  `hits` and `retryAt` are capped independently, so the two together hold up to 2×maxEntries and a
+	 *  key can transiently sit in both (a miss that later self-heals into a hit). Benign — the bound is
+	 *  still O(maxEntries) per map. */
 	private capSet<V>(m: Map<string, V>, key: string, value: V): void {
 		m.set(key, value);
 		if (m.size > this.maxEntries) {
