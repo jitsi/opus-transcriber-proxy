@@ -236,7 +236,11 @@ interface TranscriptionBackend {
 
   // Audio
   sendAudio(audioBase64: string): Promise<void>;
-  forceCommit(): void;
+  // Returns the seconds of synthetic silence injected into the provider stream (0 if none). NOTE:
+  // this changed from `: void` to `: number` for the speaker-identity PCM-ring alignment — a
+  // breaking change for any third-party TranscriptionBackend implementation (return 0 if you inject
+  // nothing). Only xAI injects silence today; all other first-party backends return 0.
+  forceCommit(): number;
 
   // Format negotiation — called on every reinitializeDecoder (initial setup, on updateInputFormat,
   //   and again on any new backend instance created by reconnectBackend)
@@ -423,9 +427,9 @@ export class YourBackend implements TranscriptionBackend {
     //   ogg  → Ogg-Opus container (base64-encoded)
   }
 
-  forceCommit(): void {
-    // Force transcription of pending audio
-    // Called when audio stream goes idle
+  forceCommit(): number {
+    // Force transcription of pending audio; called when the audio stream goes idle.
+    return 0; // seconds of synthetic silence injected into the provider stream (0 if none)
   }
 
   updatePrompt(prompt: string): void {

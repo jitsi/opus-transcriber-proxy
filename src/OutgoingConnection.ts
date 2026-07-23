@@ -71,6 +71,15 @@ function getSidecar(): ISidecarClient | null {
 			maxInFlight: config.identity.maxInFlight,
 		});
 	}
+	// The single-mic enroll guard needs a local embed() (LocalIdentityClient only). The external
+	// sidecar clients don't expose one, so on this path auto-enroll runs WITHOUT the multi-voice guard
+	// — a shared mic could pollute a fingerprint. Warn once so operators relying on it know. JIT-16065.
+	if (!sidecarSingleton.embed) {
+		logger.warn(
+			'[identity] using an external sidecar (IDENTITY_SIDECAR_URL) — the single-mic enroll guard is ' +
+				'unavailable (no local embed); auto-enroll on a shared mic is not guarded.',
+		);
+	}
 	return sidecarSingleton;
 }
 
@@ -802,7 +811,11 @@ export class OutgoingConnection {
 		const now = Date.now();
 		if (now - this.lastEnrollAt < c.enrollCooldownMs) return;
 		if (this.enrollCount >= c.maxEnrollsPerSession) return;
-		// Set synchronously (before any await) so overlapping finals don't both pass the cooldown gate.
+		// Claim the cooldown slot synchronously (before any await) so overlapping finals don't both pass
+		// the gate. Remember the previous value so we can release it if the guard rejects this window —
+		// a rejected (multi-voice) window must not burn the full cooldown, or one noisy window would
+		// silence enrollment for the whole cooldown period. JIT-16065.
+		const prevEnrollAt = this.lastEnrollAt;
 		this.lastEnrollAt = now;
 
 		// Single-mic guard — only when the client can embed locally (LocalIdentityClient).
@@ -833,6 +846,9 @@ export class OutgoingConnection {
 						`[identity] ${this.localTag} enroll skipped — multi-voice window ` +
 							`(minCos=${r.minCosine.toFixed(3)}, strike ${this.enrollDivergenceStrikes}/${maxStrikes})`,
 					);
+					// Release the cooldown slot so the next window can be re-evaluated promptly (unless we
+					// just latched, in which case enrollment is off anyway).
+					this.lastEnrollAt = prevEnrollAt;
 				}
 				return;
 			}

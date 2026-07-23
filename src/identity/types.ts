@@ -4,21 +4,21 @@
 
 /** One transcribed word with media-time offsets and, when the backend diarizes, a speaker label. */
 export interface Word {
-  text: string;
-  start: number;
-  end: number;
-  /** Backend-provided diarization speaker label (xAI/Deepgram), when available. */
-  speaker?: number;
+	text: string;
+	start: number;
+	end: number;
+	/** Backend-provided diarization speaker label (xAI/Deepgram), when available. */
+	speaker?: number;
 }
 
 /** A per-speaker slice of an utterance, with the resolved identity (or nulls when unresolved). */
 export interface AttributedSegment {
-  sessionSpeakerId: number | null;
-  handle: string | null;
-  identity: string | null;
-  name: string | null;
-  score: number;
-  text: string;
-  start: number;
-  end: number;
+	sessionSpeakerId: number | null;
+	handle: string | null;
+	identity: string | null;
+	name: string | null;
+	score: number;
+	text: string;
+	start: number;
+	end: number;
 }

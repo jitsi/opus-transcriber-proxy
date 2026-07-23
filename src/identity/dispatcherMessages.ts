@@ -2,10 +2,10 @@ import type { DispatcherMessage } from '../dispatcher';
 import type { AttributedSegment } from './types';
 
 export interface DispatcherBase {
-  sessionId: string;
-  endpointId: string; // original participant id / tag
-  timestamp: number;
-  language?: string;
+	sessionId: string;
+	endpointId: string; // original participant id / tag
+	timestamp: number;
+	language?: string;
 }
 
 /**
@@ -22,26 +22,27 @@ export interface DispatcherBase {
  *   client path and the worker dispatch path. JIT-16065.
  */
 export function buildDispatcherMessages(
-  base: DispatcherBase,
-  originalText: string,
-  segments: AttributedSegment[] | null,
+	base: DispatcherBase,
+	originalText: string,
+	segments: AttributedSegment[] | null,
 ): DispatcherMessage[] {
-  if (!segments || segments.length === 0) {
-    return [{ ...base, text: originalText }];
-  }
-  if (segments.length === 1) {
-    const s = segments[0];
-    if (s.identity) {
-      return [
-        { ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } },
-      ];
-    }
-    return [{ ...base, text: originalText }];
-  }
-  return segments.map((s) => {
-    // Unresolved speaker → mic-owner endpoint (no override), so the dispatcher resolves it from KV
-    // instead of inventing a phantom participant. Resolved → override to the identity.
-    if (!s.identity) return { ...base, text: s.text };
-    return { ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } };
-  });
+	if (!segments || segments.length === 0) {
+		return [{ ...base, text: originalText }];
+	}
+	if (segments.length === 1) {
+		const s = segments[0];
+		if (s.identity) {
+			return [{ ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } }];
+		}
+		// Single UNresolved segment → the whole turn under the mic owner. Uses `originalText` (not
+		// `s.text`) because with one segment they're the same turn text, and originalText is the
+		// caller's canonical form; the multi-speaker branch below uses each segment's own `s.text`.
+		return [{ ...base, text: originalText }];
+	}
+	return segments.map((s) => {
+		// Unresolved speaker → mic-owner endpoint (no override), so the dispatcher resolves it from KV
+		// instead of inventing a phantom participant. Resolved → override to the identity.
+		if (!s.identity) return { ...base, text: s.text };
+		return { ...base, endpointId: s.identity, text: s.text, resolvedParticipant: { id: s.identity, name: s.name ?? s.identity } };
+	});
 }

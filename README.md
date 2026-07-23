@@ -169,6 +169,11 @@ transcript store only and kept out of the live captions.
 
 > **Biometric data:** voice fingerprints are personal data. Operators are responsible for retention
 > and consent. Fingerprints are keyed per tenant; a delete path exists on the store.
+>
+> **PII on the wire:** the fingerprint key is the participant's **email**. A resolved speaker's email
+> (and name) travels in the transcription/dispatcher payloads (container → Worker → dispatcher) and
+> lands in the stored transcript's attribution. If that's not acceptable for your deployment, use an
+> opaque key (hashed email / UUID) as the fingerprint identity instead of the raw email.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

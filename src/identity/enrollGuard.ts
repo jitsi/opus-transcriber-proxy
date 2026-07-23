@@ -37,7 +37,10 @@ export async function checkEnrollConsistency(
 ): Promise<EnrollConsistencyResult> {
 	const sr = opts.sampleRate ?? 16000;
 	const bytesPerSec = sr * 2;
-	const subBytes = Math.max(2, Math.floor((opts.subWindowSec ?? 2) * bytesPerSec)) & ~1; // even (s16le)
+	// Floor sub-windows at 0.5s: a near-zero subWindowSec would otherwise yield 1-sample slices that
+	// are useless as embedding input. Even byte count (s16le).
+	const floorBytes = Math.floor(bytesPerSec * 0.5) & ~1;
+	const subBytes = Math.max(floorBytes, Math.floor((opts.subWindowSec ?? 2) * bytesPerSec) & ~1);
 	const threshold = opts.threshold ?? 0.5;
 
 	const n = Math.floor(pcm.length / subBytes);
