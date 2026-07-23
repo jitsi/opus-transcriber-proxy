@@ -287,6 +287,14 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 			segments: Array<{ identity: string | null; name: string | null; handle: string | null; text: string }>;
 		}) => {
 			if (!sendBack) return;
+			// These are STORE-ONLY (dispatchOnly) finals, relayed over the client WS purely so the
+			// fronting Cloudflare Worker can intercept them (strip from the client, route to the
+			// dispatcher DO). Only do that when actually running as a CF Container behind that worker
+			// (CLOUDFLARE_DURABLE_OBJECT_ID is injected by the CF runtime). On a plain Node/k8s deploy
+			// there is no stripping worker, so emitting here would leak resolved emails + duplicate CC
+			// lines to real clients; the store still receives identity via the Node dispatcher path
+			// (buildDispatcherMessages in transcriberproxy). JIT-16065.
+			if (!process.env.CLOUDFLARE_DURABLE_OBJECT_ID) return;
 			const currentWs = session.getWebSocket();
 			if (!currentWs || currentWs.readyState !== 1) return;
 			data.segments.forEach((s, i) => {
