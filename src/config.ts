@@ -168,7 +168,9 @@ export const config = {
 	// Master kill switch: when disabled, transcription behaviour is unchanged.
 	identity: {
 		enabled: process.env.IDENTITY_ENABLED === 'true', // Default false — feature flag
-		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '', // e.g. http://identity-sidecar:8090
+		// Optional EXTERNAL identity sidecar (bring-your-own /identify + /enroll service). Unset →
+		// use the in-process CAM++ + Vectorize path (LocalIdentityClient). e.g. wss://host/identity
+		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '',
 		sidecarToken: process.env.IDENTITY_SIDECAR_TOKEN || '',
 		// CF Access service token — reuse the one that fronts the proxy domain so the container's
 		// call to wss://<own-domain>/identity passes Zero Trust (no Access-policy change needed).
@@ -177,13 +179,10 @@ export const config = {
 		// Tenant scoping for enroll/identify. Placeholder default until per-customer identity
 		// is resolved from the WEBHOOK_EVENTS KV (a later step); fine for single-tenant testing.
 		tenant: process.env.IDENTITY_TENANT || 'default',
-		// /analyze runs offline diarization (several seconds) — the timeout must exceed it.
+		// Per-request bound + in-flight cap for the external-sidecar client (unused by the in-process path).
 		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 30000),
 		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
-		holdMs: parseIntOrDefault(process.env.IDENTITY_HOLD_MS, 3000), // hold a room final until identity resolves
-		analyzeIntervalMs: parseIntOrDefault(process.env.IDENTITY_ANALYZE_INTERVAL_MS, 4000),
-		// Rolling context sent to /analyze per final (seconds ending at the utterance end).
-		// Larger = more consistent diarization/clustering across utterances (stable handles), but slower.
+		// Rolling PCM-ring window (seconds) the attributor retains per stream.
 		analyzeWindowSec: parseIntOrDefault(process.env.IDENTITY_ANALYZE_WINDOW_SEC, 45),
 		// Real per-customer identity + tenant from the WEBHOOK_EVENTS KV (via CF KV REST API).
 		// Unset → no source: falls back to the `tenant` default above and skips auto-enroll.

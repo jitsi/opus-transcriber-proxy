@@ -16,7 +16,7 @@ import { LocalIdentityClient } from './identity/LocalIdentityClient';
 import { IdentityAttributor } from './identity/IdentityAttributor';
 import { checkEnrollConsistency } from './identity/enrollGuard';
 import { createIdentitySource, type IdentitySource, type ResolvedIdentity } from './identity/IdentitySource';
-import type { AttributedSegment } from './identity/RoomAttributor';
+import type { AttributedSegment } from './identity/types';
 
 // Process-wide sidecar client, built once from config when the identity feature is enabled.
 // A ws(s):// URL uses one persistent multiplexed WS (required under Cloudflare's outbound

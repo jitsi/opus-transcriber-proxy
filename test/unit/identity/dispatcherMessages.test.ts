@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildDispatcherMessages, type DispatcherBase } from '../../../src/identity/dispatcherMessages';
-import type { AttributedSegment } from '../../../src/identity/RoomAttributor';
+import type { AttributedSegment } from '../../../src/identity/types';
 
 const base: DispatcherBase = { sessionId: 's', endpointId: 'orig-a0', timestamp: 111, language: 'en' };
 const seg = (identity: string | null, handle: string | null, text: string, name: string | null = null): AttributedSegment => ({

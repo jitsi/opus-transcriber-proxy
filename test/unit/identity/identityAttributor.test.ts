@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { IdentityAttributor } from '../../../src/identity/IdentityAttributor';
 import type { ISidecarClient, IdentifyResult } from '../../../src/identity/SidecarClient';
-import type { Word } from '../../../src/identity/RoomAttributor';
+import type { Word } from '../../../src/identity/types';
 
 // Sidecar mock exposing only identify (embed+match) — the new attributor uses backend diarization
 // (word.speaker) and calls identify once per distinct speaker.

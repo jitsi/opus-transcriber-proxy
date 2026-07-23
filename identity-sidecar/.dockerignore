@@ -1,7 +1,0 @@
-node_modules
-dist
-test
-scripts/gate-*.ts
-scripts/sweep-*.ts
-scripts/verify-*.ts
-*.log

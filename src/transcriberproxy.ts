@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { buildDispatcherMessages } from './identity/dispatcherMessages';
-import type { AttributedSegment } from './identity/RoomAttributor';
+import type { AttributedSegment } from './identity/types';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';

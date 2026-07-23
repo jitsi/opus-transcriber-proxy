@@ -1,5 +1,5 @@
 import type { DispatcherMessage } from '../dispatcher';
-import type { AttributedSegment } from './RoomAttributor';
+import type { AttributedSegment } from './types';
 
 export interface DispatcherBase {
   sessionId: string;

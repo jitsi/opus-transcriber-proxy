@@ -1,19 +1,11 @@
 import logger from '../logger';
 
-export interface AnalyzeTurn {
-  start: number;
-  end: number;
-  sessionSpeakerId: number;
-  handle: string;
-  identity: string | null;
-  name?: string;
-  score: number;
-}
-export interface AnalyzeResult {
-  speakerCount: number;
-  multiple: boolean;
-  turns: AnalyzeTurn[];
-}
+// HTTP/WS client for an EXTERNAL identity sidecar (set IDENTITY_SIDECAR_URL). This is the
+// bring-your-own-sidecar path: a service exposing POST /identify and /enroll (embed + match against
+// enrolled voiceprints). The default/preferred path is the in-process LocalIdentityClient (CAM++ +
+// Vectorize, no hop); this fallback exists for deployments that want to run embedding out of process.
+// (The repo previously shipped a reference sidecar under identity-sidecar/; it was removed once the
+// in-container path landed — implement the two endpoints against your own model to use this path.)
 
 /** Result of a voice-embedding identity match (embed + cosine vs enrolled fingerprints). */
 export interface IdentifyResult {

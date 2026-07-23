@@ -1,5 +1,5 @@
 import type { ISidecarClient, IdentifyResult } from './SidecarClient';
-import type { Word, AttributedSegment } from './RoomAttributor';
+import type { Word, AttributedSegment } from './types';
 
 export interface IdentityAttributorOptions {
   sessionId: string;
