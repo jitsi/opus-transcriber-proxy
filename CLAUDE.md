@@ -279,6 +279,59 @@ Live-translation audio duration is metered so it can be billed downstream. It's 
 - Detached sessions maintain their `OutgoingConnection` instances
 - Metrics tracking for active sessions
 
+### Speaker Identity (single-mic multi-speaker attribution) — `src/identity/*`
+
+Optional feature (master switch `IDENTITY_ENABLED`, default off; when off there is **zero** behavioural
+change and nothing Cloudflare/native loads). Identifies *who* speaks when multiple people share one
+mic/endpoint, provider-independently and strictly off the transcription hot path (every entry point
+degrades to null/false and never throws into transcription). See README "Speaker Identity" for the env
+vars and operator/PII notes.
+
+**Pipeline.** Diarization comes from the *transcription backend's* per-word `speaker` labels (not a
+local diarizer). Per final:
+- `OutgoingConnection.identityAttributeFinal` gates on `diarizeActive()` (`this.diarize ??
+  config.<provider>.diarize`, matching how the backend resolves diarization):
+  - **room** (`diarize` effective true): `IdentityAttributor.analyze()` groups words by backend
+    `speaker`, slices each speaker's PCM from a per-stream ring, and calls the identity client's
+    `identify()` (embed + cosine match) once per distinct speaker → per-speaker `AttributedSegment`s.
+    Never enrolls.
+  - **individual**: no open-set identify (owner known from the join); background auto-enroll only,
+    from a rolling `recentWindow` (works regardless of finalization granularity), rate-limited
+    (cooldown + max/session) and quality-gated by the **single-mic enroll guard**
+    (`enrollGuard.checkEnrollConsistency`: split the window into sub-windows, embed each, require min
+    pairwise cosine ≥ threshold; N consecutive divergent windows disable enroll for the stream so a
+    shared mic never pollutes a fingerprint).
+- Components: `IdentityAttributor` (per-stream PCM ring + `analyze`/`recentWindow`/`reset`/
+  `appendSilence`), `LocalIdentityClient` (in-process: CAM++ embed via `embedder.ts`/`sherpa-onnx-node`
+  lazily imported, `vectorize.ts` per-tenant Vectorize store keyed `tenant:identity`, `matcher.ts`
+  open-set cosine; embed input capped at `maxEmbedSec` to bound the synchronous native compute),
+  `IdentitySource` (`KvRestIdentitySource`: resolves a stream's stable identity/tenant from the
+  WEBHOOK_EVENTS KV, negative-TTL retry, bounded cache), `SidecarClient`/`SidecarWsClient` (optional
+  external-sidecar fallback via `IDENTITY_SIDECAR_URL`), `types.ts` (`Word`, `AttributedSegment`),
+  `dispatcherMessages.ts` (Node standalone dispatcher serializer), `vecmath.ts` (pure).
+- **PCM ring alignment (JIT-16065):** the ring's media clock must match what the ASR backend received.
+  `reconnectBackend` calls `identityAttributor.reset()` **first** (a fresh stream restarts word times at
+  0), and `forceCommit(): number` returns injected idle-silence seconds so `OutgoingConnection` mirrors
+  them into the ring (`appendSilence`). A `reinitGeneration` snapshot guards the `resolveIdentity` await
+  so a mid-resolve reconnect bails instead of slicing the wrong span.
+
+**Store/live routing contract.** Identity is **store-only** and kept out of live captions:
+- The raw mic-owner final is flagged `noDispatch` (shown to the client, not stored).
+- Each resolved per-speaker final is flagged `dispatchOnly` (stored, not shown — the identified
+  speaker isn't in the XMPP roster, would render as "Guest" + duplicate the raw line).
+- On the xAI diarized path the whole turn's `words` are attached to the FIRST per-speaker final;
+  siblings are flagged `attributionDeferred` so only the first runs attribution (no double-store).
+- The Cloudflare Worker strips `dispatchOnly` from the client stream and dispatches those to the
+  store with `resolvedParticipant` (keyed on the explicit `dispatchOnly` marker + resolved id/name).
+  A resolved segment always carries a name (`s.name ?? s.identity`) so a nameless fingerprint isn't
+  dropped. Standalone Node emits the `dispatchOnly` client relay only when running behind the Worker
+  (`CLOUDFLARE_DURABLE_OBJECT_ID` present) — otherwise it would leak resolved emails to real clients;
+  its store path uses `buildDispatcherMessages` instead. (This contract living in three places —
+  `server.ts`, `dispatcherMessages.ts`, the worker — is a known consolidation follow-up.)
+
+**Scope:** in practice xAI-only — the ring fills only on the l16/16k desired format and only
+`XAIBackend` attaches per-word `words`. Other backends transcribe normally, unattributed.
+
 ### Backend-Specific Behavior
 
 **OpenAI**
@@ -528,6 +581,14 @@ it to `true` only for endpoints that carry multiple speakers (room systems, dial
   "language": "en"
 }
 ```
+
+Speaker-identity fields on `transcription-result` (present only when `IDENTITY_ENABLED`; see "Speaker
+Identity" above for the routing contract): `words` (`[{text,start,end,speaker?}]` per-word timing +
+backend diarization label — attached to finals only, on the xAI path), `noDispatch` (live-only: the
+raw mic-owner final, forwarded to the client but not stored), `dispatchOnly` (store-only: a
+resolved-speaker final, dispatched to the store but stripped from the client by the Worker), and
+`attributionDeferred` (a secondary diarized final whose turn is already attributed by a sibling —
+skip its store-attribution). Old clients ignore unknown fields.
 
 **Pong:**
 ```json

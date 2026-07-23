@@ -265,6 +265,18 @@ global `DEEPGRAM_DIARIZE` / `XAI_DIARIZE` env config. Only diarize streams known
 multi-speaker: on a single-speaker stream the diarizer can spuriously split one talker
 into several speaker labels.
 
+### Per-word speaker labels & speaker identity
+
+When diarizing, backends emit a per-word `speaker` index. The optional speaker-identity feature
+(`IDENTITY_ENABLED`, off by default) consumes these labels to segment a shared-mic turn per speaker
+and match each to an enrolled voiceprint — segmentation is the backend's job, identity only embeds +
+matches (see the "Speaker Identity" section in [CLAUDE.md](CLAUDE.md) and [README.md](README.md)).
+For identity to run, a backend must attach a `words` array (`{text,start,end,speaker?}`, finals only)
+to its `TranscriptionMessage` on a 16 kHz PCM (`l16`) path. Currently only **xAI** does so, so
+identity is effectively xAI-only; other backends transcribe (and diarize) normally but are not
+attributed. When adding/attaching words to a new backend, attach them on finals only and gate on
+`config.identity?.enabled` so no identity-specific payload is emitted when the feature is off.
+
 ### Audio Format Negotiation
 
 `OutgoingConnection` calls `backend.getDesiredAudioFormat(inputFormat)` on every
