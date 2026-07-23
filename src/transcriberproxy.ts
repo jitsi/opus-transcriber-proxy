@@ -320,7 +320,9 @@ export class TranscriberProxy extends EventEmitter {
 						const effective = segments && segments.length > 0 ? segments : fallbackSegment();
 						emitAttribution(effective);
 						if (segments && segments.length > 0) {
-							logger.info(
+							// debug, not info: this line carries transcript content + resolved speaker names
+							// (PII). All other transcript logging is debug too; don't stream it to Loki at info.
+							logger.debug(
 								`[identity] ${tag}: ${segments
 									.map((s) => `${s.name ?? s.identity ?? s.handle ?? '?'}="${s.text}"`)
 									.join(' | ')}`,

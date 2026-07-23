@@ -324,11 +324,10 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 					dispatchOnly: true,
 				};
 				try {
+					// No transcriptionsDeliveredTotal increment: these are store-only (dispatchOnly) relays
+					// for the fronting worker, stripped before the client — counting them would inflate the
+					// client-delivery metric with traffic the client never sees. JIT-16065.
 					currentWs.send(JSON.stringify(msg));
-					getInstruments().transcriptionsDeliveredTotal.add(1, {
-						provider: options.provider || 'unknown',
-						is_interim: 'false',
-					});
 				} catch (error) {
 					logger.error(`[WS-${connectionId}] Failed to send identity attribution:`, error);
 				}
