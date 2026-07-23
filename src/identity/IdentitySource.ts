@@ -73,9 +73,13 @@ export class KvRestIdentitySource implements IdentitySource {
         const ev: any = await res.json();
         const d = ev?.data ?? {};
         // Anchor on email — it's the one stable id across meetings (participant ids are
-        // regenerated per meeting). Fall back to the per-meeting id only when no email.
-        const identity = d.email || d.id || d.participantId || participantId;
-        result = { identity, name: d.name, email: d.email, tenant: ev?.customerId || 'default' };
+        // regenerated per meeting). Fall back to the per-meeting id only when no email. Pick the
+        // first NON-EMPTY STRING: KV values are untyped, and a non-string (number/object) would
+        // otherwise coerce into the Vectorize row id (e.g. "[object Object]").
+        const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+        const identity = str(d.email) ?? str(d.id) ?? str(d.participantId) ?? participantId;
+        const email = str(d.email);
+        result = { identity, name: str(d.name), email, tenant: str(ev?.customerId) ?? 'default' };
       } else if (res.status !== 404) {
         logger.debug(`[identity] KV resolve ${key} -> ${res.status}`);
       }
