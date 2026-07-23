@@ -3,14 +3,16 @@
  * Replay WebSocket messages from a dump file
  *
  * Usage:
- *   node scripts/replay-dump.cjs <dump-file> <websocket-url> [speed] [-H "Name: Value"] ...
+ *   node scripts/replay-dump.cjs <dump-file> <websocket-url> [speed] ...
  *
  * Parameters:
  *   speed        - Playback speed multiplier (default: 1.0)
  *                  - speed=2 plays at 2x speed (half the delays)
  *                  - speed=0.5 plays at half speed (double the delays)
  *                  - speed=0 plays with no delay at all
- *   -H / --header - Add a custom HTTP header (can be repeated)
+ *   REPLAY_HEADERS (env) - Extra request headers as a JSON object {"Name":"Value",...}. Passed via
+ *                  the environment rather than a flag so header values (which may be credentials)
+ *                  stay out of the process argument list.
  *   --translate[=<lang>] - For the /translate endpoint: on connect, send the control message that
  *                  enables a target language (`start-translation`), so every source is translated
  *                  into <lang> (default "es"). The endpoint returns translated `media` (Opus) plus
@@ -32,7 +34,7 @@
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 0
- *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://..." -H "Authorization: Bearer token" -H "X-Tenant: foo"
+ *   REPLAY_HEADERS='{"Authorization":"Bearer token","X-Tenant":"foo"}' node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://..."
  *   node scripts/replay-dump.cjs resources/sample.jsonl "wss://host/translate?sendBack=true" 1 --translate=es
  *   OPENAI_CUSTOM_API_KEY=sk-... node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."
  */
@@ -157,7 +159,7 @@ function updateStatusLine(current, total, remainingSec) {
 const dumpFile = process.argv[2];
 const wsUrl = process.argv[3];
 
-// Parse remaining args: optional speed (positional) and -H/--header flags
+// Parse remaining args: optional speed (positional) and the -- flags
 const extraArgs = process.argv.slice(4);
 let speed = 1.0;
 const extraHeaders = {};
@@ -191,20 +193,6 @@ for (let i = 0; i < extraArgs.length; i++) {
         assertMinInterims = parseInt(arg.slice('--assert-min-interims='.length), 10);
     } else if (arg.startsWith('--assert-min-media=')) {
         assertMinMedia = parseInt(arg.slice('--assert-min-media='.length), 10);
-    } else if (arg === '-H' || arg === '--header') {
-        const header = extraArgs[++i];
-        if (!header) {
-            console.error(`Error: ${arg} requires a value`);
-            process.exit(1);
-        }
-        const colonIdx = header.indexOf(':');
-        if (colonIdx === -1) {
-            console.error(`Error: Invalid header format "${header}" — expected "Name: Value"`);
-            process.exit(1);
-        }
-        const name = header.slice(0, colonIdx).trim();
-        const value = header.slice(colonIdx + 1).trim();
-        extraHeaders[name] = value;
     } else if (!isNaN(parseFloat(arg)) && i === 0) {
         speed = parseFloat(arg);
     } else {
@@ -213,13 +201,35 @@ for (let i = 0; i < extraArgs.length; i++) {
     }
 }
 
+// Extra request headers come from the REPLAY_HEADERS env var (a JSON object of "Name": "Value").
+// Using an env var rather than CLI flags keeps header values — which may be credentials — out of
+// the process argument list (e.g. `ps`).
+const rawHeaders = process.env.REPLAY_HEADERS;
+if (rawHeaders) {
+    let parsedHeaders;
+    try {
+        parsedHeaders = JSON.parse(rawHeaders);
+    } catch {
+        console.error('Error: REPLAY_HEADERS must be valid JSON (an object of "Name": "Value")');
+        process.exit(1);
+    }
+    if (!parsedHeaders || typeof parsedHeaders !== 'object' || Array.isArray(parsedHeaders)) {
+        console.error('Error: REPLAY_HEADERS must be a JSON object of "Name": "Value"');
+        process.exit(1);
+    }
+    for (const [name, value] of Object.entries(parsedHeaders)) {
+        extraHeaders[name] = String(value);
+    }
+}
+
 // Read openai_custom API key from environment variable
 const openaiCustomApiKey = process.env.OPENAI_CUSTOM_API_KEY || null;
 
 if (!dumpFile || !wsUrl) {
-    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed] [-H "Name: Value"] ...');
+    console.error('Usage: node replay-dump.cjs <dump-file> <websocket-url> [speed] ...');
     console.error('Example: node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"');
     console.error('         node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true" 2');
+    console.error('         REPLAY_HEADERS=\'{"CF-Access-Client-Id":"...","CF-Access-Client-Secret":"..."}\' node replay-dump.cjs dump.jsonl "wss://.../transcribe?..."');
     console.error('         OPENAI_CUSTOM_API_KEY=sk-... node replay-dump.cjs /tmp/websocket-dump.jsonl "ws://...&provider=openai_custom&openaiCustomUrl=wss://..."');
     process.exit(1);
 }
@@ -263,7 +273,8 @@ console.log(`Connecting to: ${wsUrl}`);
 const headers = { ...extraHeaders };
 if (openaiCustomApiKey) headers['x-custom-openai-api-key'] = openaiCustomApiKey;
 if (Object.keys(headers).length > 0) {
-    console.log('Custom headers:', Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join(', '));
+    // Log header names only — values may be credentials.
+    console.log('Custom headers:', Object.keys(headers).join(', '));
 }
 const wsOptions = Object.keys(headers).length > 0 ? { headers } : {};
 const ws = new WebSocket(wsUrl, wsOptions);

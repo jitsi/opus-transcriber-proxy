@@ -16,6 +16,7 @@
 		"build": "npm run build:wasm && npm run build:native && npm run build:bundle",
 		"dev": "npm run build:wasm && tsx watch src/server.ts",
 		"start": "node dist/bundle/server.js",
+		"monitor": "node dist/bundle/monitor.js",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest",
 		"test:integration": "node scripts/integration-test.mjs",

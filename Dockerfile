@@ -47,9 +47,15 @@ RUN apk add --no-cache libstdc++
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 
-# Native Opus addon + bundled server, compiled in the builder stage.
+# Native Opus addon + bundled entrypoints (proxy server + monitor), compiled in the builder stage.
 COPY --from=builder /usr/src/app/build/Release/opus_native.node ./build/Release/opus_native.node
 COPY --from=builder /usr/src/app/dist/bundle ./dist/bundle
+
+# Monitor mode (node dist/bundle/monitor.js) replays a sample Opus dump against a target
+# /transcribe URL. Ship the replay client it spawns and the sample dump. Unused by the default
+# server CMD; `ws` (used by the replay client) is already among the production deps above.
+COPY scripts/replay-dump.cjs ./scripts/replay-dump.cjs
+COPY resources/sample.jsonl ./resources/sample.jsonl
 
 # Prebuilt, architecture-independent WASM artifacts (from the build context; built by build:wasm).
 COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/

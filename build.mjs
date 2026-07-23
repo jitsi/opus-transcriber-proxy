@@ -13,12 +13,14 @@ try {
 }
 
 await esbuild.build({
-	entryPoints: ['src/server.ts'],
+	// server.ts is the proxy (default image CMD); monitor.ts is the monitor mode, run via a
+	// command override (node dist/bundle/monitor.js). Both ship in the one image.
+	entryPoints: ['src/server.ts', 'src/monitor.ts'],
 	bundle: true,
 	platform: 'node',
 	target: 'node22',
 	format: 'esm',
-	outfile: 'dist/bundle/server.js',
+	outdir: 'dist/bundle',
 	sourcemap: true,
 	packages: 'external', // Keep all node_modules external
 	// The native Opus addon (build/Release/opus_native.node) is loaded at runtime via a dynamic
