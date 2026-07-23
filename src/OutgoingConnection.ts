@@ -28,6 +28,15 @@ function getSidecar(): ISidecarClient | null {
 		sidecarSingleton = null;
 		return null;
 	}
+	// Footgun guard: with identity on but no KV creds, streams can't resolve their real tenant and all
+	// fall back to config.identity.tenant ('default') — so in a multi-tenant deployment every tenant's
+	// fingerprints would silently share one namespace (cross-tenant matches). Warn once. JIT-16065.
+	if (!config.identity.kvAccountId) {
+		logger.warn(
+			`[identity] IDENTITY_ENABLED but no KV configured — all streams use IDENTITY_TENANT='${config.identity.tenant}'. ` +
+				`Fingerprints are NOT tenant-isolated; safe only for single-tenant use.`,
+		);
+	}
 	// Prefer the in-container client (CAM++ embed + Vectorize match, no sidecar hop) when Vectorize
 	// creds are configured. Falls back to the WS/HTTP sidecar otherwise.
 	const { vectorizeAccountId, vectorizeIndex, vectorizeApiToken } = config.identity;

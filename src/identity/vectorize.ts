@@ -2,6 +2,8 @@
 // Ported from the identity-sidecar so the embedding/match runs in-process in the transcriber
 // container (no sidecar hop). Uses global fetch (Node 22).
 
+import { l2normalize } from './vecmath';
+
 export interface Fingerprint {
 	identity: string;
 	vector: Float32Array;
@@ -17,15 +19,6 @@ export interface VectorizeOpts {
 	/** Index dimensionality (CAM++ = 192). Used only for the fallback neutral query vector. */
 	dimensions?: number;
 	fetchImpl?: typeof fetch;
-}
-
-function normalize(v: Float32Array): Float32Array {
-	let s = 0;
-	for (const x of v) s += x * x;
-	s = Math.sqrt(s) || 1;
-	const out = new Float32Array(v.length);
-	for (let i = 0; i < v.length; i++) out[i] = v[i] / s;
-	return out;
 }
 
 /** Vectorize caps topK at 50 when returning values. */
@@ -91,7 +84,7 @@ export class VectorizeStore {
 			n = prevN + 1;
 			prevName = prev.metadata?.name;
 		}
-		const values = Array.from(normalize(merged));
+		const values = Array.from(l2normalize(merged));
 		await this.upsertNdjson([
 			{
 				id,

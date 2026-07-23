@@ -94,7 +94,9 @@ export class LocalIdentityClient implements ISidecarClient {
 		}
 	}
 
-	async sessionEnd(): Promise<void> {
+	// Params match ISidecarClient (a remote sidecar keys per-session state on them); this in-process
+	// client is stateless, so they're intentionally unused.
+	async sessionEnd(_sessionId: string, _streamId: string): Promise<void> {
 		/* stateless — nothing to clean up */
 	}
 }
