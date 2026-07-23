@@ -96,8 +96,11 @@ export class DeepgramBackend implements TranscriptionBackend {
 				if (config.deepgram.punctuate !== undefined) {
 					params.set('punctuate', config.deepgram.punctuate.toString());
 				}
-				if (config.deepgram.diarize !== undefined) {
-					params.set('diarize', config.deepgram.diarize.toString());
+				// Per-endpoint override (start event's `diarize`) takes precedence over
+				// the global DEEPGRAM_DIARIZE config.
+				const diarize = backendConfig.diarize ?? config.deepgram.diarize;
+				if (diarize !== undefined) {
+					params.set('diarize', diarize.toString());
 				}
 
 				// Model Improvement Program opt-out. Per-connection override
@@ -195,8 +198,8 @@ export class DeepgramBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
-		// Send a Finalize message to flush any pending audio
+	forceCommit(): number {
+		// Send a Finalize message to flush any pending audio (no silence injected → 0)
 		if (this.ws && this.status === 'connected') {
 			try {
 				this.ws.send(JSON.stringify({ type: 'Finalize' }));
@@ -205,6 +208,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 				logger.error(`Failed to send Finalize message for tag ${this.tag}`, error);
 			}
 		}
+		return 0;
 	}
 
 	updatePrompt(prompt: string): void {
@@ -342,8 +346,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 		const isFinal = result.is_final === true;
 
 		// When diarization is enabled and word-level speaker data is present, split by speaker.
+		// Honour the per-endpoint override (start event) over the global config.
 		if (
-			config.deepgram.diarize &&
+			(this.backendConfig?.diarize ?? config.deepgram.diarize) &&
 			Array.isArray(alternative.words) &&
 			alternative.words.length > 0 &&
 			alternative.words[0].speaker !== undefined

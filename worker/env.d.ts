@@ -73,4 +73,33 @@ export interface Env {
 	OTLP_ENV?: string;
 	OTLP_RESOURCE_ATTRIBUTES?: string;
 	OTLP_HEADERS?: string;
+	// Speaker-identity feature (forwarded to the container)
+	IDENTITY_ENABLED?: string;
+	IDENTITY_SIDECAR_URL?: string;
+	IDENTITY_SIDECAR_TOKEN?: string;
+	CF_ACCESS_CLIENT_ID?: string;
+	CF_ACCESS_CLIENT_SECRET?: string;
+	IDENTITY_TENANT?: string;
+	IDENTITY_TIMEOUT_MS?: string;
+	IDENTITY_KV_ACCOUNT_ID?: string;
+	IDENTITY_KV_NAMESPACE_ID?: string;
+	IDENTITY_KV_API_TOKEN?: string;
+	IDENTITY_ENROLL_MIN_SPEECH_SEC?: string;
+	IDENTITY_ENROLL_COOLDOWN_MS?: string;
+	IDENTITY_MAX_ENROLLS_PER_SESSION?: string;
+	IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC?: string;
+	IDENTITY_ENROLL_CONSISTENCY_THRESHOLD?: string;
+	IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES?: string;
+	IDENTITY_MAX_EMBED_SEC?: string;
+	IDENTITY_KV_NEGATIVE_TTL_MS?: string;
+	IDENTITY_MAX_INFLIGHT?: string;
+	// Vectorize fingerprint store — forwarded to the transcriber container, which embeds + matches
+	// in-process (LocalIdentityClient).
+	VECTORIZE_ACCOUNT_ID?: string;
+	VECTORIZE_INDEX?: string;
+	VECTORIZE_API_TOKEN?: string;
+	MATCH_THRESHOLD?: string;
+	// In-container CAM++ embedding model path (LocalIdentityClient). Has a Dockerfile default;
+	// only set to override.
+	EMBEDDING_MODEL?: string;
 }

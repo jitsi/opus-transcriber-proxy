@@ -92,6 +92,9 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 		},
+		// Identity enabled by default here so the word-attachment tests exercise the identity-on path;
+		// individual tests flip `config.identity.enabled` to check the off (no-words) behaviour.
+		identity: { enabled: true },
 	},
 }));
 
@@ -130,6 +133,31 @@ describe('XAIBackend', () => {
 			expect(getMockWs().url).toContain('encoding=pcm');
 			expect(getMockWs().url).toContain('interim_results=true');
 			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('should let per-endpoint diarize=true override the global config', async () => {
+			// global config mock has diarize:false; the start-event override enables it
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, diarize: true });
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			expect(getMockWs().url).toContain('diarize=true');
+		});
+
+		it('should let per-endpoint diarize=false override a globally-enabled diarize', async () => {
+			(config.xai as any).diarize = true;
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect({ ...DEFAULT_CONFIG, diarize: false });
+				getMockWs().simulateOpen();
+				await connectPromise;
+
+				// xAI only emits the diarize param when enabled, so it must be absent here
+				expect(getMockWs().url).not.toContain('diarize=true');
+			} finally {
+				(config.xai as any).diarize = false;
+			}
 		});
 
 		it('should include language from backendConfig', async () => {
@@ -517,6 +545,81 @@ describe('XAIBackend', () => {
 			expect(finalResults[0].speaker).toBe(0);
 			expect(finalResults[0].language).toBe('English');
 			expect(finalResults[1].speaker).toBe(1);
+		});
+
+		it('should attach the full per-word timing to the first diarized final (for identity attribution)', () => {
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'transcript.partial',
+				is_final: true,
+				speech_final: true,
+				text: 'hello how are you',
+				language: 'English',
+				words: [
+					{ text: 'hello', speaker: 0, confidence: 0.9, start: 0, end: 0.3 },
+					{ text: 'how', speaker: 1, confidence: 0.85, start: 0.5, end: 0.7 },
+					{ text: 'are', speaker: 1, confidence: 0.88, start: 0.7, end: 0.9 },
+					{ text: 'you', speaker: 1, confidence: 0.92, start: 0.9, end: 1.1 },
+				],
+			}));
+
+			expect(finalResults).toHaveLength(2);
+			// Only the FIRST emitted final carries the complete word list (all speakers), so
+			// identityAttributeFinal runs exactly once per turn over the whole audio window.
+			// Words carry the backend diarization `speaker` label — the identity attributor groups by it.
+			expect(finalResults[0].words).toEqual([
+				{ text: 'hello', start: 0, end: 0.3, speaker: 0 },
+				{ text: 'how', start: 0.5, end: 0.7, speaker: 1 },
+				{ text: 'are', start: 0.7, end: 0.9, speaker: 1 },
+				{ text: 'you', start: 0.9, end: 1.1, speaker: 1 },
+			]);
+			expect(finalResults[1].words).toBeUndefined();
+			// The first final attributes the whole turn (all speakers); the secondary final is flagged
+			// so the proxy skips its store-attribution — otherwise speaker 1's words would be stored
+			// twice (once in the first final's per-speaker segments, once via its own fallback). JIT-16065.
+			expect(finalResults[0].attributionDeferred).toBeUndefined();
+			expect(finalResults[1].attributionDeferred).toBe(true);
+		});
+
+		it('attaches NO words when identity is disabled (master flag → pre-identity output)', () => {
+			(config as any).identity.enabled = false;
+			try {
+				getMockWs().simulateMessage(JSON.stringify({
+					type: 'transcript.partial',
+					is_final: true,
+					speech_final: true,
+					text: 'hello how are you',
+					words: [
+						{ text: 'hello', speaker: 0, start: 0, end: 0.3 },
+						{ text: 'how', speaker: 1, start: 0.5, end: 0.7 },
+					],
+				}));
+				// Still split per speaker (diarization is independent of identity)...
+				expect(finalResults).toHaveLength(2);
+				// ...but no identity-only payload leaves the backend.
+				expect(finalResults[0].words).toBeUndefined();
+				expect(finalResults[1].words).toBeUndefined();
+				expect(finalResults[0].attributionDeferred).toBeUndefined();
+				expect(finalResults[1].attributionDeferred).toBeUndefined();
+			} finally {
+				(config as any).identity.enabled = true;
+			}
+		});
+
+		it('should not attach words to diarized interims', () => {
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'transcript.partial',
+				is_final: false,
+				text: 'hello how',
+				language: 'English',
+				words: [
+					{ text: 'hello', speaker: 0, confidence: 0.9, start: 0, end: 0.3 },
+					{ text: 'how', speaker: 1, confidence: 0.85, start: 0.5, end: 0.7 },
+				],
+			}));
+
+			expect(interimResults).toHaveLength(2);
+			expect(interimResults[0].words).toBeUndefined();
+			expect(interimResults[1].words).toBeUndefined();
 		});
 
 		it('should emit single final message when words have no speaker', () => {

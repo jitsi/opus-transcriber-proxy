@@ -742,6 +742,43 @@ describe('OutgoingConnection', () => {
 			expect(secondBackend.getSentAudioCount()).toBeGreaterThan(0);
 		});
 
+		it('should reconnect the backend to apply a changed diarize flag from a re-start', async () => {
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			// Start undiarized (diarize omitted)
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			await vi.runAllTimersAsync();
+			expect(firstBackend.getConnectCallCount()).toBe(1);
+			expect(firstBackend.getLastConnectConfig()?.diarize).toBeUndefined();
+
+			// Re-start with the SAME format but now requesting diarization — the format is
+			// unchanged, so only the diarize change forces the reconnect.
+			conn.updateInputFormat({ encoding: 'opus' }, true);
+			await vi.runAllTimersAsync();
+
+			expect(firstBackend.getCloseCallCount()).toBe(1);
+			expect(secondBackend.getConnectCallCount()).toBe(1);
+			expect(secondBackend.getLastConnectConfig()?.diarize).toBe(true);
+		});
+
+		it('should not reconnect the backend when the diarize flag is unchanged', async () => {
+			const backend = new MockTranscriptionBackend({ autoConnect: true });
+			vi.mocked(createBackend).mockReturnValue(backend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options, true);
+			await vi.runAllTimersAsync();
+			expect(backend.getConnectCallCount()).toBe(1);
+
+			// Re-start with the same diarize value and same format → no reconnect
+			conn.updateInputFormat({ encoding: 'opus' }, true);
+			await vi.runAllTimersAsync();
+
+			expect(vi.mocked(createBackend)).toHaveBeenCalledTimes(1);
+			expect(backend.getConnectCallCount()).toBe(1);
+		});
+
 		it('should not reconnect the backend when the desired format is unchanged', async () => {
 			// Backend always wants PCM regardless of input format (wantsRawAudio: false)
 			const backend = new MockTranscriptionBackend({ autoConnect: true });

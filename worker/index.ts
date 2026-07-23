@@ -11,6 +11,11 @@ export interface DispatcherTranscriptionMessage {
 	text: string;
 	timestamp: number;
 	language?: string;
+	// Set for identity-attributed finals (single-mic speaker id). Tells the dispatcher to
+	// resolve the real session participant by email (Tier 2), falling back to synthesizing
+	// this record — instead of the per-endpoint KV lookup, which has no entry for the
+	// resolved speaker. id/email are both the resolved fingerprint email (see IdentitySource).
+	resolvedParticipant?: { id: string; name?: string; email?: string };
 }
 
 /**
@@ -28,12 +33,19 @@ interface TranscriptionMessage {
 	is_interim: boolean;
 	participant: {
 		id?: string;
+		name?: string;
 	};
 	transcript: Array<{
 		text: string;
 	}>;
 	timestamp: number;
 	language?: string;
+	event?: string;
+	// Display-only raw final: forward to the client (live CC) but do NOT dispatch to the store.
+	noDispatch?: boolean;
+	// Store-only identity final: dispatch to the store but do NOT forward to the client (keeps the live
+	// CC identical to pre-identity behaviour — the identified speaker isn't in the XMPP roster).
+	dispatchOnly?: boolean;
 }
 
 /**
@@ -94,6 +106,37 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		OTLP_ENV: env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
 		OTLP_HEADERS: env.OTLP_HEADERS || '',
+		// Speaker-identity feature — all off unless explicitly set (feature flag default off).
+		...(env.IDENTITY_ENABLED && { IDENTITY_ENABLED: env.IDENTITY_ENABLED }),
+		...(env.IDENTITY_SIDECAR_URL && { IDENTITY_SIDECAR_URL: env.IDENTITY_SIDECAR_URL }),
+		...(env.IDENTITY_SIDECAR_TOKEN && { IDENTITY_SIDECAR_TOKEN: env.IDENTITY_SIDECAR_TOKEN }),
+		// CF Access service token so the container's WS to wss://<own-domain>/identity passes Zero Trust.
+		...(env.CF_ACCESS_CLIENT_ID && { CF_ACCESS_CLIENT_ID: env.CF_ACCESS_CLIENT_ID }),
+		...(env.CF_ACCESS_CLIENT_SECRET && { CF_ACCESS_CLIENT_SECRET: env.CF_ACCESS_CLIENT_SECRET }),
+		...(env.IDENTITY_TENANT && { IDENTITY_TENANT: env.IDENTITY_TENANT }),
+		...(env.IDENTITY_TIMEOUT_MS && { IDENTITY_TIMEOUT_MS: env.IDENTITY_TIMEOUT_MS }),
+		...(env.IDENTITY_KV_ACCOUNT_ID && { IDENTITY_KV_ACCOUNT_ID: env.IDENTITY_KV_ACCOUNT_ID }),
+		...(env.IDENTITY_KV_NAMESPACE_ID && { IDENTITY_KV_NAMESPACE_ID: env.IDENTITY_KV_NAMESPACE_ID }),
+		...(env.IDENTITY_KV_API_TOKEN && { IDENTITY_KV_API_TOKEN: env.IDENTITY_KV_API_TOKEN }),
+		...(env.IDENTITY_ENROLL_MIN_SPEECH_SEC && { IDENTITY_ENROLL_MIN_SPEECH_SEC: env.IDENTITY_ENROLL_MIN_SPEECH_SEC }),
+		...(env.IDENTITY_ENROLL_COOLDOWN_MS && { IDENTITY_ENROLL_COOLDOWN_MS: env.IDENTITY_ENROLL_COOLDOWN_MS }),
+		...(env.IDENTITY_MAX_ENROLLS_PER_SESSION && { IDENTITY_MAX_ENROLLS_PER_SESSION: env.IDENTITY_MAX_ENROLLS_PER_SESSION }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC && { IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC: env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD && { IDENTITY_ENROLL_CONSISTENCY_THRESHOLD: env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD }),
+		...(env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES && { IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES: env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES }),
+		// Embed cap (event-loop-stall mitigation), KV negative-cache TTL, and sidecar in-flight cap —
+		// all read by the container's config; forward so they're tunable in the CF deployment.
+		...(env.IDENTITY_MAX_EMBED_SEC && { IDENTITY_MAX_EMBED_SEC: env.IDENTITY_MAX_EMBED_SEC }),
+		...(env.IDENTITY_KV_NEGATIVE_TTL_MS && { IDENTITY_KV_NEGATIVE_TTL_MS: env.IDENTITY_KV_NEGATIVE_TTL_MS }),
+		...(env.IDENTITY_MAX_INFLIGHT && { IDENTITY_MAX_INFLIGHT: env.IDENTITY_MAX_INFLIGHT }),
+		// In-container identity path (LocalIdentityClient): when Vectorize creds are present the
+		// container embeds+matches locally (CAM++ via sherpa-onnx-node) instead of calling the sidecar.
+		// EMBEDDING_MODEL has a Dockerfile default; only forwarded when an operator overrides it.
+		...(env.VECTORIZE_ACCOUNT_ID && { VECTORIZE_ACCOUNT_ID: env.VECTORIZE_ACCOUNT_ID }),
+		...(env.VECTORIZE_INDEX && { VECTORIZE_INDEX: env.VECTORIZE_INDEX }),
+		...(env.VECTORIZE_API_TOKEN && { VECTORIZE_API_TOKEN: env.VECTORIZE_API_TOKEN }),
+		...(env.EMBEDDING_MODEL && { EMBEDDING_MODEL: env.EMBEDDING_MODEL }),
+		...(env.MATCH_THRESHOLD && { MATCH_THRESHOLD: env.MATCH_THRESHOLD }),
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};
@@ -283,6 +326,9 @@ async function handleWebSocketWithDispatcher(
 	env: Env,
 	ctx: ExecutionContext,
 	sessionId: string,
+	// When false, this proxy still runs (to strip store-only `dispatchOnly` identity finals from the
+	// client stream) but does NOT connect to or dispatch to the Dispatcher DO. JIT-16065.
+	dispatchToStore: boolean,
 ): Promise<Response> {
 	// Create WebSocket pair for the client
 	const clientPair = new WebSocketPair();
@@ -318,7 +364,7 @@ async function handleWebSocketWithDispatcher(
 	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
 	// Each session gets its own DO instance for isolation.
 	let dispatcherWs: WebSocket | null = null;
-	if (env.DISPATCHER_DO) {
+	if (dispatchToStore && env.DISPATCHER_DO) {
 		try {
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
 			const stub = env.DISPATCHER_DO.get(doId);
@@ -375,7 +421,7 @@ async function handleWebSocketWithDispatcher(
 
 	// Function to connect/reconnect to dispatcher DO
 	async function connectToDispatcher(allowDuringClose = false): Promise<WebSocket | null> {
-		if (!env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
+		if (!dispatchToStore || !env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
 
 		try {
 			const doId = env.DISPATCHER_DO.idFromName(sessionId);
@@ -456,37 +502,45 @@ async function handleWebSocketWithDispatcher(
 
 	// Pipe: container → client (downstream, intercept for dispatcher)
 	containerWs.addEventListener('message', (event) => {
-		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
-		// details) and forward the combined message, so the client sees the whole path in one message.
+		// Parse once (string messages only). Non-JSON / binary (media) → parsed stays null and is
+		// forwarded verbatim below.
+		let parsed: (TranscriptionMessage & { event?: string; worker?: unknown }) | null = null;
 		if (typeof event.data === 'string') {
-			let parsedInfo: Record<string, unknown> | null = null;
 			try {
-				const p = JSON.parse(event.data);
-				if (p && p.event === 'info') parsedInfo = p;
+				parsed = JSON.parse(event.data);
 			} catch {
-				parsedInfo = null;
-			}
-			if (parsedInfo) {
-				parsedInfo.worker = buildWorkerInfo(request, env);
-				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
-					serverWs.send(JSON.stringify(parsedInfo));
-				}
-				return;
+				parsed = null;
 			}
 		}
 
-		// Forward to client immediately
-		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (parsed && parsed.event === 'info') {
+			parsed.worker = buildWorkerInfo(request, env);
+			if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+				serverWs.send(JSON.stringify(parsed));
+			}
+			return;
+		}
+
+		// Forward to client — UNLESS this is a store-only identity final (dispatchOnly): showing it
+		// would render the identified speaker as "Guest" and duplicate the raw line. Keeping it out of
+		// the client stream leaves the live CC identical to pre-identity behaviour.
+		if (!parsed?.dispatchOnly && serverWs.readyState === WebSocket.READY_STATE_OPEN) {
 			serverWs.send(event.data);
 		}
 
-		// Dispatch transcriptions via DO WebSocket
-		if (typeof event.data === 'string') {
+		// Dispatch transcriptions via DO WebSocket (skipped entirely on the strip-only path)
+		if (dispatchToStore && parsed) {
 			try {
-				const data = JSON.parse(event.data) as TranscriptionMessage;
+				const data = parsed;
 				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
 				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
-				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
+				if (
+					(data.type === 'transcription-result' || data.type === 'realtime-translation-result') &&
+					!data.is_interim &&
+					!data.noDispatch
+				) {
 					const dispatcherMessage: DispatcherTranscriptionMessage = {
 						sessionId,
 						endpointId: data.participant?.id || 'unknown',
@@ -494,6 +548,20 @@ async function handleWebSocketWithDispatcher(
 						timestamp: data.timestamp,
 						language: data.language,
 					};
+
+					// An identity-attributed final (dispatchOnly, resolved id = fingerprint email + name)
+					// is forwarded as resolvedParticipant so the dispatcher attributes to that speaker
+					// instead of a KV lookup for the synthetic/absent email endpoint. Keyed on the explicit
+					// dispatchOnly marker (not just name presence) so an ordinary transcription that happens
+					// to carry a participant.name is never misread as an identity override. Unresolved
+					// identity segments are mic-owner-attributed (no name) → normal KV path. JIT-16065.
+					if (data.dispatchOnly && data.participant?.name && data.participant?.id) {
+						dispatcherMessage.resolvedParticipant = {
+							id: data.participant.id,
+							name: data.participant.name,
+							email: data.participant.id,
+						};
+					}
 
 					if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
 						dispatcherWs.send(JSON.stringify(dispatcherMessage));
@@ -686,9 +754,14 @@ export default {
 			);
 		}
 
-		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && env.DISPATCHER_DO) {
-			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
+		// Intercept a WebSocket upgrade through the inspecting proxy when we either dispatch to the
+		// store OR must strip store-only (dispatchOnly) identity finals from the client stream (identity
+		// enabled). Otherwise pass through verbatim below. Without this, the verbatim path would forward
+		// dispatchOnly finals to the client — exposing the resolved speaker's email + a duplicate "Guest"
+		// line (JIT-16065).
+		const dispatchToStore = useDispatcher && !!env.DISPATCHER_DO;
+		if (upgradeHeader === 'websocket' && (dispatchToStore || env.IDENTITY_ENABLED === 'true')) {
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, dispatchToStore);
 		}
 
 		// Forward request directly to container (pass-through mode)

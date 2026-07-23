@@ -9,41 +9,54 @@
 #   image would run under QEMU emulation on arm64 and be far too slow. `npm run docker:build` builds
 #   them first; CI does the same before `docker build`.
 
+# Base is Debian (bookworm-slim, glibc) — NOT Alpine — because the in-container identity path
+# uses sherpa-onnx-node, whose prebuilt native binaries are built against glibc (no musl variant
+# is published). On Alpine/musl the sherpa .so fails to dlopen at runtime. The identity sidecar
+# uses the same base for the same reason. libopus/node-gyp build fine on Debian.
+
 # ---- Builder: compile the native Opus addon and bundle the server ----
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /usr/src/app
 
 # Toolchain for node-gyp + libopus (C/C++).
-RUN apk add --no-cache python3 make g++ git
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 # Install all dependencies (incl. dev: node-gyp, node-addon-api, esbuild).
 # binding.gyp is copied afterwards so this install does not trigger a build.
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Sources required to compile libopus + the addon and to bundle the server.
-# src/ carries the libopus submodule (src/OpusDecoder/opus) that node-gyp builds.
-COPY binding.gyp build.mjs ./
+# Sources for the NATIVE build only: binding.gyp + native/ + the libopus submodule
+# (src/OpusDecoder/opus). These are copied BEFORE `build:native` and deliberately exclude the
+# rest of src/, so editing TypeScript does NOT invalidate this layer — libopus (a slow, QEMU-
+# emulated amd64 compile) is only rebuilt when the opus/addon sources actually change.
+COPY binding.gyp ./
 COPY native ./native
-COPY src ./src
+COPY src/OpusDecoder/opus ./src/OpusDecoder/opus
 
-# Compile build/Release/opus_native.node, then bundle dist/bundle/server.js.
+# Compile build/Release/opus_native.node (cached across TS-only edits per the note above).
 RUN npm run build:native
+
+# Now the rest of the sources, needed only for the esbuild bundle. A code edit invalidates from
+# here — build:bundle is fast (seconds), unlike the native compile above.
 # GIT_HASH is baked into the bundle (build.mjs -> __GIT_HASH__) so the running commit is observable
 # in the server `info` message. .git isn't in the build context, so pass it as a build-arg (CI sets
 # it to the commit SHA); falls back to "unknown" for a plain `docker build`.
+COPY build.mjs ./
+COPY src ./src
 ARG GIT_HASH=unknown
 RUN GIT_HASH="$GIT_HASH" npm run build:bundle
 
 # ---- Runtime: slim image with production deps + both backends' artifacts ----
-FROM node:22-alpine AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /usr/src/app
 
-# libstdc++ is required at runtime by the compiled C++ addon.
-RUN apk add --no-cache libstdc++
+# libstdc++6 (needed by the compiled C++ addon and by sherpa-onnx) ships in the Debian base.
 
 # Production dependencies only. --ignore-scripts avoids any native rebuild
-# (binding.gyp is intentionally not present in this stage).
+# (binding.gyp is intentionally not present in this stage). Optional platform deps
+# (incl. sherpa-onnx-linux-<arch>, glibc prebuilt) are still installed.
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 
@@ -53,6 +66,19 @@ COPY --from=builder /usr/src/app/dist/bundle ./dist/bundle
 
 # Prebuilt, architecture-independent WASM artifacts (from the build context; built by build:wasm).
 COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/
+
+# CAM++ speaker-embedding model for the in-container identity path (LocalIdentityClient -> embedder,
+# sherpa-onnx-node). Architecture-independent, so it is fetched on the host (npm run fetch-models)
+# and baked in via COPY — like the WASM artifacts. Only used when Vectorize creds are configured;
+# harmless otherwise. sherpa-onnx-node itself is a prod dependency installed above (its platform
+# binary is a prebuilt optional dep, so --ignore-scripts is fine — no native build needed).
+COPY models/campplus.onnx ./models/campplus.onnx
+ENV EMBEDDING_MODEL=/usr/src/app/models/campplus.onnx
+# So the sherpa-onnx native addon can resolve its sibling shared libraries (libonnxruntime.so, ...)
+# in the prebuilt platform package. Both arch dirs are listed (only the image's arch is actually
+# installed — sherpa's platform packages are per-os/cpu optional deps — the other path is skipped);
+# the image is published for both linux/amd64 and linux/arm64.
+ENV LD_LIBRARY_PATH=/usr/src/app/node_modules/sherpa-onnx-linux-x64:/usr/src/app/node_modules/sherpa-onnx-linux-arm64
 
 # Expose the port
 EXPOSE 8080

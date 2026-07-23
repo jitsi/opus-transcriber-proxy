@@ -224,6 +224,8 @@ interface BackendConfig {
   prompt?: string;
   model?: string;
   tags?: string[];
+  diarize?: boolean; // per-endpoint override (start event); undefined = global config
+  // ...plus per-connection overrides: deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, etc.
 }
 
 interface TranscriptionBackend {
@@ -234,7 +236,11 @@ interface TranscriptionBackend {
 
   // Audio
   sendAudio(audioBase64: string): Promise<void>;
-  forceCommit(): void;
+  // Returns the seconds of synthetic silence injected into the provider stream (0 if none). NOTE:
+  // this changed from `: void` to `: number` for the speaker-identity PCM-ring alignment — a
+  // breaking change for any third-party TranscriptionBackend implementation (return 0 if you inject
+  // nothing). Only xAI injects silence today; all other first-party backends return 0.
+  forceCommit(): number;
 
   // Format negotiation — called on every reinitializeDecoder (initial setup, on updateInputFormat,
   //   and again on any new backend instance created by reconnectBackend)
@@ -250,6 +256,30 @@ interface TranscriptionBackend {
   onClosed?: () => void;
 }
 ```
+
+### Per-endpoint diarization
+
+`BackendConfig.diarize` is a per-endpoint override sourced from the `start` event's
+`diarize` field (`TranscriberProxy.handleStartEvent` → `OutgoingConnection`). It lets
+the caller (e.g. the Jitsi videobridge) enable diarization only for streams that carry
+multiple speakers (room systems, dial-in legs), while leaving single-speaker participant
+streams undiarized. Both `DeepgramBackend` and `XAIBackend` resolve
+`backendConfig.diarize ?? config.<provider>.diarize`, so `undefined` falls back to the
+global `DEEPGRAM_DIARIZE` / `XAI_DIARIZE` env config. Only diarize streams known to be
+multi-speaker: on a single-speaker stream the diarizer can spuriously split one talker
+into several speaker labels.
+
+### Per-word speaker labels & speaker identity
+
+When diarizing, backends emit a per-word `speaker` index. The optional speaker-identity feature
+(`IDENTITY_ENABLED`, off by default) consumes these labels to segment a shared-mic turn per speaker
+and match each to an enrolled voiceprint — segmentation is the backend's job, identity only embeds +
+matches (see the "Speaker Identity" section in [CLAUDE.md](CLAUDE.md) and [README.md](README.md)).
+For identity to run, a backend must attach a `words` array (`{text,start,end,speaker?}`, finals only)
+to its `TranscriptionMessage` on a 16 kHz PCM (`l16`) path. Currently only **xAI** does so, so
+identity is effectively xAI-only; other backends transcribe (and diarize) normally but are not
+attributed. When adding/attaching words to a new backend, attach them on finals only and gate on
+`config.identity?.enabled` so no identity-specific payload is emitted when the feature is off.
 
 ### Audio Format Negotiation
 
@@ -397,9 +427,9 @@ export class YourBackend implements TranscriptionBackend {
     //   ogg  → Ogg-Opus container (base64-encoded)
   }
 
-  forceCommit(): void {
-    // Force transcription of pending audio
-    // Called when audio stream goes idle
+  forceCommit(): number {
+    // Force transcription of pending audio; called when the audio stream goes idle.
+    return 0; // seconds of synthetic silence injected into the provider stream (0 if none)
   }
 
   updatePrompt(prompt: string): void {

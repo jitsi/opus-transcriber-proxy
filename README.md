@@ -10,6 +10,7 @@ Real-time WebSocket transcription proxy supporting multiple speech-to-text backe
 - **Real-time streaming** - Interim and final transcription results
 - **Flexible deployment** - Node.js standalone or Cloudflare Workers with Containers
 - **Dispatcher integration** - Forward transcriptions to external services
+- **Speaker identity** (optional) - Attribute utterances on a shared mic to known, enrolled speakers via voice fingerprints, off the transcription hot path (see [Speaker Identity](#speaker-identity-optional))
 - **Audio debugging** - Dump and replay WebSocket sessions
 
 ## Quick Start
@@ -67,6 +68,13 @@ npm run build       # Build the native Opus addon + esbuild bundle
 npm run docker:build
 npm run docker:run
 ```
+
+The image is Debian-based (`node:22-bookworm-slim`), not Alpine: the optional speaker-identity path
+uses `sherpa-onnx-node`, whose prebuilt native binaries are built against glibc (there is no musl
+build). `docker:build` also runs `npm run fetch-models` to download the CAM++ embedding model
+(architecture-independent, baked in via `COPY`, like the WASM artifacts). A bare `docker build` on its
+own will fail at the model `COPY` step — run `npm run fetch-models` first (or use `npm run docker:build`).
+The model + `sherpa-onnx-node` are only loaded at runtime when speaker identity is enabled.
 
 ## Configuration
 
@@ -138,6 +146,52 @@ See [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) for details.
 
 See [OBSERVABILITY.md](OBSERVABILITY.md) for available metrics, queries, and authentication.
 
+### Speaker Identity (Optional)
+
+Identify *who* is speaking when several people share one microphone/endpoint (a meeting-room device,
+a dial-in leg), and attribute each utterance to a known, enrolled participant. Provider-independent
+and strictly off the transcription hot path — identity never blocks or breaks transcription.
+
+**Off by default.** With `IDENTITY_ENABLED` unset the proxy behaves exactly as without this feature:
+no extra work, no Cloudflare/native dependency loaded at runtime, live captions unchanged. Enable it
+only where you have the stores below configured.
+
+**How it works.** Segmentation comes from the *transcription backend's* per-word speaker labels (not
+a local diarizer). For each speaker, a CAM++ voice embedding (via `sherpa-onnx-node`, in-process) is
+matched — cosine — against a per-tenant [Cloudflare Vectorize](https://developers.cloudflare.com/vectorize/)
+store. A per-endpoint `diarize` flag (on the `start` event) gates behaviour: `diarize: true` (room)
+runs per-speaker identify; otherwise the endpoint's owner is enrolled in the background, guarded so a
+second voice on a shared mic never pollutes one person's fingerprint. Results are written to the
+transcript store only and kept out of the live captions.
+
+> **Scope:** identity currently runs on the **xAI** backend only (it needs per-word timing + speaker
+> labels on a 16 kHz PCM path). Other backends transcribe normally but are not attributed.
+
+> **Biometric data:** voice fingerprints are personal data. Operators are responsible for retention
+> and consent. Fingerprints are keyed per tenant; a delete path exists on the store.
+>
+> **PII on the wire:** the fingerprint key is the participant's **email**. A resolved speaker's email
+> (and name) travels in the transcription/dispatcher payloads (container → Worker → dispatcher) and
+> lands in the stored transcript's attribution. If that's not acceptable for your deployment, use an
+> opaque key (hashed email / UUID) as the fingerprint identity instead of the raw email.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IDENTITY_ENABLED` | `false` | Master switch. When off, none of the below has any effect. |
+| `VECTORIZE_ACCOUNT_ID` / `VECTORIZE_INDEX` / `VECTORIZE_API_TOKEN` | (unset) | Cloudflare Vectorize fingerprint store (v2 REST). All three required for the in-process path. |
+| `EMBEDDING_MODEL` | `models/campplus.onnx` | CAM++ (3D-Speaker) embedding model path (fetched by `npm run fetch-models`, baked into the image). |
+| `MATCH_THRESHOLD` | `0.5` | Min cosine to accept an open-set identity match. |
+| `IDENTITY_TENANT` | `default` | Tenant used when a stream's identity isn't resolved from KV. |
+| `IDENTITY_KV_ACCOUNT_ID` / `IDENTITY_KV_NAMESPACE_ID` / `IDENTITY_KV_API_TOKEN` | (unset) | Cloudflare KV (REST) holding per-participant identity (email/name/tenant from the join). Unset → no auto-enroll. |
+| `IDENTITY_MAX_EMBED_SEC` | `4` | Cap on audio fed to a single embed — bounds the synchronous native inference so it can't stall the event loop. `<=0` disables. |
+| `IDENTITY_ENROLL_MIN_SPEECH_SEC` | `8` | Min speech in a window before it may auto-enroll. |
+| `IDENTITY_ENROLL_COOLDOWN_MS` | `20000` | Min gap between auto-enroll attempts per stream. |
+| `IDENTITY_MAX_ENROLLS_PER_SESSION` | `10` | Cap on auto-enrolls per stream. |
+| `IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC` | `2` | Sub-window size for the single-mic guard. |
+| `IDENTITY_ENROLL_CONSISTENCY_THRESHOLD` | `0.5` | Min pairwise cosine across sub-windows to accept a window as one voice. |
+| `IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES` | `3` | Consecutive divergent (multi-voice) windows before enrollment is disabled for the stream. |
+| `IDENTITY_SIDECAR_URL` | (unset) | Optional: use an **external** identity sidecar (`/identify` + `/enroll`) instead of the in-process path. See [`src/identity/SidecarClient.ts`](src/identity/SidecarClient.ts). |
+
 ## WebSocket Protocol
 
 ### Connection
@@ -159,6 +213,21 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
 | `tag` | (none) | Session tags (multiple values supported, max 128 chars each) |
 
 ### Client Messages
+
+**Start** (per participant/endpoint; opens/updates its stream):
+```json
+{
+  "event": "start",
+  "start": {
+    "tag": "participant-id",
+    "mediaFormat": { "encoding": "opus" },
+    "diarize": true
+  }
+}
+```
+`diarize` is an optional per-endpoint boolean (overrides the global `XAI_DIARIZE` / `DEEPGRAM_DIARIZE`).
+Set it `true` only for endpoints carrying multiple speakers (room systems, dial-in) — it drives both
+backend diarization and the speaker-identity room path.
 
 **Audio data:**
 ```json
@@ -191,6 +260,13 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
   "language": "en"
 }
 ```
+
+When speaker identity is enabled, `transcription-result` messages may carry extra fields consumed by
+the routing layer (the Cloudflare Worker) and normally invisible to clients:
+`words` (per-word timing + `speaker`), `dispatchOnly` (store-only — a resolved-speaker final, kept out
+of live captions), `noDispatch` (live-only — the raw mic-owner final, not stored), and
+`attributionDeferred` (a secondary diarized final already attributed by a sibling). See
+[CLAUDE.md](CLAUDE.md) for the store/live routing contract.
 
 **Pong:**
 ```json

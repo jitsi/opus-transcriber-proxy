@@ -20,11 +20,12 @@
 		"test": "vitest",
 		"test:integration": "node scripts/integration-test.mjs",
 		"mix-audio": "tsx scripts/mix-audio.mjs",
-		"docker:build": "npm run build:wasm && docker build -t opus-transcriber-proxy .",
+		"fetch-models": "bash scripts/fetch-models.sh",
+		"docker:build": "npm run build:wasm && npm run fetch-models && docker build -t opus-transcriber-proxy .",
 		"docker:run": "docker run --rm -i -p 8080:8080 --env-file .env opus-transcriber-proxy",
 		"docker:stop": "docker stop $(docker ps -q --filter ancestor=opus-transcriber-proxy) 2>/dev/null || echo 'No containers running'",
 		"docker:test": "npm run docker:build && npm run docker:run",
-		"docker:build:local": "npm run build:wasm && docker build -t opus-transcriber-proxy .",
+		"docker:build:local": "npm run build:wasm && npm run fetch-models && docker build -t opus-transcriber-proxy .",
 		"cf:deploy": "cd worker && npm install && npm run deploy",
 		"cf:tail": "cd worker && npm run tail"
 	},
@@ -40,6 +41,7 @@
 		"@opentelemetry/semantic-conventions": "^1.28.0",
 		"@opentelemetry/winston-transport": "^0.8.0",
 		"dotenv": "^16.4.5",
+		"sherpa-onnx-node": "~1.13.4",
 		"winston": "^3.19.0",
 		"ws": "^8.18.0"
 	},

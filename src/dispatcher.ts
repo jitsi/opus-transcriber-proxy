@@ -11,12 +11,25 @@ import logger from './logger';
 import { config } from './config';
 import { getInstruments } from './telemetry/instruments';
 
+export interface ResolvedParticipant {
+	id: string;
+	name: string;
+	email?: string;
+	avatar?: string;
+}
+
 export interface DispatcherMessage {
 	sessionId: string;
 	endpointId: string;
 	text: string;
 	timestamp: number;
 	language?: string;
+	/**
+	 * Speaker identity the proxy resolved itself (single-mic room attribution).
+	 * When present the dispatcher uses it instead of the {sessionId}-{endpointId}
+	 * KV lookup — the true speaker in a shared-mic room has no per-endpoint KV entry.
+	 */
+	resolvedParticipant?: ResolvedParticipant;
 }
 
 export class DispatcherConnection {

@@ -10,6 +10,15 @@ function parseIntOrDefault(value: string | undefined, defaultValue: number): num
 	return isNaN(parsed) ? defaultValue : parsed;
 }
 
+// Float env parse that falls back to the default on unset/NaN/non-finite. Used for threshold/limit
+// knobs where a malformed value must never silently become NaN — e.g. IDENTITY_MAX_EMBED_SEC=NaN
+// would otherwise disable the embed cap (fail-open on the very knob that bounds it).
+function parseFloatOrDefault(value: string | undefined, defaultValue: number): number {
+	if (!value) return defaultValue;
+	const parsed = parseFloat(value);
+	return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
 function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	if (!value) return defaultValue;
 	try {
@@ -153,6 +162,63 @@ export const config = {
 	dispatcher: {
 		wsUrl: process.env.DISPATCHER_WS_URL || '', // e.g., wss://dispatcher.example.com/ws
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.DISPATCHER_HEADERS, {}), // e.g., {"Authorization": "Bearer xxx"}
+	},
+
+	// Speaker-identity feature (single-mic multi-speaker attribution via the identity sidecar).
+	// Master kill switch: when disabled, transcription behaviour is unchanged.
+	identity: {
+		enabled: process.env.IDENTITY_ENABLED === 'true', // Default false — feature flag
+		// Optional EXTERNAL identity sidecar (bring-your-own /identify + /enroll service). Unset →
+		// use the in-process CAM++ + Vectorize path (LocalIdentityClient). e.g. wss://host/identity
+		sidecarUrl: process.env.IDENTITY_SIDECAR_URL || '',
+		sidecarToken: process.env.IDENTITY_SIDECAR_TOKEN || '',
+		// CF Access service token — reuse the one that fronts the proxy domain so the container's
+		// call to wss://<own-domain>/identity passes Zero Trust (no Access-policy change needed).
+		accessClientId: process.env.CF_ACCESS_CLIENT_ID || '',
+		accessClientSecret: process.env.CF_ACCESS_CLIENT_SECRET || '',
+		// Tenant scoping for enroll/identify. Placeholder default until per-customer identity
+		// is resolved from the WEBHOOK_EVENTS KV (a later step); fine for single-tenant testing.
+		tenant: process.env.IDENTITY_TENANT || 'default',
+		// Per-request bound + in-flight cap for the external-sidecar client (unused by the in-process path).
+		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 30000),
+		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
+		// Real per-customer identity + tenant from the WEBHOOK_EVENTS KV (via CF KV REST API).
+		// Unset → no source: falls back to the `tenant` default above and skips auto-enroll.
+		kvAccountId: process.env.IDENTITY_KV_ACCOUNT_ID || '',
+		kvNamespaceId: process.env.IDENTITY_KV_NAMESPACE_ID || '',
+		kvApiToken: process.env.IDENTITY_KV_API_TOKEN || '',
+		// A miss (participant's PARTICIPANT_JOINED KV record not written yet — the KV pipeline is
+		// async and multi-hop) is only cached this long, so a slightly-early first lookup self-heals
+		// once the record lands instead of poisoning identity for the whole session. Hits cache forever.
+		kvNegativeTtlMs: parseIntOrDefault(process.env.IDENTITY_KV_NEGATIVE_TTL_MS, 5000),
+		// In-container CAM++ embedding + Vectorize match (replaces the identity-sidecar hop). When the
+		// Vectorize creds are all set, the proxy embeds + matches in-process (LocalIdentityClient);
+		// otherwise it falls back to the sidecarUrl WS/HTTP client.
+		embeddingModel: process.env.EMBEDDING_MODEL || 'models/campplus.onnx',
+		matchThreshold: parseFloatOrDefault(process.env.MATCH_THRESHOLD, 0.5),
+		// Cap the audio fed to a single CAM++ embed. `compute()` is a synchronous native call on the
+		// container's event loop, so an unbounded slice (a long monologue turn, or the full enroll
+		// window) can stall every session on the container for seconds. ~4s is plenty for a speaker
+		// embedding; this bounds each embed to ~100-200ms. <= 0 disables the cap. JIT-16065.
+		maxEmbedSec: parseFloatOrDefault(process.env.IDENTITY_MAX_EMBED_SEC, 4),
+		vectorizeAccountId: process.env.VECTORIZE_ACCOUNT_ID || '',
+		vectorizeIndex: process.env.VECTORIZE_INDEX || '',
+		vectorizeApiToken: process.env.VECTORIZE_API_TOKEN || '',
+		// Auto-enrollment from normal (single-speaker) streams — quality-gated + rate-limited.
+		enrollMinSpeechSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_MIN_SPEECH_SEC, 8),
+		enrollCooldownMs: parseIntOrDefault(process.env.IDENTITY_ENROLL_COOLDOWN_MS, 20000),
+		maxEnrollsPerSession: parseIntOrDefault(process.env.IDENTITY_MAX_ENROLLS_PER_SESSION, 10),
+		// Single-mic enroll guard (JIT-16065): before enrolling a non-diarized ("individual") stream,
+		// split the window into sub-windows, embed each, and require min pairwise cosine >= threshold.
+		// A second voice on a shared mic diverges → enroll aborted + disabled for the stream. Only
+		// active when the client can embed locally (LocalIdentityClient). Threshold is tuned live.
+		enrollConsistencySubWindowSec: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_SUBWINDOW_SEC, 2),
+		enrollConsistencyThreshold: parseFloatOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_THRESHOLD, 0.5),
+		// Consecutive divergent enroll windows before enrollment is disabled for the stream. A single
+		// noisy window (cough, music, a long pause) must not permanently disable a genuine single
+		// speaker, so we skip (not disable) on the first divergence and only latch after this many
+		// in a row; any consistent window resets the count. Default 3.
+		enrollConsistencyMaxStrikes: parseIntOrDefault(process.env.IDENTITY_ENROLL_CONSISTENCY_MAX_STRIKES, 3),
 	},
 
 	// Session resumption configuration
