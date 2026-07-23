@@ -743,10 +743,14 @@ export class OutgoingConnection {
 	}
 
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
-		if (!this.identityAttributor || message.is_interim || !message.words?.length) return null;
+		if (!this.identityAttributor || message.is_interim) return null;
 		try {
 			if (this.diarizeActive()) {
-				// ROOM: per-speaker identify + attribution override.
+				// ROOM: per-speaker identify + attribution override. Needs the backend's per-word speaker
+				// labels — skip a final that carries none (the words guard belongs HERE, not before the
+				// enroll branch: enroll uses a rolling window and works fine on word-less finals such as
+				// xAI granular commits or transcript.done). JIT-16065.
+				if (!message.words?.length) return null;
 				const resolved = await this.resolveIdentity();
 				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
 				const a = await this.identityAttributor.analyze(message.words, tenant);
