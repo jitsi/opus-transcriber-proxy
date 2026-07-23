@@ -70,6 +70,11 @@ export class VectorizeStore {
 		return `${tenant}:${identity}`;
 	}
 
+	// NOTE: rolling-centroid merge is an unguarded read-modify-write (get_by_ids → merge → upsert).
+	// Two containers (pool mode) enrolling the same identity concurrently, or a get_by_ids racing
+	// Vectorize's async mutation pipeline, can lose an update — it only skews the running average
+	// (sampleCount-weighted), never corrupts the vector, and self-corrects over subsequent enrolls.
+	// Acceptable for now; a metadata-versioned CAS or server-side merge would remove it. JIT-16065.
 	async upsert(tenant: string, identity: string, vector: Float32Array, name?: string): Promise<void> {
 		const id = this.key(tenant, identity);
 		const existing = await this.call('get_by_ids', { ids: [id], returnValues: true, returnMetadata: 'all' });
