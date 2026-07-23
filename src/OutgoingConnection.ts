@@ -744,6 +744,11 @@ export class OutgoingConnection {
 
 	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
 		if (!this.identityAttributor || message.is_interim) return null;
+		// Snapshot the reconnect generation: resolveIdentity() below awaits a KV fetch (up to seconds),
+		// during which a backend reconnect can reset the ring to a fresh clock. If that happens, this
+		// final's word times belong to the OLD clock and must not be sliced against the new ring — bail
+		// to the mic-owner fallback rather than embed the wrong audio span. JIT-16065.
+		const gen = this.reinitGeneration;
 		try {
 			if (this.diarizeActive()) {
 				// ROOM: per-speaker identify + attribution override. Needs the backend's per-word speaker
@@ -752,6 +757,7 @@ export class OutgoingConnection {
 				// xAI granular commits or transcript.done). JIT-16065.
 				if (!message.words?.length) return null;
 				const resolved = await this.resolveIdentity();
+				if (gen !== this.reinitGeneration) return null; // ring was reset mid-resolve → stale timeline
 				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
 				const a = await this.identityAttributor.analyze(message.words, tenant);
 				if (!a || a.segments.length === 0) return null;
