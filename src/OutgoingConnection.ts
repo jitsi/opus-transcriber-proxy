@@ -693,7 +693,6 @@ export class OutgoingConnection {
 		this.identityAttributor = new IdentityAttributor(sidecar, {
 			sessionId,
 			streamId: this.localTag,
-			analyzeWindowSec: config.identity?.analyzeWindowSec,
 		});
 	}
 

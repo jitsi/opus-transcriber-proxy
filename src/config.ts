@@ -182,8 +182,6 @@ export const config = {
 		// Per-request bound + in-flight cap for the external-sidecar client (unused by the in-process path).
 		timeoutMs: parseIntOrDefault(process.env.IDENTITY_TIMEOUT_MS, 30000),
 		maxInFlight: parseIntOrDefault(process.env.IDENTITY_MAX_INFLIGHT, 8),
-		// Rolling PCM-ring window (seconds) the attributor retains per stream.
-		analyzeWindowSec: parseIntOrDefault(process.env.IDENTITY_ANALYZE_WINDOW_SEC, 45),
 		// Real per-customer identity + tenant from the WEBHOOK_EVENTS KV (via CF KV REST API).
 		// Unset → no source: falls back to the `tenant` default above and skips auto-enroll.
 		kvAccountId: process.env.IDENTITY_KV_ACCOUNT_ID || '',

@@ -81,7 +81,6 @@ export interface Env {
 	CF_ACCESS_CLIENT_SECRET?: string;
 	IDENTITY_TENANT?: string;
 	IDENTITY_TIMEOUT_MS?: string;
-	IDENTITY_ANALYZE_WINDOW_SEC?: string;
 	IDENTITY_KV_ACCOUNT_ID?: string;
 	IDENTITY_KV_NAMESPACE_ID?: string;
 	IDENTITY_KV_API_TOKEN?: string;

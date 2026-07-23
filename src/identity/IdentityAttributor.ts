@@ -6,14 +6,11 @@ export interface IdentityAttributorOptions {
   streamId: string;
   sampleRate?: number; // default 16000
   maxBufferSec?: number; // ring cap, default 120
-  analyzeWindowSec?: number; // rolling context sent per final, default 45
 }
 
 export interface UtteranceAnalysis {
   speakerCount: number;
   segments: AttributedSegment[];
-  pcm: Buffer; // the analyzed window slice (reusable for enrollment)
-  windowSec: number;
 }
 
 /**
@@ -32,7 +29,6 @@ export class IdentityAttributor {
   private bufStartSec = 0;
   private readonly bytesPerSec: number;
   private readonly maxBytes: number;
-  private readonly windowSec: number;
 
   constructor(
     private sidecar: ISidecarClient,
@@ -41,7 +37,6 @@ export class IdentityAttributor {
     const sr = o.sampleRate ?? 16000;
     this.bytesPerSec = sr * 2; // s16le mono
     this.maxBytes = (o.maxBufferSec ?? 120) * this.bytesPerSec;
-    this.windowSec = o.analyzeWindowSec ?? 45;
   }
 
   appendPcm(pcm: Uint8Array): void {
@@ -96,7 +91,7 @@ export class IdentityAttributor {
    * single speaker (0), so non-diarizing backends still get a fast single-speaker identify. JIT-16065.
    *
    * Returns speakerCount + per-run segments (in order, each labelled with its speaker's resolved
-   * identity) + the whole-utterance PCM (reusable for auto-enrollment). Null when there are no words.
+   * identity). Null when there are no words. (Enrollment audio comes from recentWindow, not here.)
    */
   async analyze(words: Word[], tenant: string): Promise<UtteranceAnalysis | null> {
     if (!words.length) return null;
@@ -147,9 +142,7 @@ export class IdentityAttributor {
       };
     });
 
-    const speakerCount = runsBySpeaker.size;
-    const pcm = this.sliceSec(words[0].start, words[words.length - 1].end) ?? Buffer.alloc(0);
-    return { speakerCount, segments, pcm, windowSec: pcm.length / this.bytesPerSec };
+    return { speakerCount: runsBySpeaker.size, segments };
   }
 
   /**
