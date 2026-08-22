@@ -4,6 +4,8 @@ import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isP
 import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
+import { AgentProxy } from './agentproxy';
+import { assertPublicEndpointHost } from './agent/endpointGuard';
 import { normalizeTargetLanguage } from './TranslatorConnection';
 import { createNodeTranslationRuntime } from './translate/nodeRuntime';
 import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage, type TranslationTalkStartData, type TranslationTalkStopData } from './translate/messages';
@@ -63,6 +65,175 @@ const wss = new WebSocketServer({ noServer: true });
 // direction flushes its final usage delta into the reporter buffer before we drain it.
 const activeTranslateSessions = new Set<TranslatorProxy>();
 
+// Active /agent proxies, tracked for graceful shutdown like the translation proxies.
+const activeAgentSessions = new Set<AgentProxy>();
+
+/** The customer endpoint an /agent connection should dial, resolved from the connect's header/params. */
+interface AgentEndpoint {
+	url: string;
+	headers: Record<string, string>;
+	/** Query params other than `endpoint` (jicofo's urlParams), echoed to the customer as customParameters. */
+	customParameters?: Record<string, unknown>;
+}
+
+/**
+ * Resolve and validate the customer endpoint for an /agent connection: the `X-Agent-Endpoint`
+ * header (forwarded by the bridge from the jicofo connect config) or, for dev, an `?endpoint=`
+ * query param. Returns an error string (for the 400 response) when missing or invalid.
+ */
+function resolveAgentEndpoint(url: URL, headers: http.IncomingHttpHeaders): AgentEndpoint | string {
+	const rawHeader = headers['x-agent-endpoint'];
+
+	// The ?endpoint= query param is a dev convenience only: it would let anyone reaching the proxy pick the
+	// dial-out target, so it is honored solely when explicitly enabled (AGENT_ALLOW_ENDPOINT_PARAM=true).
+	const rawParam = config.agent.allowEndpointParam ? url.searchParams.get('endpoint') : null;
+	const raw = (Array.isArray(rawHeader) ? rawHeader[0] : rawHeader) ?? rawParam ?? '';
+	if (raw === '') {
+		return 'Missing agent endpoint (X-Agent-Endpoint header)';
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		return 'Invalid agent endpoint URL';
+	}
+	if (parsed.protocol !== 'wss:' && !(parsed.protocol === 'ws:' && !config.agent.requireWss)) {
+		return 'Agent endpoint must be wss:// (set AGENT_REQUIRE_WSS=false to allow ws:// in dev)';
+	}
+	const rawAuth = headers['x-agent-authorization'];
+	const authorization = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
+
+	const customParameters: Record<string, unknown> = {};
+	url.searchParams.forEach((value, key) => {
+		if (key !== 'endpoint') {
+			customParameters[key] = value;
+		}
+	});
+
+	return {
+		url: parsed.toString(),
+		headers: authorization !== undefined ? { Authorization: authorization } : {},
+		...(Object.keys(customParameters).length > 0 ? { customParameters } : {}),
+	};
+}
+
+/**
+ * Handles an /agent WebSocket upgrade: enforces the enable flag, the optional shared secret gating the
+ * upgrade, endpoint resolution, and the SSRF guard (which resolves DNS), before accepting the socket.
+ * Always closes the socket on rejection.
+ */
+async function handleAgentUpgrade(
+		request: http.IncomingMessage,
+		socket: import('stream').Duplex,
+		head: Buffer,
+		parameters: ISessionParameters): Promise<void> {
+	const reject = (status: string, body: string, logMessage: string) => {
+		logger.error(`Rejecting /agent connection: ${logMessage}`);
+		socket.write(`HTTP/1.1 ${status}\r\n\r\n${body}`);
+		socket.destroy();
+	};
+
+	if (!config.enableAgent) {
+		reject('404 Not Found', 'Agent endpoint disabled', 'agent endpoint disabled');
+
+		return;
+	}
+
+	// Shared-secret gate on the upgrade itself, so a network peer that can reach the proxy cannot trigger a
+	// dial-out. Enforced only when configured; a warning is logged otherwise (deployments must keep the proxy
+	// bridge-only in that case).
+	if (config.agent.sharedSecret) {
+		const rawToken = request.headers['x-agent-token'];
+		const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
+
+		if (token !== config.agent.sharedSecret) {
+			reject('401 Unauthorized', 'Invalid or missing agent token', 'invalid or missing X-Agent-Token');
+
+			return;
+		}
+	} else {
+		logger.warn('AGENT_SHARED_SECRET is not set: the /agent upgrade is unauthenticated. Keep the proxy '
+			+ 'reachable only from the bridge.');
+	}
+
+	const endpoint = resolveAgentEndpoint(parameters.url, request.headers);
+
+	if (typeof endpoint === 'string') {
+		reject('400 Bad Request', endpoint, endpoint);
+
+		return;
+	}
+
+	// SSRF guard: reject endpoints that resolve to private/internal addresses (and enforce the optional host
+	// allowlist) before dialing out.
+	const ssrcError = await assertPublicEndpointHost(new URL(endpoint.url).hostname, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
+
+	if (ssrcError) {
+		reject('400 Bad Request', ssrcError, `${ssrcError} (host=${new URL(endpoint.url).hostname})`);
+
+		return;
+	}
+
+	wss.handleUpgrade(request, socket, head, ws => {
+		handleAgentConnection(ws, endpoint);
+	});
+}
+
+function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
+	logger.info(`New /agent connection, endpoint host=${new URL(endpoint.url).hostname}`);
+
+	const agentSession = new AgentProxy(
+		ws as unknown as IWebSocket,
+		{
+			endpointUrl: endpoint.url,
+			// The `ws` client here (not the runtime's OpenAI-shaped factory) so the forwarded
+			// Authorization header reaches the customer endpoint on the handshake.
+			createEndpointWebSocket: (url) => new WebSocket(url, { headers: endpoint.headers }) as unknown as IWebSocket,
+			customParameters: endpoint.customParameters,
+			paceLeadMs: config.agent.paceLeadMs,
+		},
+		createNodeTranslationRuntime(),
+	);
+	activeAgentSessions.add(agentSession);
+
+	agentSession.on('closed', () => {
+		activeAgentSessions.delete(agentSession);
+		if (ws.readyState === ws.OPEN) {
+			ws.close();
+		}
+	});
+
+	agentSession.on('error', (message: string) => {
+		logger.error(`Agent session error (endpoint host=${new URL(endpoint.url).hostname}): ${message}`);
+	});
+
+	// The agent's audio and talk boundaries reuse the mediajson builders shared with /translate.
+	agentSession.on(
+		'audioFrame',
+		(data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
+			try {
+				ws.send(JSON.stringify(buildTranslationMediaMessage(data)));
+			} catch {
+				// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+			}
+		},
+	);
+	agentSession.on('talkStart', (data: TranslationTalkStartData) => {
+		try {
+			ws.send(JSON.stringify(buildTranslationTalkStartMessage(data)));
+		} catch {
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+		}
+	});
+	agentSession.on('talkStop', (data: TranslationTalkStopData) => {
+		try {
+			ws.send(JSON.stringify(buildTranslationTalkStopMessage(data)));
+		} catch {
+			// client disconnected mid-flight; 'closed' will fire and tear down the proxy
+		}
+	});
+}
+
 // Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
 	logger.debug('UPGRADE EVENT TRIGGERED!');
@@ -83,9 +254,23 @@ server.on('upgrade', (request, socket, head) => {
 	logger.debug('Session parameters:', JSON.stringify(parameters));
 
 	// Validate path
-	if (!parameters.url.pathname.endsWith('/transcribe') && !parameters.url.pathname.endsWith('/translate')) {
+	if (
+		!parameters.url.pathname.endsWith('/transcribe') &&
+		!parameters.url.pathname.endsWith('/translate') &&
+		!parameters.url.pathname.endsWith('/agent')
+	) {
 		socket.write('HTTP/1.1 400 Bad Request\r\n\r\nBad URL');
 		socket.destroy();
+		return;
+	}
+
+	// Handle the /agent endpoint separately (voice-agent media relay).
+	if (parameters.url.pathname.endsWith('/agent')) {
+		// Async: the SSRF guard resolves DNS. Errors are handled inside; the socket is always closed on failure.
+		handleAgentUpgrade(request, socket, head, parameters).catch(error => {
+			logger.error('Error handling /agent upgrade:', error);
+			socket.destroy();
+		});
 		return;
 	}
 
@@ -652,6 +837,9 @@ process.on('SIGTERM', async () => {
 	// buffer is complete before we drain it below.
 	sessionManager.shutdown();
 	for (const session of activeTranslateSessions) {
+		session.close();
+	}
+	for (const session of activeAgentSessions) {
 		session.close();
 	}
 
