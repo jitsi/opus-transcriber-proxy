@@ -142,10 +142,15 @@ export class GeminiBackend implements TranscriptionBackend {
 
 	close(): void {
 		logger.debug(`Closing Gemini backend for tag: ${this.tag}`);
-		this.ws?.close();
+		// Detach before closing. undici dispatches 'error' synchronously from
+		// ws.close() when the socket is still CONNECTING, and the error listener
+		// calls close() again — clearing the reference first makes that re-entry
+		// a no-op instead of unbounded recursion. Same reasoning as XAIBackend.
+		const ws = this.ws;
 		this.ws = undefined;
 		this.status = 'closed';
 		this.setupComplete = false;
+		ws?.close();
 	}
 
 	getStatus(): 'pending' | 'connected' | 'failed' | 'closed' {
