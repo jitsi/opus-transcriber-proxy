@@ -166,6 +166,7 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 - Optional dispatcher forwarding (sends transcriptions to external service)
 - Optional WebSocket message dumping for debugging
 - Tracks `failedStartTags`: if a `start` event has an invalid `mediaFormat`, subsequent `media` events for that tag are dropped (not auto-connected with defaults) until a valid `start` event arrives
+- **Text translation**: handles the `sources` control event, whose `requests` list carries the conference's aggregated target languages as bare language codes (jicofo puts them on the colibri2 `<connect type='transcriber'>`'s `<requests>`; the bridge forwards them verbatim). `requests` is the authoritative full set, so it replaces the current one — an empty list stops all translation. Each **final** transcription is then translated into every requested language and emitted as a separate `translation` event (see `src/textTranslate/`). Gated on `ENABLE_TEXT_TRANSLATION`; requested languages are ignored (and logged) while it is off. Note the same `requests` field means `<source>.<language>` synthetic source names on a `translator` connect — the two are told apart by connect type, i.e. by which endpoint the socket is on
 
 **OutgoingConnection** (`src/OutgoingConnection.ts`)
 - Manages one participant's audio stream
@@ -177,6 +178,16 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 - On every `reinitializeDecoder` call, compares the new desired format against `activeDesiredFormat`; if they differ, closes the old backend and opens a fresh connection (via `reconnectBackend`) before creating the decoder
 - The backend `onError` handler distinguishes **recoverable** errors (third callback arg `recoverable === true`) from fatal ones. Recoverable errors (e.g. xAI `"ASR stream timed out"` on silence) trigger `recoverBackend()`, which reopens the backend in place via `reconnectBackend` (preserving the decoder, transcript history and negotiated format) instead of tearing down the connection. Fatal errors call `doClose(true)` as before. `recoverBackend` bumps `reinitGeneration` so it shares the same staleness guard as format-change reconnects (JIT-15901). The reconnect loop is bounded by `MAX_CONSECUTIVE_RECOVERIES` (3): a muted participant sends no audio so the fresh stream just times out again, so after that many recoveries with no audio in between it gives up and tears down (the next media event on unmute recreates the connection cleanly). `consecutiveRecoveries` resets on every audio send, so an active participant reconnects without limit
 - `doClose()` is idempotent (guarded by `isClosed`); it increments `reinitGeneration` to make in-flight async operations detect they are stale, and detaches backend callbacks before calling `close()` to prevent stale events from firing after teardown
+
+**Text translation** (`src/textTranslate/`)
+- Translates transcriber **text** into a set of target languages. Distinct from the `/translate` endpoint, which is speech-to-speech (audio in, translated audio out)
+- `TextTranslator.ts` — the `TextTranslator` interface (`translate(text, targetLanguage, sourceLanguage?)`), plus `isValidTargetLanguage` (the code shapes jitsi-meet sends: 2-3 letter primary subtag with optional region/script, e.g. `fr`, `ceb`, `zh-CN`) and `needsTranslation` (primary-subtag comparison, so a transcript reported as `en-US` is not translated into `en` — jigasi's `TranslationManager` skips the speaker's own language the same way)
+- `StubTextTranslator.ts` — no real translation: `"hello"` → `"[FR] hello"`. Exercises the whole signalling path without a provider
+- `factory.ts` — `createTextTranslator(provider)`; `TEXT_TRANSLATION_PROVIDER` selects it (only `stub` so far)
+- `messages.ts` — `buildTextTranslationMessage`, which produces the wire shape jitsi-meet expects (see the `translation-result` note under WebSocket Protocol)
+- **Only finals are translated.** The client treats a `translation-result` as final and has no interim handling for it, and translating every interim would multiply provider cost for text that is about to be revised
+- Translation is async and **not** awaited, so a slow provider never delays the original transcript. A translation arriving after a later transcript still renders correctly — the client keys on `message_id`, not arrival order. A rejected translation drops that one language for that one transcript; the original is unaffected
+- Language codes are **echoed back verbatim**, never normalised: the client matches them by exact string equality against the language it selected
 
 **AudioDecoder** (`src/AudioDecoder.ts`)
 - Interface for format-agnostic audio decoding with chunk-sequence tracking
@@ -414,6 +425,11 @@ src/
 ├── L16Decoder.ts              # PCM l16 decoder (resample or identity)
 ├── PassThroughDecoder.ts      # Raw-audio pass-through (no decode)
 ├── SessionManager.ts          # Session lifecycle management
+├── textTranslate/
+│   ├── TextTranslator.ts      # TextTranslator interface + language-code helpers
+│   ├── StubTextTranslator.ts  # "hello" -> "[FR] hello" (no real translation)
+│   ├── factory.ts             # createTextTranslator(provider)
+│   └── messages.ts            # translation-result wire-message builder
 ├── config.ts                  # Configuration
 ├── dispatcher.ts              # Dispatcher WebSocket forwarding
 ├── logger.ts                  # Winston logger setup
@@ -553,6 +569,16 @@ the same image (same build) instead.
 {"event": "ping", "id": 123}
 ```
 
+**Sources (text-translation target languages):**
+```json
+{"event": "sources", "exports": [], "requests": ["fr", "de"]}
+```
+Sent by the bridge on connect and again whenever the set changes. On `/transcribe` the `requests`
+entries are bare language codes: the conference's aggregated text-translation target languages,
+which jicofo puts on the colibri2 `<connect type='transcriber'>`'s `<requests>` list. The list is the
+authoritative full set, so `"requests": []` stops all translation. (On `/translate` the same field
+carries `<source>.<language>` synthetic source names instead.)
+
 ### Server → Client (when sendBack=true)
 
 **Transcription result:**
@@ -566,6 +592,30 @@ the same image (same build) instead.
   "language": "en"
 }
 ```
+
+**Text translation result** (one per requested target language, for each final; `sendBack=true`):
+```json
+{
+  "event": "transcription-result",
+  "type": "translation-result",
+  "message_id": "<the message_id of the transcription this was translated from>",
+  "language": "fr",
+  "text": "bonjour",
+  "participant": {"id": "participant-id", "tag": "participant-id-a0"},
+  "timestamp": 1768341932000
+}
+```
+The inner `type` is `translation-result` — jigasi's long-standing text-translation type, which
+jitsi-meet already renders in the CC panel and as on-stage subtitles. The outer `event` stays
+`transcription-result` so the JVB (which dispatches on `event`) forwards the payload verbatim, so no
+JVB or client protocol change is needed. Two shape details are load-bearing:
+- `text` is a **plain string**, not the `transcript: [{text}]` array used by `transcription-result` —
+  that is what the client reads for this type.
+- `message_id` is the **transcription's** id, so the CC panel pairs the two and shows the translation
+  in place of the original.
+
+Do not confuse this with `/translate`'s `realtime-translation-result`, which is deliberately a type
+the CC panel ignores.
 
 **Pong:**
 ```json
@@ -609,6 +659,8 @@ See README.md for complete list. Key ones:
 - `USE_DISPATCHER` - Enable dispatcher forwarding
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
 - `ENABLE_TRANSCRIBE` / `ENABLE_TRANSLATE` - Per-endpoint enablement (default: true each); a disabled endpoint's WS upgrade is rejected with 404
+- `ENABLE_TEXT_TRANSLATION` - Translate each final transcript into the target languages the bridge requests in the `sources` event (default: false). Distinct from `/translate`, which is speech-to-speech. While off, requested languages are ignored and logged
+- `TEXT_TRANSLATION_PROVIDER` - Which translator to use (default: `stub`, which prefixes the text with the target language instead of translating)
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
@@ -619,7 +671,7 @@ See README.md for complete list. Key ones:
 
 `MONITOR_*` vars configure the separate monitor entrypoint (`src/monitor.ts`), not the proxy server — see "Monitor Mode" under Debugging Tools.
 
-The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
+The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANSLATION`/`TEXT_TRANSLATION_PROVIDER`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
 
 ### `/translate` transcript messages
 

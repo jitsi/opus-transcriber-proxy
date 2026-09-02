@@ -8,6 +8,7 @@ import { normalizeTargetLanguage } from './TranslatorConnection';
 import { createNodeTranslationRuntime } from './translate/nodeRuntime';
 import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage, type TranslationTalkStartData, type TranslationTalkStopData } from './translate/messages';
 import type { IWebSocket } from './translate/runtime';
+import type { TextTranslationMessage } from './textTranslate/messages';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -270,6 +271,26 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
+	});
+
+	// Handle text translations of finals (one event per requested target language). Gated on
+	// sendBack like transcriptions; not forwarded to the dispatcher, which stores the original
+	// transcript only.
+	session.on('translation', (data: TextTranslationMessage) => {
+		if (!sendBack) {
+			return;
+		}
+		const currentWs = session.getWebSocket();
+		if (!currentWs || currentWs.readyState !== 1) {
+			logger.warn(`[WS-${connectionId}] Cannot send translation: not open (readyState=${currentWs?.readyState})`);
+			return;
+		}
+		try {
+			currentWs.send(JSON.stringify(data));
+			logger.debug(`[WS-${connectionId}] Sent ${data.language} translation for ${data.participant?.id}`);
+		} catch (error) {
+			logger.error(`[WS-${connectionId}] Failed to send translation:`, error);
+		}
 	});
 }
 

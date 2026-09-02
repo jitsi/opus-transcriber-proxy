@@ -132,6 +132,22 @@ Speech-to-speech translation via OpenAI's realtime translations endpoint (`gpt-r
 | `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` | `350` | Silence (ms past projected media playout) before a translated "talk" ends and a `sending=false` notification is emitted to clients. Must exceed the 100 ms RtpTimestamper gap threshold; `<= 0` disables end-of-talk detection — unsafe on the translations endpoint (which sends no boundary event), where a talk would then never end until the connection closes |
 | `SOURCE_IMAGE_TAG` | (unset) | Docker image tag the WASM Opus codec was sourced from. Set by the translate-Worker deploy (the only path that sets it in practice, since the codec is versioned independently of the worker code); the container leaves it unset because code and codec ship in one image. Whenever present in the environment it is surfaced as `sourceImageTag` in the `info` message so a code/WASM mismatch is visible against `gitHash`; not used at runtime |
 
+### Text translation (`/transcribe`)
+
+This feature translates the **text** from the transcriber into a set of target languages. It sends
+the translations with the original transcript. It is not the same as `/translate` above, which
+translates speech to speech.
+
+Do not configure the target languages here. The bridge sends the set in the `sources` control event.
+Jicofo makes the set from the languages that the participants request. Jicofo sends a new set each
+time a participant changes the subtitle language. The proxy translates the final results only. It
+does not translate interim results.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_TEXT_TRANSLATION` | `false` | Translate final transcripts into the requested target languages. If this is `false`, the proxy ignores the requested languages and writes a log message |
+| `TEXT_TRANSLATION_PROVIDER` | `stub` | Which translator to use. `stub` does not translate. It puts the target language before the text (`"hello"` → `"[FR] hello"`). Use it to test the signalling path with no provider |
+
 ### Dispatcher (Optional)
 
 | Variable | Default | Description |

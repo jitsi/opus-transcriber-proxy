@@ -51,6 +51,10 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.OPENAI_TRANSLATION_API_KEY && { OPENAI_TRANSLATION_API_KEY: env.OPENAI_TRANSLATION_API_KEY }),
 		...(env.ENABLE_TRANSCRIBE && { ENABLE_TRANSCRIBE: env.ENABLE_TRANSCRIBE }),
 		...(env.ENABLE_TRANSLATE && { ENABLE_TRANSLATE: env.ENABLE_TRANSLATE }),
+		// Text translation of transcripts (the /transcribe path, which the container serves).
+		// Forwarded only when set, so the container default (off) applies otherwise.
+		...(env.ENABLE_TEXT_TRANSLATION && { ENABLE_TEXT_TRANSLATION: env.ENABLE_TEXT_TRANSLATION }),
+		...(env.TEXT_TRANSLATION_PROVIDER && { TEXT_TRANSLATION_PROVIDER: env.TEXT_TRANSLATION_PROVIDER }),
 		...(env.TRANSLATE_TRANSCRIPTS && { TRANSLATE_TRANSCRIPTS: env.TRANSLATE_TRANSCRIPTS }),
 		// Forwarded only when set so the container default (350) applies otherwise; matches the other translation
 		// tunables above. In the CF deployment /translate is handled by the Worker (not the container); this

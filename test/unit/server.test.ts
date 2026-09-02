@@ -112,7 +112,7 @@ import { sessionManager } from '../../src/SessionManager';
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeMockWs() {
-	return { close: vi.fn(), addEventListener: vi.fn(), readyState: 1 };
+	return { close: vi.fn(), addEventListener: vi.fn(), send: vi.fn(), readyState: 1 };
 }
 
 const openaiCustomParams: ISessionParameters = {
@@ -209,6 +209,62 @@ describe('handleWebSocketConnection – openai_custom validation', () => {
 		);
 
 		expect(mockWs.close).not.toHaveBeenCalledWith(1002, expect.anything());
+	});
+});
+
+describe('handleWebSocketConnection – text translation send-back', () => {
+	const translation = {
+		event: 'transcription-result',
+		type: 'translation-result',
+		message_id: 'msg-1',
+		language: 'fr',
+		text: '[FR] hello there',
+		participant: { id: 'abc123', tag: 'abc123-a0' },
+		timestamp: 1_700_000_000_000,
+	};
+
+	/**
+	 * Connect with the given options and return the 'translation' handler server.ts registered on the session,
+	 * together with the WebSocket it should send on.
+	 */
+	function connectAndGetTranslationHandler(options: { sendBack: boolean }) {
+		const mockWs = makeMockWs();
+		const handlers = new Map<string, Function>();
+		vi.mocked(TranscriberProxy as any).mockReturnValue({
+			on: vi.fn((event: string, handler: Function) => handlers.set(event, handler)),
+			getOptions: () => ({ sendBack: options.sendBack, sendBackInterim: false }),
+			getWebSocket: () => mockWs,
+			close: vi.fn(),
+		});
+
+		handleWebSocketConnection(mockWs as any, { ...openaiCustomParams, provider: 'openai' }, undefined);
+
+		return { mockWs, handler: handlers.get('translation') };
+	}
+
+	it('sends a translation back when sendBack is set', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: true });
+
+		expect(handler).toBeDefined();
+		handler!(translation);
+
+		expect((mockWs as any).send).toHaveBeenCalledWith(JSON.stringify(translation));
+	});
+
+	it('does not send a translation when sendBack is not set', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: false });
+
+		handler!(translation);
+
+		expect((mockWs as any).send).not.toHaveBeenCalled();
+	});
+
+	it('does not throw when the WebSocket is no longer open', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: true });
+		(mockWs as any).readyState = 3; // CLOSED
+
+		expect(() => handler!(translation)).not.toThrow();
+		expect((mockWs as any).send).not.toHaveBeenCalled();
 	});
 });
 

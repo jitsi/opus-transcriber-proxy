@@ -120,6 +120,16 @@ export const config = {
 	enableTranscribe: process.env.ENABLE_TRANSCRIBE !== 'false',
 	enableTranslate: process.env.ENABLE_TRANSLATE !== 'false',
 
+	// Text translation: translate each final transcript into the target languages the bridge
+	// requests in the `sources` control event. Distinct from the /translate endpoint, which is
+	// speech-to-speech. Disabled by default; requested languages are ignored while it is off.
+	textTranslation: {
+		enabled: process.env.ENABLE_TEXT_TRANSLATION === 'true',
+		// Which translator implementation to use. Only 'stub' exists so far (it prefixes the text
+		// with the target language instead of translating, to exercise the signalling path).
+		provider: process.env.TEXT_TRANSLATION_PROVIDER || 'stub',
+	},
+
 	// Translation (/translate endpoint) configuration
 	translation: {
 		// Emit target-language transcript messages from the /translate path (to sendBack clients
