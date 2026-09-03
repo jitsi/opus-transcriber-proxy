@@ -21,6 +21,11 @@ export interface ISessionParameters {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/**
+	 * Per-connection text-translation provider (undefined = the first available entry of
+	 * TEXT_TRANSLATION_PROVIDERS_PRIORITY). Validated in server.ts, like the transcription `provider`.
+	 */
+	textTranslationProvider?: string;
 }
 
 /**
@@ -92,6 +97,8 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const xaiGranularFinals = granularFinalsParam === null ? undefined : granularFinalsParam === 'true';
 	const xaiGranularStabilityMs = parseIntParam('xai_granular_stability_ms');
 	const xaiGranularGuardWords = parseIntParam('xai_granular_guard_words');
+	// Per-connection text-translation provider override.
+	const textTranslationProvider = parsedUrl.searchParams.get('text_translation_provider')?.toLowerCase();
 
 	// Validate tags according to provider requirements (Deepgram: ≤ 128 chars)
 	validateTags(tags);
@@ -115,6 +122,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		xaiGranularFinals,
 		xaiGranularStabilityMs,
 		xaiGranularGuardWords,
+		textTranslationProvider: textTranslationProvider ?? undefined,
 	};
 }
 

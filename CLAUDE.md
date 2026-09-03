@@ -181,10 +181,20 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
 
 **Text translation** (`src/textTranslate/`)
 - Translates transcriber **text** into a set of target languages. Distinct from the `/translate` endpoint, which is speech-to-speech (audio in, translated audio out)
-- `TextTranslator.ts` — the `TextTranslator` interface (`translate(text, targetLanguage, sourceLanguage?)`), plus `isValidTargetLanguage` (the code shapes jitsi-meet sends: 2-3 letter primary subtag with optional region/script, e.g. `fr`, `ceb`, `zh-CN`) and `needsTranslation` (primary-subtag comparison, so a transcript reported as `en-US` is not translated into `en` — jigasi's `TranslationManager` skips the speaker's own language the same way)
+- `TextTranslator.ts` — the `TextTranslator` interface (`translate(request: TextTranslationRequest)`, where the request is `{ turn, targetLanguage, history }` — see **context** below), plus `isValidTargetLanguage` (the code shapes jitsi-meet sends: 2-3 letter primary subtag with optional region/script, e.g. `fr`, `ceb`, `zh-CN`), `needsTranslation` (primary-subtag comparison, so a transcript reported as `en-US` is not translated into `en` — jigasi's `TranslationManager` skips the speaker's own language the same way) and `stripSpeakerLabel`
+- `ConversationHistory.ts` — the per-session rolling buffer of recent finals used as context, and the source of the synthetic speaker labels (`Speaker 1`, `Speaker 2`, assigned per session in order of first appearance — the proxy has no display names, and a raw hex participant id costs tokens and reads as noise to a model). Capped by `TEXT_TRANSLATION_HISTORY_TURNS` **and** `TEXT_TRANSLATION_HISTORY_MAX_CHARS` (oldest dropped first; the newest turn is always kept). `TEXT_TRANSLATION_INCLUDE_SPEAKERS=false` stops labels being generated at all
+- `prompt.ts` — the shared LLM prompt (`buildSystemPrompt`/`buildUserPrompt`: a system instruction, then a `CONTEXT` block of labelled earlier turns and the `TRANSLATE` line) and `sanitizeTranslation`, which strips code fences, answer labels ("Translation:"), surrounding quotes and any speaker label, and **throws on empty output** so the caller drops that language rather than publishing a refusal or a label as a subtitle
+- `http.ts` — `postJson`: the one call shape every provider needs (JSON POST, `AbortSignal.timeout`, collapsed+truncated error body). Every text-translation provider is plain request/response HTTPS; none offers a streaming path that would help, because the client renders a `translation-result` as final text
+- `ChatCompletionsTextTranslator.ts` — the OpenAI-shaped `/chat/completions` client, used for **both** `openai` and `xai` (they differ only in URL, key and model). `temperature`/`reasoning_effort`/`max_completion_tokens` are sent **only when configured**: the GPT-5 and Grok 4 families reject a non-1 temperature, and a small token cap on a reasoning model is spent on reasoning tokens and returns empty content
+- `GeminiTextTranslator.ts` — `generateContent`, key in the `x-goog-api-key` header (never the query string). Sends `thinkingConfig.thinkingBudget` (default 0, thinking off) unless it is negative
+- `GoogleTranslateTextTranslator.ts` — Cloud Translation **v2** (dedicated NMT, not an LLM): per-character billing, no conversation notion, so it **ignores `history` and the speaker label**. v2 rather than v3 because v2 authenticates with an API key; v3 would need service-account JWT signing. Decodes the HTML entities v2 returns even with `format=text`
 - `StubTextTranslator.ts` — no real translation: `"hello"` → `"[FR] hello"`. Exercises the whole signalling path without a provider
-- `factory.ts` — `createTextTranslator(provider)`; `TEXT_TRANSLATION_PROVIDER` selects it (only `stub` so far)
+- `factory.ts` — the `TextTranslationProvider` union (`openai | xai | gemini | google | stub`) with `isValidTextTranslationProvider` / `isTextTranslationProviderAvailable` / `getAvailableTextTranslationProviders` / `getDefaultTextTranslationProvider` / `createTextTranslator` / `usesConversationContext`. Provider selection mirrors transcription: `TEXT_TRANSLATION_PROVIDERS_PRIORITY` picks the default from the available ones (available = its key is set; `stub` needs `ENABLE_TEXT_TRANSLATION_STUB=true`, like `ENABLE_DUMMY_PROVIDER`), overridable per connection via the `text_translation_provider` URL param
 - `messages.ts` — `buildTextTranslationMessage`, which produces the wire shape jitsi-meet expects (see the `translation-result` note under WebSocket Protocol)
+- **Context.** `TranscriberProxy` keeps one `ConversationHistory` per session and, for each final, builds one `TextTranslationRequest` per requested language: the same `turn` and the **same history snapshot** (translations complete out of order and all describe the same point in the conversation). The turn is appended to the history *after* the requests are built — a turn is not its own context. Every final is recorded, including one skipped by `needsTranslation` and ones arriving while no language is requested, so a participant enabling subtitles mid-meeting still gets context. History is passed only for providers where `usesConversationContext(provider)` is true
+- **Speaker labels never reach the output.** They exist only in the prompt; `stripSpeakerLabel` removes both the English label we generate ("Speaker 2:") and a translated one that kept the same number ("Sprecher 2:", "话者 2："), the number match keeping it from eating a real sentence like "Room 12: it's booked". A label rendered into a subtitle is worse than no translation, so this is enforced in code, not just asked for in the prompt
+- **An unusable `text_translation_provider` param does not close the socket** (unlike the transcription `provider`, which does): it logs an error and falls back to the configured default, so a stale URL template cannot take transcription down for an optional feature
+- **Model defaults were chosen by measurement against the live APIs**, not by price alone: `gpt-4o-mini` (~0.5-1.2s, no reasoning tokens) over `gpt-5-nano` (~750 reasoning tokens, ~6s), and xAI's `grok-4.20-0309-non-reasoning` over the reasoning Grok 4 models (3-17s)
 - **Only finals are translated.** The client treats a `translation-result` as final and has no interim handling for it, and translating every interim would multiply provider cost for text that is about to be revised
 - Translation is async and **not** awaited, so a slow provider never delays the original transcript. A translation arriving after a later transcript still renders correctly — the client keys on `message_id`, not arrival order. A rejected translation drops that one language for that one transcript; the original is unaffected
 - Language codes are **echoed back verbatim**, never normalised: the client matches them by exact string equality against the language it selected
@@ -426,9 +436,15 @@ src/
 ├── PassThroughDecoder.ts      # Raw-audio pass-through (no decode)
 ├── SessionManager.ts          # Session lifecycle management
 ├── textTranslate/
-│   ├── TextTranslator.ts      # TextTranslator interface + language-code helpers
+│   ├── TextTranslator.ts      # TextTranslator interface, language-code helpers, stripSpeakerLabel
+│   ├── ConversationHistory.ts # Per-session context buffer + synthetic speaker labels
+│   ├── prompt.ts              # Shared LLM prompt + output sanitizing
+│   ├── http.ts                # postJson: the one HTTP shape every provider needs
+│   ├── ChatCompletionsTextTranslator.ts  # openai + xai (OpenAI-shaped /chat/completions)
+│   ├── GeminiTextTranslator.ts           # gemini (generateContent)
+│   ├── GoogleTranslateTextTranslator.ts  # google (Cloud Translation v2, no context)
 │   ├── StubTextTranslator.ts  # "hello" -> "[FR] hello" (no real translation)
-│   ├── factory.ts             # createTextTranslator(provider)
+│   ├── factory.ts             # Provider union, availability/priority, createTextTranslator
 │   └── messages.ts            # translation-result wire-message builder
 ├── config.ts                  # Configuration
 ├── dispatcher.ts              # Dispatcher WebSocket forwarding
@@ -660,7 +676,15 @@ See README.md for complete list. Key ones:
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
 - `ENABLE_TRANSCRIBE` / `ENABLE_TRANSLATE` - Per-endpoint enablement (default: true each); a disabled endpoint's WS upgrade is rejected with 404
 - `ENABLE_TEXT_TRANSLATION` - Translate each final transcript into the target languages the bridge requests in the `sources` event (default: false). Distinct from `/translate`, which is speech-to-speech. While off, requested languages are ignored and logged
-- `TEXT_TRANSLATION_PROVIDER` - Which translator to use (default: `stub`, which prefixes the text with the target language instead of translating)
+- `TEXT_TRANSLATION_PROVIDERS_PRIORITY` - Provider order, first available wins (default: `openai,gemini,xai,google` — the context-capable providers first, since `google` cannot take context). Per-connection override: the `text_translation_provider` URL param
+- `ENABLE_TEXT_TRANSLATION_STUB` - Make the `stub` provider available (default: false), mirroring `ENABLE_DUMMY_PROVIDER`
+- `TEXT_TRANSLATION_HISTORY_TURNS` / `TEXT_TRANSLATION_HISTORY_MAX_CHARS` - Context size caps (defaults 6 turns / 2000 chars; 0 turns disables context)
+- `TEXT_TRANSLATION_INCLUDE_SPEAKERS` - Send synthetic per-session speaker labels with the context (default: true). Labels are prompt-only and always stripped from the output; false keeps them out of the request too
+- `TEXT_TRANSLATION_TIMEOUT_MS` - Per-request timeout (default: 10000)
+- `TEXT_TRANSLATION_TEMPERATURE` / `TEXT_TRANSLATION_REASONING_EFFORT` / `TEXT_TRANSLATION_MAX_OUTPUT_TOKENS` - LLM knobs, all **unset by default** so the model's own defaults apply (a non-1 temperature is rejected by the GPT-5/Grok 4 families; a small output cap on a reasoning model returns empty content)
+- `TEXT_TRANSLATION_{OPENAI,XAI,GEMINI}_API_KEY` - Per-provider keys, each falling back to that provider's transcription key (`OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY`)
+- `TEXT_TRANSLATION_GOOGLE_API_KEY` - Key for `google` (Cloud Translation v2). **No fallback** — a Gemini/AI Studio key is not valid for `translation.googleapis.com`, so falling back would make the provider look configured and fail every request. Unset → the provider is unavailable
+- `TEXT_TRANSLATION_{OPENAI,XAI,GEMINI}_MODEL`, `TEXT_TRANSLATION_{OPENAI,XAI,GOOGLE}_URL`, `TEXT_TRANSLATION_GEMINI_BASE_URL`, `TEXT_TRANSLATION_GEMINI_THINKING_BUDGET` - Per-provider model/endpoint overrides (defaults: `gpt-4o-mini`, `grok-4.20-0309-non-reasoning`, `gemini-2.5-flash-lite`, thinking budget 0)
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
@@ -671,7 +695,7 @@ See README.md for complete list. Key ones:
 
 `MONITOR_*` vars configure the separate monitor entrypoint (`src/monitor.ts`), not the proxy server — see "Monitor Mode" under Debugging Tools.
 
-The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANSLATION`/`TEXT_TRANSLATION_PROVIDER`/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
+The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANSLATION`/every other `TEXT_TRANSLATION_*` var/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
 
 ### `/translate` transcript messages
 

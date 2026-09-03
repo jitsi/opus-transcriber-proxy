@@ -9,9 +9,17 @@ import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';
-import { isValidTargetLanguage, needsTranslation, type TextTranslator } from './textTranslate/TextTranslator';
-import { createTextTranslator, isValidTextTranslationProvider } from './textTranslate/factory';
+import { isValidTargetLanguage, needsTranslation, type TextTranslationRequest, type TextTranslator, type TranslationTurn } from './textTranslate/TextTranslator';
+import {
+	createTextTranslator,
+	getDefaultTextTranslationProvider,
+	isTextTranslationProviderAvailable,
+	isValidTextTranslationProvider,
+	usesConversationContext,
+	type TextTranslationProvider,
+} from './textTranslate/factory';
 import { buildTextTranslationMessage, transcriptionText } from './textTranslate/messages';
+import { ConversationHistory } from './textTranslate/ConversationHistory';
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -44,6 +52,8 @@ export interface TranscriberProxyOptions {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/** Per-connection text-translation provider override (undefined = the configured default). */
+	textTranslationProvider?: TextTranslationProvider;
 }
 
 export class TranscriberProxy extends EventEmitter {
@@ -70,7 +80,22 @@ export class TranscriberProxy extends EventEmitter {
 
 	/** Created on the first requested language, so a session that never requests one costs nothing. */
 	private textTranslator?: TextTranslator;
+	/** The provider `textTranslator` was created for; also decides whether it gets context. */
+	private textTranslationProvider?: TextTranslationProvider;
 	private translationCount = 0;
+
+	/**
+	 * Recent finals of this session, passed to the translator as context.
+	 *
+	 * Filled for every final while text translation is enabled — not only while a language is
+	 * requested — so that a participant who turns subtitles on mid-meeting gets context-aware
+	 * translations from their first transcript.
+	 */
+	private readonly conversationHistory = new ConversationHistory({
+		maxTurns: config.textTranslation.historyTurns,
+		maxChars: config.textTranslation.historyMaxChars,
+		includeSpeakers: config.textTranslation.includeSpeakers,
+	});
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -394,16 +419,21 @@ export class TranscriberProxy extends EventEmitter {
 		}
 
 		if (languages.length > 0 && !this.textTranslator) {
-			const provider = config.textTranslation.provider;
-			if (!isValidTextTranslationProvider(provider)) {
+			// The connection's own provider when it asked for one (already validated in server.ts),
+			// otherwise the first available entry of TEXT_TRANSLATION_PROVIDERS_PRIORITY.
+			const provider = this.options.textTranslationProvider ?? getDefaultTextTranslationProvider();
+			if (!provider || !isValidTextTranslationProvider(provider) || !isTextTranslationProviderAvailable(provider)) {
 				logger.error(
-					`Session ${this.sessionId}: cannot translate — invalid TEXT_TRANSLATION_PROVIDER "${provider}"`,
+					`Session ${this.sessionId}: cannot translate into [${languages.join(', ')}] — no text translation provider is available (checked TEXT_TRANSLATION_PROVIDERS_PRIORITY=${config.textTranslation.providersPriority.join(',')}); set an API key for one of them`,
 				);
 				this.targetLanguages = [];
 				return;
 			}
 			this.textTranslator = createTextTranslator(provider);
-			logger.info(`Session ${this.sessionId}: created "${provider}" text translator`);
+			this.textTranslationProvider = provider;
+			logger.info(
+				`Session ${this.sessionId}: created "${provider}" text translator (context: ${usesConversationContext(provider) ? `${config.textTranslation.historyTurns} turns, speakers ${config.textTranslation.includeSpeakers ? 'on' : 'off'}` : 'not supported by this provider'})`,
+			);
 		}
 
 		if (languages.join(',') === this.targetLanguages.join(',')) {
@@ -426,15 +456,36 @@ export class TranscriberProxy extends EventEmitter {
 	 * Translation is asynchronous and deliberately not awaited by the caller, so a slow translation
 	 * never delays the original transcript. A translation that arrives after a later transcript is
 	 * still rendered correctly: the client keys on `message_id`, not arrival order.
+	 *
+	 * Every requested language gets its own request, all sharing one history snapshot, and the turn
+	 * is appended to the history afterwards — a turn is not its own context.
 	 */
 	private translateTranscription(message: TranscriptionMessage): void {
-		const translator = this.textTranslator;
-		if (!translator || this.targetLanguages.length === 0) {
+		const text = transcriptionText(message);
+		if (!text || !config.textTranslation.enabled) {
 			return;
 		}
 
-		const text = transcriptionText(message);
-		if (!text) {
+		// Undefined when speaker labels are disabled, in which case nothing about who spoke is built
+		// or sent at all.
+		const speaker = this.conversationHistory.speakerLabel(message.participant?.id ?? '');
+		const turn: TranslationTurn = {
+			...(speaker && { speaker }),
+			text,
+			...(message.language && { language: message.language }),
+		};
+		// Snapshot before recording this turn, and share it across the languages below: the
+		// translations complete out of order, and all of them describe the same point in the
+		// conversation.
+		const history = this.textTranslationProvider && usesConversationContext(this.textTranslationProvider)
+			? this.conversationHistory.snapshot()
+			: [];
+		// Record every final, even when no language is requested and even for a turn skipped below:
+		// it is still context for the turns that follow.
+		this.conversationHistory.add(turn);
+
+		const translator = this.textTranslator;
+		if (!translator || this.targetLanguages.length === 0) {
 			return;
 		}
 
@@ -447,8 +498,9 @@ export class TranscriberProxy extends EventEmitter {
 				);
 				continue;
 			}
+			const request: TextTranslationRequest = { turn, targetLanguage: language, history };
 			translator
-				.translate(text, language, message.language)
+				.translate(request)
 				.then((translated) => {
 					if (!translated) {
 						return;
@@ -561,7 +613,9 @@ export class TranscriberProxy extends EventEmitter {
 
 		this.textTranslator?.close?.();
 		this.textTranslator = undefined;
+		this.textTranslationProvider = undefined;
 		this.targetLanguages = [];
+		this.conversationHistory.clear();
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
 		});

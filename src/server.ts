@@ -9,6 +9,13 @@ import { createNodeTranslationRuntime } from './translate/nodeRuntime';
 import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage, type TranslationTalkStartData, type TranslationTalkStopData } from './translate/messages';
 import type { IWebSocket } from './translate/runtime';
 import type { TextTranslationMessage } from './textTranslate/messages';
+import {
+	getAvailableTextTranslationProviders,
+	getDefaultTextTranslationProvider,
+	isTextTranslationProviderAvailable,
+	isValidTextTranslationProvider,
+	type TextTranslationProvider,
+} from './textTranslate/factory';
 import { setMetricDebug, writeMetric } from './metrics';
 import logger, { addOtlpTransport } from './logger';
 import { sessionManager } from './SessionManager';
@@ -401,7 +408,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, textTranslationProvider: requestedTextTranslationProvider } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -491,10 +498,32 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 			logger.info(`[WS-${connectionId}] openai_custom WebSocket URL: ${parsedCustomUrl.hostname}`);
 		}
 
+		// Resolve the per-connection text-translation provider override, if any.
+		//
+		// Unlike the transcription `provider`, an unusable value here does NOT close the socket: text
+		// translation is an optional addition to the session, so a stale parameter in a deployment's
+		// URL template must not take transcription down with it. The error is logged loudly and the
+		// configured default is used instead.
+		let textTranslationProvider: TextTranslationProvider | undefined;
+		if (requestedTextTranslationProvider) {
+			if (!isValidTextTranslationProvider(requestedTextTranslationProvider)) {
+				logger.error(
+					`[WS-${connectionId}] Invalid text_translation_provider: ${requestedTextTranslationProvider}. Valid providers are: openai, xai, gemini, google, stub. Using the configured default instead`,
+				);
+			} else if (!isTextTranslationProviderAvailable(requestedTextTranslationProvider)) {
+				logger.error(
+					`[WS-${connectionId}] Text translation provider '${requestedTextTranslationProvider}' is not available. Available providers: ${getAvailableTextTranslationProviders().join(', ') || '(none)'}. Using the configured default instead`,
+				);
+			} else {
+				textTranslationProvider = requestedTextTranslationProvider;
+				logger.info(`[WS-${connectionId}] Using requested text translation provider: ${textTranslationProvider}`);
+			}
+		}
+
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, textTranslationProvider });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);
@@ -541,6 +570,27 @@ server.listen(PORT, HOST, () => {
 	} else {
 		logger.error('No default provider available! Check PROVIDERS_PRIORITY configuration.');
 		process.exit(1);
+	}
+	logger.info('');
+
+	// Text translation configuration (the /transcribe path; target languages come from the bridge)
+	logger.info('Text Translation:');
+	logger.info(`  Enabled: ${config.textTranslation.enabled}`);
+	if (config.textTranslation.enabled) {
+		const availableTextProviders = getAvailableTextTranslationProviders();
+		const defaultTextProvider = getDefaultTextTranslationProvider();
+		logger.info(`  Priority: ${config.textTranslation.providersPriority.join(', ')}`);
+		logger.info(`  Available providers: ${availableTextProviders.join(', ') || '(none)'}`);
+		if (defaultTextProvider) {
+			logger.info(`  Default provider: ${defaultTextProvider}`);
+		} else {
+			// Not fatal: transcription still works, and the requested languages are dropped with a
+			// log message on the first `sources` event that asks for one.
+			logger.error('  No text translation provider is available! Requested languages will be dropped.');
+		}
+		logger.info(`  History: ${config.textTranslation.historyTurns} turns / ${config.textTranslation.historyMaxChars} chars`);
+		logger.info(`  Speaker labels: ${config.textTranslation.includeSpeakers}`);
+		logger.info(`  Timeout: ${config.textTranslation.timeoutMs}ms`);
 	}
 	logger.info('');
 

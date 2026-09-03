@@ -17,6 +17,11 @@
  *                  enables a target language (`start-translation`), so every source is translated
  *                  into <lang> (default "es"). The endpoint returns translated `media` (Opus) plus
  *                  `realtime-translation-result` transcripts. Received media packets are counted.
+ *   --text-translate=<lang>[,<lang>...] - For the /transcribe endpoint: on connect, request text
+ *                  translation of the finals into these languages, the way the JVB does it (a
+ *                  `sources` event whose `requests` list is the authoritative full set). The server
+ *                  returns one `translation-result` per language per final; they are printed and
+ *                  counted separately from transcripts.
  *   --save-audio[=<dir>] - Save the returned translated audio as one Ogg-Opus file per source tag
  *                  (`<dir>/<tag>.opus`, default dir "."). Playable in ffplay/VLC/browsers.
  *   --ci           - Assertion mode for scripted/CI use (no-op unless combined with the flags below):
@@ -43,6 +48,8 @@
  *                  that throws off silence-based finalization timing) should not fail the check as
  *                  long as the backend is visibly transcribing.
  *   --assert-min-media=<N>    - (--ci only) fail unless at least N translated media packets were received.
+ *   --assert-min-text-translations=<N> - (--ci only) fail unless at least N text translations
+ *                  (`translation-result`) were received. Use it with --text-translate.
  *
  * Example:
  *   node scripts/replay-dump.cjs /tmp/websocket-dump.jsonl "ws://localhost:8080/transcribe?transcribe=true&sendBack=true"
@@ -61,6 +68,9 @@ const WebSocket = require('ws');
 let mediaPacketsReceived = 0; // translated `media` (Opus) frames — the /translate audio return path
 let finalTranscripts = 0;
 let interimTranscripts = 0;
+// Translated transcript text (inner type `translation-result`) — the /transcribe text-translation
+// return path. Counted separately from transcripts: it is a translation OF a final, not a final.
+let textTranslations = 0;
 // Talk-boundary events bracketing translated audio. Only start/stop that carry a `timestamp` are the
 // per-talk sending-change boundaries (a plain start/stop without one is a stream announcement).
 let talkStartEvents = 0;
@@ -182,6 +192,7 @@ const extraArgs = process.argv.slice(4);
 let speed = 1.0;
 const extraHeaders = {};
 let translateLang = null; // when set, send `start-translation` signaling for this target language
+let textTranslateLangs = null; // when set, send a `sources` event requesting these text-translation languages
 let saveAudioDir = null;  // when set, save returned translated audio as per-tag .opus files here
 let ciMode = false;
 let connectTimeoutSec = 15;
@@ -190,6 +201,7 @@ let assertMinFinals = null;
 let assertMinInterims = null;
 let assertMinFinalsOrInterims = null;
 let assertMinMedia = null;
+let assertMinTextTranslations = null;
 
 for (let i = 0; i < extraArgs.length; i++) {
     const arg = extraArgs[i];
@@ -198,6 +210,14 @@ for (let i = 0; i < extraArgs.length; i++) {
         translateLang = eq !== -1 ? arg.slice(eq + 1).trim() : 'es';
         if (!translateLang) {
             console.error('Error: --translate=<lang> requires a language (e.g. --translate=es)');
+            process.exit(1);
+        }
+    } else if (arg === '--text-translate' || arg.startsWith('--text-translate=')) {
+        const eq = arg.indexOf('=');
+        const raw = eq !== -1 ? arg.slice(eq + 1) : '';
+        textTranslateLangs = raw.split(',').map((lang) => lang.trim()).filter((lang) => lang);
+        if (textTranslateLangs.length === 0) {
+            console.error('Error: --text-translate=<lang>[,<lang>...] requires at least one language (e.g. --text-translate=fr,de)');
             process.exit(1);
         }
     } else if (arg === '--save-audio' || arg.startsWith('--save-audio=')) {
@@ -217,6 +237,8 @@ for (let i = 0; i < extraArgs.length; i++) {
         assertMinFinalsOrInterims = parseInt(arg.slice('--assert-min-finals-or-interims='.length), 10);
     } else if (arg.startsWith('--assert-min-media=')) {
         assertMinMedia = parseInt(arg.slice('--assert-min-media='.length), 10);
+    } else if (arg.startsWith('--assert-min-text-translations=')) {
+        assertMinTextTranslations = parseInt(arg.slice('--assert-min-text-translations='.length), 10);
     } else if (!isNaN(parseFloat(arg)) && i === 0) {
         speed = parseFloat(arg);
     } else {
@@ -315,12 +337,13 @@ let connectTimeoutHandle = null;
 let drainTimer = null;
 let replayComplete = false;
 let earlyClosed = false;
-const hasCiAsserts = assertMinFinals !== null || assertMinInterims !== null || assertMinFinalsOrInterims !== null || assertMinMedia !== null;
+const hasCiAsserts = assertMinFinals !== null || assertMinInterims !== null || assertMinFinalsOrInterims !== null || assertMinMedia !== null || assertMinTextTranslations !== null;
 function ciAssertsSatisfied() {
     if (assertMinFinals !== null && finalTranscripts < assertMinFinals) return false;
     if (assertMinInterims !== null && interimTranscripts < assertMinInterims) return false;
     if (assertMinFinalsOrInterims !== null && finalTranscripts < assertMinFinalsOrInterims && interimTranscripts < assertMinFinalsOrInterims) return false;
     if (assertMinMedia !== null && mediaPacketsReceived < assertMinMedia) return false;
+    if (assertMinTextTranslations !== null && textTranslations < assertMinTextTranslations) return false;
     return true;
 }
 function finishEarly() {
@@ -353,6 +376,14 @@ ws.on('open', () => {
         const signaling = { event: 'start-translation', translation: { language: translateLang } };
         ws.send(JSON.stringify(signaling));
         console.log(`Enabled translation → ${translateLang}: ${JSON.stringify(signaling)}`);
+    }
+
+    // For /transcribe text translation: request the target languages the way the JVB does, in a
+    // `sources` event. `requests` is the authoritative full set.
+    if (textTranslateLangs) {
+        const signaling = { event: 'sources', exports: [], requests: textTranslateLangs };
+        ws.send(JSON.stringify(signaling));
+        console.log(`Requested text translation → ${textTranslateLangs.join(', ')}: ${JSON.stringify(signaling)}`);
     }
 
     console.log(''); // Blank line for transcripts to appear above status
@@ -449,6 +480,18 @@ ws.on('message', (data) => {
             return;
         }
 
+        // Text translation of a final (`event: transcription-result`, inner `type:
+        // translation-result`). Its text is a plain string, not a `transcript[]` array, so it is
+        // handled before the transcript branch below — which would otherwise print it empty and
+        // count it as a final.
+        if (parsed.type === 'translation-result') {
+            textTranslations++;
+            process.stdout.write('\r' + ' '.repeat(120) + '\r');
+            console.log(`<translation ${parsed.language}> [${parsed.participant?.id || 'unknown'}] ${parsed.text || ''}`);
+            finishEarly();
+            return;
+        }
+
         // Check if this is a transcription result (transcription-result or realtime-translation-result)
         if (parsed.type === 'transcription-result' || parsed.type === 'realtime-translation-result' || parsed.event === 'transcription-result') {
             const text = parsed.transcript?.map(t => t.text).join(' ') || '';
@@ -522,7 +565,7 @@ if (ciMode) {
 ws.on('close', () => {
     if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
     process.stdout.write('\r' + ' '.repeat(120) + '\r'); // Clear status line
-    console.log(`Connection closed. Received ${mediaPacketsReceived} media packet(s), ${interimTranscripts} interim + ${finalTranscripts} final transcript(s), ${talkStartEvents} talk-start + ${talkStopEvents} talk-stop event(s).`);
+    console.log(`Connection closed. Received ${mediaPacketsReceived} media packet(s), ${interimTranscripts} interim + ${finalTranscripts} final transcript(s), ${textTranslations} text translation(s), ${talkStartEvents} talk-start + ${talkStopEvents} talk-stop event(s).`);
 
     if (saveAudioDir && audioByTag.size > 0) {
         fs.mkdirSync(saveAudioDir, { recursive: true });
@@ -549,6 +592,9 @@ ws.on('close', () => {
         }
         if (assertMinMedia !== null && mediaPacketsReceived < assertMinMedia) {
             failures.push(`expected >= ${assertMinMedia} media packet(s), got ${mediaPacketsReceived}`);
+        }
+        if (assertMinTextTranslations !== null && textTranslations < assertMinTextTranslations) {
+            failures.push(`expected >= ${assertMinTextTranslations} text translation(s), got ${textTranslations}`);
         }
         if (failures.length > 0) {
             console.error(`INTEGRATION_RESULT: FAIL: ${failures.join('; ')}`);

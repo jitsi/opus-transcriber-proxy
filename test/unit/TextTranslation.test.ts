@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TranscriberProxy, type TranscriptionMessage } from '../../src/transcriberproxy';
-import { isValidTargetLanguage, needsTranslation } from '../../src/textTranslate/TextTranslator';
+import { isValidTargetLanguage, needsTranslation, stripSpeakerLabel, type TextTranslationRequest } from '../../src/textTranslate/TextTranslator';
 import { StubTextTranslator } from '../../src/textTranslate/StubTextTranslator';
 import { buildTextTranslationMessage, transcriptionText } from '../../src/textTranslate/messages';
 
@@ -28,7 +28,22 @@ vi.mock('../../src/config', () => ({
 		dumpTranscripts: false,
 		dumpBasePath: '/tmp/opus-transcriber-proxy-test',
 		dispatcher: { wsUrl: '', headers: {} },
-		textTranslation: { enabled: true, provider: 'stub' },
+		textTranslation: {
+			enabled: true,
+			providersPriority: ['stub'],
+			enableStub: true,
+			historyTurns: 6,
+			historyMaxChars: 2000,
+			includeSpeakers: true,
+			timeoutMs: 10000,
+			temperature: undefined,
+			reasoningEffort: undefined,
+			maxOutputTokens: undefined,
+			openai: { apiKey: '', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+			xai: { apiKey: '', url: 'https://api.x.ai/v1/chat/completions', model: 'grok-4.20-0309-non-reasoning' },
+			gemini: { apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.5-flash-lite', thinkingBudget: 0 },
+			google: { apiKey: '', url: 'https://translation.googleapis.com/language/translate/v2' },
+		},
 	},
 }));
 
@@ -78,7 +93,10 @@ describe('text translation', () => {
 
 		mockConfig = (await import('../../src/config')).config;
 		mockConfig.textTranslation.enabled = true;
-		mockConfig.textTranslation.provider = 'stub';
+		mockConfig.textTranslation.providersPriority = ['stub'];
+		mockConfig.textTranslation.enableStub = true;
+		mockConfig.textTranslation.historyTurns = 6;
+		mockConfig.textTranslation.includeSpeakers = true;
 
 		const eventListeners = new Map<string, Function[]>();
 		mockWebSocket = {
@@ -266,8 +284,10 @@ describe('text translation', () => {
 		it('drops only the failing language when a translation rejects', async () => {
 			const { proxy, translations } = proxyRequesting(['fr', 'de']);
 			(proxy as any).textTranslator = {
-				translate: vi.fn((text: string, language: string) =>
-					language === 'fr' ? Promise.reject(new Error('provider down')) : Promise.resolve(`[${language}] ${text}`),
+				translate: vi.fn((request: TextTranslationRequest) =>
+					request.targetLanguage === 'fr'
+						? Promise.reject(new Error('provider down'))
+						: Promise.resolve(`[${request.targetLanguage}] ${request.turn.text}`),
 				),
 			};
 
@@ -275,6 +295,170 @@ describe('text translation', () => {
 
 			expect(translations).toHaveBeenCalledTimes(1);
 			expect(translations.mock.calls[0][0].language).toBe('de');
+		});
+	});
+
+	describe('context', () => {
+		/** Replace the translator with a spy that records the requests it is given. */
+		function captureRequests(proxy: TranscriberProxy): TextTranslationRequest[] {
+			const requests: TextTranslationRequest[] = [];
+			(proxy as any).textTranslator = {
+				translate: vi.fn((request: TextTranslationRequest) => {
+					// Copy: the proxy shares one history array across languages, and later turns push to it.
+					requests.push({ ...request, history: [...request.history] });
+					return Promise.resolve(`[${request.targetLanguage}] ${request.turn.text}`);
+				}),
+			};
+			// An LLM provider, so the proxy passes context.
+			(proxy as any).textTranslationProvider = 'openai';
+			return requests;
+		}
+
+		it('passes no history for the first turn', async () => {
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+
+			await deliverFinal(proxy, finalTranscription());
+
+			expect(requests).toHaveLength(1);
+			expect(requests[0].history).toEqual([]);
+			expect(requests[0].turn).toEqual({ speaker: 'Speaker 1', text: 'hello there', language: 'en' });
+		});
+
+		it('passes earlier turns as history, excluding the turn being translated', async () => {
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'first' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'second' }] }));
+
+			expect(requests[1].history).toEqual([{ speaker: 'Speaker 1', text: 'first', language: 'en' }]);
+			expect(requests[1].turn.text).toBe('second');
+		});
+
+		it('labels each participant with a stable ordinal', async () => {
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+			const second = { id: 'def456', tag: 'def456-a0' };
+
+			await deliverFinal(proxy, finalTranscription({ transcript: [{ text: 'from one' }] }));
+			await deliverFinal(proxy, finalTranscription({ participant: second, transcript: [{ text: 'from two' }] }));
+			await deliverFinal(proxy, finalTranscription({ transcript: [{ text: 'one again' }] }));
+
+			expect(requests.map((r) => r.turn.speaker)).toEqual(['Speaker 1', 'Speaker 2', 'Speaker 1']);
+		});
+
+		it('gives every requested language the same history snapshot', async () => {
+			const { proxy } = proxyRequesting(['fr', 'de']);
+			const requests = captureRequests(proxy);
+
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'first' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'second' }] }));
+
+			const [fr, de] = requests.filter((r) => r.turn.text === 'second');
+			expect(fr.history).toEqual(de.history);
+			expect(fr.history.map((t) => t.text)).toEqual(['first']);
+		});
+
+		it('records a turn that needed no translation as context for later ones', async () => {
+			const { proxy } = proxyRequesting(['en', 'fr']);
+			const requests = captureRequests(proxy);
+
+			// Already English: the 'en' request is skipped, but the turn is still context.
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'in english' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'next' }] }));
+
+			const next = requests.find((r) => r.turn.text === 'next')!;
+			expect(next.history.map((t) => t.text)).toEqual(['in english']);
+		});
+
+		it('caps the history at historyTurns', async () => {
+			mockConfig.textTranslation.historyTurns = 2;
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+
+			for (const text of ['one', 'two', 'three', 'four']) {
+				await deliverFinal(proxy, finalTranscription({ message_id: text, transcript: [{ text }] }));
+			}
+
+			expect(requests[3].history.map((t) => t.text)).toEqual(['two', 'three']);
+		});
+
+		it('passes no history when history is disabled', async () => {
+			mockConfig.textTranslation.historyTurns = 0;
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'first' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'second' }] }));
+
+			expect(requests.every((r) => r.history.length === 0)).toBe(true);
+		});
+
+		it('sends no speaker at all when speaker labels are disabled', async () => {
+			mockConfig.textTranslation.includeSpeakers = false;
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'first' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'second' }] }));
+
+			expect(requests.every((r) => r.turn.speaker === undefined)).toBe(true);
+			expect(requests[1].history).toEqual([{ text: 'first', language: 'en' }]);
+		});
+
+		it('passes no history to a provider that does not support context', async () => {
+			const { proxy } = proxyRequesting(['fr']);
+			const requests = captureRequests(proxy);
+			// Cloud Translation takes one string with no conversation.
+			(proxy as any).textTranslationProvider = 'google';
+
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm1', transcript: [{ text: 'first' }] }));
+			await deliverFinal(proxy, finalTranscription({ message_id: 'm2', transcript: [{ text: 'second' }] }));
+
+			expect(requests.every((r) => r.history.length === 0)).toBe(true);
+		});
+	});
+
+	describe('provider selection', () => {
+		it('uses the first available provider from the priority list', () => {
+			mockConfig.textTranslation.providersPriority = ['openai', 'stub'];
+			mockConfig.textTranslation.openai.apiKey = '';
+			const { proxy } = proxyRequesting(['fr']);
+			expect((proxy as any).textTranslationProvider).toBe('stub');
+		});
+
+		it('prefers an available higher-priority provider', () => {
+			mockConfig.textTranslation.providersPriority = ['openai', 'stub'];
+			mockConfig.textTranslation.openai.apiKey = 'sk-test';
+			try {
+				const { proxy } = proxyRequesting(['fr']);
+				expect((proxy as any).textTranslationProvider).toBe('openai');
+			} finally {
+				mockConfig.textTranslation.openai.apiKey = '';
+			}
+		});
+
+		it('uses the connection override over the priority list', () => {
+			mockConfig.textTranslation.providersPriority = ['openai'];
+			mockConfig.textTranslation.openai.apiKey = 'sk-test';
+			try {
+				options.textTranslationProvider = 'stub';
+				const { proxy } = proxyRequesting(['fr']);
+				expect((proxy as any).textTranslationProvider).toBe('stub');
+			} finally {
+				mockConfig.textTranslation.openai.apiKey = '';
+			}
+		});
+
+		it('drops the requested languages when no provider is available', async () => {
+			mockConfig.textTranslation.providersPriority = ['openai'];
+			mockConfig.textTranslation.enableStub = false;
+			const { proxy, translations } = proxyRequesting(['fr']);
+
+			expect((proxy as any).targetLanguages).toEqual([]);
+			await deliverFinal(proxy, finalTranscription());
+			expect(translations).not.toHaveBeenCalled();
 		});
 	});
 });
@@ -307,7 +491,36 @@ describe('needsTranslation', () => {
 
 describe('StubTextTranslator', () => {
 	it('prefixes the text with the upper-cased target language', async () => {
-		await expect(new StubTextTranslator().translate('hello', 'fr')).resolves.toBe('[FR] hello');
+		const request: TextTranslationRequest = {
+			turn: { speaker: 'Speaker 1', text: 'hello' },
+			targetLanguage: 'fr',
+			history: [{ speaker: 'Speaker 2', text: 'earlier' }],
+		};
+		// Neither the speaker label nor the history reaches the output.
+		await expect(new StubTextTranslator().translate(request)).resolves.toBe('[FR] hello');
+	});
+});
+
+describe('stripSpeakerLabel', () => {
+	it('removes the English label we generate', () => {
+		expect(stripSpeakerLabel('Speaker 2: bonjour', 'Speaker 2')).toBe('bonjour');
+		expect(stripSpeakerLabel('speaker 10 : bonjour', 'Speaker 10')).toBe('bonjour');
+	});
+
+	it('removes a translated label that kept the turn number', () => {
+		expect(stripSpeakerLabel('Sprecher 2: guten Tag', 'Speaker 2')).toBe('guten Tag');
+		expect(stripSpeakerLabel('话者 2：你好', 'Speaker 2')).toBe('你好');
+		expect(stripSpeakerLabel('Intervenant 2 : bonjour', 'Speaker 2')).toBe('bonjour');
+	});
+
+	it('leaves a sentence that only looks like a label alone', () => {
+		// Not the current speaker's number, so it is content, not a label.
+		expect(stripSpeakerLabel('Room 12: it is booked', 'Speaker 2')).toBe('Room 12: it is booked');
+		expect(stripSpeakerLabel('bonjour: on commence', 'Speaker 2')).toBe('bonjour: on commence');
+	});
+
+	it('is a no-op without a label in the text', () => {
+		expect(stripSpeakerLabel('bonjour tout le monde', 'Speaker 1')).toBe('bonjour tout le monde');
 	});
 });
 

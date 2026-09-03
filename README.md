@@ -143,10 +143,58 @@ Jicofo makes the set from the languages that the participants request. Jicofo se
 time a participant changes the subtitle language. The proxy translates the final results only. It
 does not translate interim results.
 
+For each final result, the proxy makes one call for each target language. These calls run in
+parallel. If one call is slow, or if it fails, the original transcript is not delayed and the other
+languages are not stopped.
+
+There are five providers. Four of them translate. One of them is for tests only.
+
+| Provider | API | Context | Billing |
+|----------|-----|---------|---------|
+| `openai` | Chat Completions (`/v1/chat/completions`) | Yes | Per token |
+| `xai` | Chat Completions (`https://api.x.ai/v1/chat/completions`) | Yes | Per token |
+| `gemini` | Generative Language API (`generateContent`) | Yes | Per token |
+| `google` | Cloud Translation v2 (dedicated machine translation) | **No** | Per character |
+| `stub` | none — puts the target language before the text (`"hello"` → `"[FR] hello"`) | No | Free |
+
+"Context" means that the provider gets the recent turns of the conversation with the text to
+translate. One sentence alone is often not enough to select the correct pronoun, the correct gender
+or the correct level of formality. The `google` provider works on one sentence at a time. It ignores
+the history and the speaker labels.
+
+The proxy selects the provider in the same way as for transcription. Set the order in
+`TEXT_TRANSLATION_PROVIDERS_PRIORITY`. The first provider in the list that has an API key becomes
+the default. Each connection can select a different provider with the `text_translation_provider`
+URL parameter.
+
+If the parameter gives a provider that is not valid or not available, the proxy writes an error
+message and uses the default. The proxy does not close the connection. Text translation is an
+addition to the session, and it must not stop transcription.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_TEXT_TRANSLATION` | `false` | Translate final transcripts into the requested target languages. If this is `false`, the proxy ignores the requested languages and writes a log message |
-| `TEXT_TRANSLATION_PROVIDER` | `stub` | Which translator to use. `stub` does not translate. It puts the target language before the text (`"hello"` → `"[FR] hello"`). Use it to test the signalling path with no provider |
+| `TEXT_TRANSLATION_PROVIDERS_PRIORITY` | `openai,gemini,xai,google` | Provider order. The first available provider is the default. The providers that use context are first, because `google` cannot use context |
+| `ENABLE_TEXT_TRANSLATION_STUB` | `false` | Make the `stub` provider available. Keep it `false` in a deployment |
+| `TEXT_TRANSLATION_HISTORY_TURNS` | `6` | How many earlier final results to send as context. `0` disables the context |
+| `TEXT_TRANSLATION_HISTORY_MAX_CHARS` | `2000` | Maximum total characters of the context. The proxy removes the oldest turns first |
+| `TEXT_TRANSLATION_INCLUDE_SPEAKERS` | `true` | Send a speaker label with each turn (`Speaker 1`, `Speaker 2`). The label is a per-session number, not a display name. The proxy always removes the label from the translated text. Set this to `false` to keep the label out of the request also |
+| `TEXT_TRANSLATION_TIMEOUT_MS` | `10000` | Timeout for one translation request. The proxy discards a translation that is too late |
+| `TEXT_TRANSLATION_TEMPERATURE` | (unset) | `temperature` for the LLM providers. Unset means the model default, which is 1. A value of `0` makes the translations more repeatable, but the GPT-5 and Grok 4 model families reject a value that is not 1 |
+| `TEXT_TRANSLATION_REASONING_EFFORT` | (unset) | `reasoning_effort` for the `openai` and `xai` providers. Use it if the configured model does reasoning by default |
+| `TEXT_TRANSLATION_MAX_OUTPUT_TOKENS` | (unset) | `max_completion_tokens` for the `openai` and `xai` providers. Be careful: a reasoning model can use a small limit for reasoning tokens only, and then return no text |
+| `TEXT_TRANSLATION_OPENAI_API_KEY` | (falls back to `OPENAI_API_KEY`) | Key for the `openai` provider |
+| `TEXT_TRANSLATION_OPENAI_MODEL` | `gpt-4o-mini` | Model for the `openai` provider. Measured against the API: 0.5 s to 1.2 s for one translation, and no reasoning tokens. `gpt-5-nano` costs less per token, but it used ~750 reasoning tokens for the same prompt (~6 s) |
+| `TEXT_TRANSLATION_OPENAI_URL` | `https://api.openai.com/v1/chat/completions` | Endpoint for the `openai` provider |
+| `TEXT_TRANSLATION_XAI_API_KEY` | (falls back to `XAI_API_KEY`) | Key for the `xai` provider |
+| `TEXT_TRANSLATION_XAI_MODEL` | `grok-4.20-0309-non-reasoning` | Model for the `xai` provider. This is the variant that does no reasoning. The Grok 4 reasoning models used 3 s to 17 s for one translation |
+| `TEXT_TRANSLATION_XAI_URL` | `https://api.x.ai/v1/chat/completions` | Endpoint for the `xai` provider |
+| `TEXT_TRANSLATION_GEMINI_API_KEY` | (falls back to `GEMINI_API_KEY`) | Key for the `gemini` provider |
+| `TEXT_TRANSLATION_GEMINI_MODEL` | `gemini-2.5-flash-lite` | Model for the `gemini` provider |
+| `TEXT_TRANSLATION_GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | Base URL for the `gemini` provider |
+| `TEXT_TRANSLATION_GEMINI_THINKING_BUDGET` | `0` | `thinkingConfig.thinkingBudget` for the `gemini` provider. `0` disables thinking. Use `-1` to remove the field, which is necessary for a model that cannot disable thinking (the Pro models) |
+| `TEXT_TRANSLATION_GOOGLE_API_KEY` | (unset) | Key for the `google` provider. This must be a Google Cloud API key that has the Cloud Translation API enabled. There is **no** fallback to `GEMINI_API_KEY`, because Cloud Translation is a different API and a Gemini key is not valid for it. If this variable is unset, the `google` provider is not available |
+| `TEXT_TRANSLATION_GOOGLE_URL` | `https://translation.googleapis.com/language/translate/v2` | Endpoint for the `google` provider |
 
 ### Dispatcher (Optional)
 

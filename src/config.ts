@@ -19,6 +19,18 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	}
 }
 
+function parseIntOrUndefined(value: string | undefined): number | undefined {
+	if (value === undefined || value === '') return undefined;
+	const parsed = parseInt(value, 10);
+	return isNaN(parsed) ? undefined : parsed;
+}
+
+function parseFloatOrUndefined(value: string | undefined): number | undefined {
+	if (value === undefined || value === '') return undefined;
+	const parsed = parseFloat(value);
+	return isNaN(parsed) ? undefined : parsed;
+}
+
 function parseAndValidateTags(value: string | undefined): string[] {
 	if (!value) return [];
 	const tags = value.split(',').map((t) => t.trim()).filter((t) => t);
@@ -125,9 +137,81 @@ export const config = {
 	// speech-to-speech. Disabled by default; requested languages are ignored while it is off.
 	textTranslation: {
 		enabled: process.env.ENABLE_TEXT_TRANSLATION === 'true',
-		// Which translator implementation to use. Only 'stub' exists so far (it prefixes the text
-		// with the target language instead of translating, to exercise the signalling path).
-		provider: process.env.TEXT_TRANSLATION_PROVIDER || 'stub',
+
+		// Priority order for choosing the translator, same semantics as PROVIDERS_PRIORITY for
+		// transcription: the first entry that is available (its API key is set) becomes the default,
+		// and a connection can override it with the `text_translation_provider` URL parameter.
+		// LLM-first by default: those take conversation context, which a bare sentence often needs
+		// for pronouns, gender and formality. `google` (dedicated MT) is cheaper per character but
+		// context-free, so it is last.
+		providersPriority: (process.env.TEXT_TRANSLATION_PROVIDERS_PRIORITY || 'openai,gemini,xai,google')
+			.split(',')
+			.map((p) => p.trim())
+			.filter((p) => p),
+
+		// The 'stub' translator does not translate: it puts the target language before the text
+		// ("hello" -> "[FR] hello") so the signalling path can be exercised with no provider. Like
+		// the dummy transcription provider it is available only when explicitly enabled, so it can
+		// never be picked up in a deployment that simply has no keys.
+		enableStub: process.env.ENABLE_TEXT_TRANSLATION_STUB === 'true',
+
+		// How many past finals of the session to pass as context, and a cap on their total size so
+		// a long meeting cannot grow the prompt without bound. 0 turns disables context entirely.
+		historyTurns: parseIntOrDefault(process.env.TEXT_TRANSLATION_HISTORY_TURNS, 6),
+		historyMaxChars: parseIntOrDefault(process.env.TEXT_TRANSLATION_HISTORY_MAX_CHARS, 2000),
+
+		// Whether to tell the translator who spoke each turn, as a synthetic per-session label
+		// ("Speaker 1"). It helps the model tell a reply from a continuation. Labels are prompt-only
+		// and are stripped from the output; set this to false to keep them out of the request too.
+		includeSpeakers: process.env.TEXT_TRANSLATION_INCLUDE_SPEAKERS !== 'false',
+
+		// Per-request timeout. A translation that takes longer than this is dropped: the original
+		// transcript is already on the wire, and a very late subtitle is worse than none.
+		timeoutMs: parseIntOrDefault(process.env.TEXT_TRANSLATION_TIMEOUT_MS, 10000),
+
+		// LLM knobs shared by the openai/xai/gemini translators. All unset by default so each
+		// model's own default applies — notably, the GPT-5 and Grok 4 families reject a
+		// `temperature` other than 1, and a `max_completion_tokens` cap on a reasoning model can be
+		// spent entirely on reasoning tokens, returning empty content.
+		temperature: parseFloatOrUndefined(process.env.TEXT_TRANSLATION_TEMPERATURE),
+		reasoningEffort: process.env.TEXT_TRANSLATION_REASONING_EFFORT || undefined,
+		maxOutputTokens: parseIntOrUndefined(process.env.TEXT_TRANSLATION_MAX_OUTPUT_TOKENS),
+
+		// Each provider's key defaults to the key that provider already uses for transcription, so a
+		// deployment gets translation without new configuration. Set the dedicated variable to bill
+		// translation separately or to use a key with different scopes.
+		openai: {
+			apiKey: process.env.TEXT_TRANSLATION_OPENAI_API_KEY || process.env.OPENAI_API_KEY || '',
+			url: process.env.TEXT_TRANSLATION_OPENAI_URL || 'https://api.openai.com/v1/chat/completions',
+			// Measured against the real API with the production prompt: ~0.5-0.9s per translation and
+			// no reasoning tokens. gpt-5-nano spends ~750 reasoning tokens on the same prompt (~6s),
+			// so it is a poor default despite the lower per-token price.
+			model: process.env.TEXT_TRANSLATION_OPENAI_MODEL || 'gpt-4o-mini',
+		},
+		xai: {
+			apiKey: process.env.TEXT_TRANSLATION_XAI_API_KEY || process.env.XAI_API_KEY || '',
+			url: process.env.TEXT_TRANSLATION_XAI_URL || 'https://api.x.ai/v1/chat/completions',
+			// The non-reasoning variant, for the same reason: the reasoning Grok 4 models spend
+			// hundreds of reasoning tokens (3-17s measured) to translate one sentence.
+			model: process.env.TEXT_TRANSLATION_XAI_MODEL || 'grok-4.20-0309-non-reasoning',
+		},
+		gemini: {
+			apiKey: process.env.TEXT_TRANSLATION_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '',
+			baseUrl: process.env.TEXT_TRANSLATION_GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+			model: process.env.TEXT_TRANSLATION_GEMINI_MODEL || 'gemini-2.5-flash-lite',
+			// Thinking off (the Flash tiers think by default, which costs latency and output tokens
+			// for a task that needs no reasoning). Set to -1 to omit the field, which is required for
+			// models that cannot turn thinking off (the Pro tier rejects a budget of 0).
+			thinkingBudget: parseIntOrDefault(process.env.TEXT_TRANSLATION_GEMINI_THINKING_BUDGET, 0),
+		},
+		google: {
+			// Cloud Translation v2. Deliberately NO fallback to GEMINI_API_KEY: this is a different
+			// API (translation.googleapis.com) and a Gemini/AI Studio key is not valid for it, so
+			// falling back would make the provider look configured and then fail every request.
+			// Unset means unavailable, and the priority list skips it.
+			apiKey: process.env.TEXT_TRANSLATION_GOOGLE_API_KEY || '',
+			url: process.env.TEXT_TRANSLATION_GOOGLE_URL || 'https://translation.googleapis.com/language/translate/v2',
+		},
 	},
 
 	// Translation (/translate endpoint) configuration
