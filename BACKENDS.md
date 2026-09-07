@@ -590,6 +590,12 @@ node scripts/replay-dump.cjs standup-2026-01-14/recording/media.jsonl "ws://loca
    - Close connections properly in `close()`
    - Clear timers and intervals
    - Free resources
+   - Make `close()` idempotent by checking/setting `status = 'closed'` before calling the
+     underlying `ws.close()` — a WebSocket implementation can synchronously re-dispatch
+     `'error'`/`'close'` on a connection that never opened (observed with undici's `WebSocket`;
+     see `DeepgramBackend.close()`), and if your `'error'`/`'close'` listeners call `close()`
+     themselves, an unguarded `close()` recurses without bound and stack-overflows the whole
+     process — not just this one connection
 
 5. **Testing**
    - Test with real audio
