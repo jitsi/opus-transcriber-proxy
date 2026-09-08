@@ -1,4 +1,4 @@
-import { stripSpeakerLabel, type TextTranslationRequest, type TranslationTurn } from './TextTranslator';
+import type { TextTranslationRequest, TranslationTurn } from './TextTranslator';
 
 /**
  * Prompt construction and output cleanup shared by every LLM-backed translator (OpenAI, xAI,
@@ -28,9 +28,10 @@ function targetDescription(code: string): string {
  *
  * The rules earn their place: transcripts are ASR output, so they arrive truncated and
  * mis-punctuated, and a chat model's default reaction to a fragment is to complete or answer it.
- * The label rules matter because a labelled context block invites the model to label its own
- * output, and a label rendered into a subtitle is worse than no translation at all — `stripSpeakerLabel`
- * enforces this, the prompt just makes it unlikely.
+ * The label rule is here because a label rendered into a subtitle is worse than no translation at
+ * all. It is the prompt's job alone: nothing downstream tries to detect a label in the output, since
+ * that means guessing at names in an arbitrary language. What actually keeps labels out is
+ * {@link buildUserPrompt} never putting one on the line being translated.
  */
 export function buildSystemPrompt(targetLanguage: string): string {
 	const target = targetDescription(targetLanguage);
@@ -98,10 +99,17 @@ const QUOTED_RE = /^(["'“”„«»])([\s\S]*)(["'“”„«»])$/;
 /**
  * Turn a model's raw answer into text that can be rendered as a subtitle.
  *
+ * Every rule here matches a literal artefact of chat formatting — a fence, an English answer label,
+ * a pair of quotes — so unwrapping one cannot eat content. This deliberately does **not** try to
+ * remove a speaker label: doing so meant pattern-matching a name in an arbitrary human language,
+ * which silently corrupts real sentences ("Room 12: it's booked") in exchange for a failure that
+ * measurement could not produce. Labels are kept out of the output by prompt construction instead —
+ * see {@link buildUserPrompt} — and `TranscriberProxy` logs the case if one ever appears anyway.
+ *
  * Throws when nothing usable is left, so the caller rejects and drops that one language for that
  * one transcript — an empty or refusal-shaped answer must not be published as a translation.
  */
-export function sanitizeTranslation(raw: string, request: TextTranslationRequest): string {
+export function sanitizeTranslation(raw: string): string {
 	let text = (raw ?? '').trim();
 
 	const fenced = CODE_FENCE_RE.exec(text);
@@ -114,8 +122,6 @@ export function sanitizeTranslation(raw: string, request: TextTranslationRequest
 	if (quoted) {
 		text = quoted[2].trim();
 	}
-
-	text = stripSpeakerLabel(text, request.turn.speaker).trim();
 
 	if (!text) {
 		throw new Error('translator returned an empty translation');

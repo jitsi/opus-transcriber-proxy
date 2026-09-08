@@ -23,7 +23,8 @@ export interface ConversationHistoryOptions {
  * Speaker labels are synthetic and per-session ("Speaker 1", "Speaker 2"), assigned in order of
  * first appearance. The proxy has no display names — only participant ids — and an opaque hex id
  * costs tokens and reads as noise to a model, so it is mapped to an ordinal instead. Labels are
- * prompt-only: {@link stripSpeakerLabel} keeps them out of the translated text.
+ * prompt-only: they are kept out of the translated text by how the prompt is built, never by
+ * matching against a provider's answer.
  */
 export class ConversationHistory {
 	private readonly options: ConversationHistoryOptions;

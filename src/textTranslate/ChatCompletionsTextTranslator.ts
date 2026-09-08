@@ -67,7 +67,7 @@ export class ChatCompletionsTextTranslator implements TextTranslator {
 				`${name} translation returned no content${finishReason ? ` (finish_reason=${finishReason})` : ''}`,
 			);
 		}
-		return sanitizeTranslation(content, request);
+		return sanitizeTranslation(content);
 	}
 }
 

@@ -73,6 +73,6 @@ export class GeminiTextTranslator implements TextTranslator {
 			const reason = json?.promptFeedback?.blockReason ?? candidate?.finishReason;
 			throw new Error(`gemini translation returned no content${reason ? ` (${reason})` : ''}`);
 		}
-		return sanitizeTranslation(text, request);
+		return sanitizeTranslation(text);
 	}
 }

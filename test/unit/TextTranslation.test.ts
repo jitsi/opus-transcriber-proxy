@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TranscriberProxy, type TranscriptionMessage } from '../../src/transcriberproxy';
-import { isValidTargetLanguage, needsTranslation, stripSpeakerLabel, type TextTranslationRequest } from '../../src/textTranslate/TextTranslator';
+import { isValidTargetLanguage, needsTranslation, type TextTranslationRequest } from '../../src/textTranslate/TextTranslator';
 import { StubTextTranslator } from '../../src/textTranslate/StubTextTranslator';
 import { buildTextTranslationMessage, transcriptionText } from '../../src/textTranslate/messages';
 
@@ -298,6 +298,38 @@ describe('text translation', () => {
 		});
 	});
 
+	describe('an echoed speaker label', () => {
+		it('is logged, and the text is published unchanged', async () => {
+			const logger = (await import('../../src/logger')).default;
+			const { proxy, translations } = proxyRequesting(['fr']);
+			(proxy as any).textTranslator = {
+				translate: vi.fn(() => Promise.resolve('Speaker 1: bonjour tout le monde')),
+			};
+
+			await deliverFinal(proxy, finalTranscription());
+
+			// Reported so a prompt or model regression is visible...
+			expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('came back with a speaker label'));
+			// ...but never repaired: editing the text means recognising a label in an arbitrary human
+			// language, which mangles ordinary sentences. The prompt is what keeps labels out.
+			expect(translations).toHaveBeenCalledTimes(1);
+			expect(translations.mock.calls[0][0].text).toBe('Speaker 1: bonjour tout le monde');
+		});
+
+		it('says nothing for an ordinary translation that merely contains a colon', async () => {
+			const logger = (await import('../../src/logger')).default;
+			const { proxy, translations } = proxyRequesting(['fr']);
+			(proxy as any).textTranslator = {
+				translate: vi.fn(() => Promise.resolve('Salle 12 : elle est réservée')),
+			};
+
+			await deliverFinal(proxy, finalTranscription());
+
+			expect(logger.warn).not.toHaveBeenCalled();
+			expect(translations.mock.calls[0][0].text).toBe('Salle 12 : elle est réservée');
+		});
+	});
+
 	describe('context', () => {
 		/** Replace the translator with a spy that records the requests it is given. */
 		function captureRequests(proxy: TranscriberProxy): TextTranslationRequest[] {
@@ -498,29 +530,6 @@ describe('StubTextTranslator', () => {
 		};
 		// Neither the speaker label nor the history reaches the output.
 		await expect(new StubTextTranslator().translate(request)).resolves.toBe('[FR] hello');
-	});
-});
-
-describe('stripSpeakerLabel', () => {
-	it('removes the English label we generate', () => {
-		expect(stripSpeakerLabel('Speaker 2: bonjour', 'Speaker 2')).toBe('bonjour');
-		expect(stripSpeakerLabel('speaker 10 : bonjour', 'Speaker 10')).toBe('bonjour');
-	});
-
-	it('removes a translated label that kept the turn number', () => {
-		expect(stripSpeakerLabel('Sprecher 2: guten Tag', 'Speaker 2')).toBe('guten Tag');
-		expect(stripSpeakerLabel('话者 2：你好', 'Speaker 2')).toBe('你好');
-		expect(stripSpeakerLabel('Intervenant 2 : bonjour', 'Speaker 2')).toBe('bonjour');
-	});
-
-	it('leaves a sentence that only looks like a label alone', () => {
-		// Not the current speaker's number, so it is content, not a label.
-		expect(stripSpeakerLabel('Room 12: it is booked', 'Speaker 2')).toBe('Room 12: it is booked');
-		expect(stripSpeakerLabel('bonjour: on commence', 'Speaker 2')).toBe('bonjour: on commence');
-	});
-
-	it('is a no-op without a label in the text', () => {
-		expect(stripSpeakerLabel('bonjour tout le monde', 'Speaker 1')).toBe('bonjour tout le monde');
 	});
 });
 

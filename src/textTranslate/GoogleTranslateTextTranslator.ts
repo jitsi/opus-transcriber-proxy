@@ -1,6 +1,6 @@
 import { postJson } from './http';
 import { parseServiceAccount, ServiceAccountTokenSource } from './googleAuth';
-import { stripSpeakerLabel, type TextTranslationRequest, type TextTranslator } from './TextTranslator';
+import type { TextTranslationRequest, TextTranslator } from './TextTranslator';
 
 export interface GoogleTranslateConfig {
 	/** Full Cloud Translation v2 endpoint. */
@@ -80,7 +80,7 @@ export class GoogleTranslateTextTranslator implements TextTranslator {
 		}
 
 		// v2 HTML-escapes some characters even with format=text (an apostrophe comes back as &#39;).
-		const text = stripSpeakerLabel(decodeHtmlEntities(translated), request.turn.speaker).trim();
+		const text = decodeHtmlEntities(translated).trim();
 		if (!text) {
 			throw new Error('google translation returned no text');
 		}

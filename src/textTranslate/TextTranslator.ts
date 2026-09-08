@@ -12,9 +12,11 @@
  * backend detected for it (when it reported one).
  *
  * `speaker` is a short synthetic label ("Speaker 1"), not a display name — the proxy never sees
- * display names. It is only a hint for the translator, and must never appear in translated output
- * (see {@link stripSpeakerLabel}). It is omitted entirely when `TEXT_TRANSLATION_INCLUDE_SPEAKERS`
- * is off.
+ * display names. It is only a hint for the translator, and must never appear in translated output.
+ * Nothing tries to detect one in a provider's answer: that would mean pattern-matching a name in an
+ * arbitrary human language, which corrupts ordinary sentences. Instead `buildUserPrompt` never puts
+ * a label on the line being translated, which measurement showed is the arrangement that actually
+ * provokes an echo. It is omitted entirely when `TEXT_TRANSLATION_INCLUDE_SPEAKERS` is off.
  */
 export interface TranslationTurn {
 	speaker?: string;
@@ -43,7 +45,7 @@ export interface TextTranslator {
 	 * Implementations must not throw for ordinary failures; reject the returned promise instead. The
 	 * caller logs and drops a rejected translation, leaving the original transcript unaffected.
 	 * Implementations must return the translated text only: no speaker label, no quoting, no
-	 * commentary (see {@link stripSpeakerLabel} and `sanitizeTranslation` in ./prompt).
+	 * commentary (see `sanitizeTranslation` in ./prompt).
 	 */
 	translate(request: TextTranslationRequest): Promise<string>;
 
@@ -82,31 +84,4 @@ export function needsTranslation(targetLanguage: string, sourceLanguage?: string
 
 function primarySubtag(language: string): string {
 	return language.split(/[-_]/)[0].toLowerCase();
-}
-
-/** Matches a leading English speaker label the model may have copied from the prompt, e.g. "Speaker 2: ". */
-const SPEAKER_LABEL_PREFIX_RE = /^\s*speaker\s*\d+\s*[:：]\s*/i;
-
-/**
- * Remove a speaker label the translator prefixed to its output.
- *
- * The prompt tells the model to translate the line only, but a labelled line is an inviting pattern
- * to continue, and a label in a subtitle is worse than no translation at all: the client renders
- * the text verbatim. So the label is stripped unconditionally from every provider's output rather
- * than only asked for in the prompt.
- *
- * Two shapes are removed: the English label we generate ("Speaker 2:"), and — when `speaker` is
- * given — a translated label that kept the same number ("Sprecher 2:", "话者 2："). Requiring the
- * number to match the turn's own label keeps this from eating a real sentence that starts the same
- * way ("Room 12: it's booked").
- */
-export function stripSpeakerLabel(text: string, speaker?: string): string {
-	const stripped = text.replace(SPEAKER_LABEL_PREFIX_RE, '');
-	const speakerNumber = speaker?.match(/\d+/)?.[0];
-	if (!speakerNumber) {
-		return stripped;
-	}
-	// A translated label keeps the shape "<one or two words> <same number><colon>".
-	const translatedLabel = new RegExp(`^\\s*\\p{L}+(\\s+\\p{L}+)?\\s*${speakerNumber}\\s*[:：]\\s*`, 'u');
-	return stripped.replace(translatedLabel, '');
 }

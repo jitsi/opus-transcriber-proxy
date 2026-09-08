@@ -21,6 +21,16 @@ import {
 import { buildTextTranslationMessage, transcriptionText } from './textTranslate/messages';
 import { ConversationHistory } from './textTranslate/ConversationHistory';
 
+/**
+ * The exact label shape this proxy generates ("Speaker 2:"), for detection only.
+ *
+ * Used to log — never to edit — a translation that came back carrying a label. It matches the
+ * literal English string we put in the prompt, so it says nothing about labels a model might have
+ * translated; recognising those would mean guessing at names in any language, which is precisely
+ * the naive matching this code refuses to do.
+ */
+const ECHOED_SPEAKER_LABEL_RE = /^\s*speaker\s*\d+\s*[:：]/i;
+
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
 	is_interim: boolean;
@@ -504,6 +514,16 @@ export class TranscriberProxy extends EventEmitter {
 				.then((translated) => {
 					if (!translated) {
 						return;
+					}
+					if (ECHOED_SPEAKER_LABEL_RE.test(translated)) {
+						// Report, do not repair. Editing the text would mean recognising a speaker label
+						// written in an arbitrary human language, which cannot be done without also
+						// mangling ordinary sentences. Measurement says this does not happen with the
+						// current prompt (0 occurrences across 96 adversarial calls), so if it ever fires
+						// the prompt or a model has changed and we want to know, not to paper over it.
+						logger.warn(
+							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed: ${JSON.stringify(translated.slice(0, 80))}`,
+						);
 					}
 					this.translationCount++;
 					this.emit('translation', buildTextTranslationMessage(message, language, translated));

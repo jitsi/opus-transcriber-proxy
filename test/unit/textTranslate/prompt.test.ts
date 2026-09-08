@@ -107,36 +107,36 @@ describe('buildUserPrompt', () => {
 
 describe('sanitizeTranslation', () => {
 	it('returns plain text unchanged', () => {
-		expect(sanitizeTranslation('elle a dit que tout allait bien', request())).toBe('elle a dit que tout allait bien');
+		expect(sanitizeTranslation('elle a dit que tout allait bien')).toBe('elle a dit que tout allait bien');
 	});
 
 	it('trims surrounding whitespace and quotes', () => {
-		expect(sanitizeTranslation('  "bonjour"  ', request())).toBe('bonjour');
-		expect(sanitizeTranslation('« bonjour »', request())).toBe('bonjour');
+		expect(sanitizeTranslation('  "bonjour"  ')).toBe('bonjour');
+		expect(sanitizeTranslation('« bonjour »')).toBe('bonjour');
 	});
 
 	it('removes an answer label', () => {
-		expect(sanitizeTranslation('Translation: bonjour', request())).toBe('bonjour');
-		expect(sanitizeTranslation('Translated text: bonjour', request())).toBe('bonjour');
+		expect(sanitizeTranslation('Translation: bonjour')).toBe('bonjour');
+		expect(sanitizeTranslation('Translated text: bonjour')).toBe('bonjour');
 	});
 
 	it('removes a code fence', () => {
-		expect(sanitizeTranslation('```\nbonjour\n```', request())).toBe('bonjour');
-		expect(sanitizeTranslation('```text\nbonjour\n```', request())).toBe('bonjour');
+		expect(sanitizeTranslation('```\nbonjour\n```')).toBe('bonjour');
+		expect(sanitizeTranslation('```text\nbonjour\n```')).toBe('bonjour');
 	});
 
-	it('removes a speaker label the model copied from the prompt', () => {
-		expect(sanitizeTranslation('Speaker 2: bonjour', request())).toBe('bonjour');
-		expect(sanitizeTranslation('Sprecher 2: guten Tag', request())).toBe('guten Tag');
-	});
-
-	it('keeps a colon that belongs to the sentence', () => {
-		expect(sanitizeTranslation('trois choses : un, deux, trois', request())).toBe('trois choses : un, deux, trois');
+	it('leaves anything that is not a chat-formatting artefact alone', () => {
+		// No speaker-label removal: recognising a label in an arbitrary language means guessing, and a
+		// guess that fires on real text corrupts a subtitle silently. Labels are kept out by prompt
+		// construction instead, and a leaked one is logged by TranscriberProxy rather than edited.
+		expect(sanitizeTranslation('Sprecher 2: guten Tag')).toBe('Sprecher 2: guten Tag');
+		expect(sanitizeTranslation('Room 12: it is booked')).toBe('Room 12: it is booked');
+		expect(sanitizeTranslation('trois choses : un, deux, trois')).toBe('trois choses : un, deux, trois');
 	});
 
 	it('throws when nothing usable is left', () => {
-		expect(() => sanitizeTranslation('', request())).toThrow(/empty/);
-		expect(() => sanitizeTranslation('   ', request())).toThrow(/empty/);
-		expect(() => sanitizeTranslation('Speaker 2:', request())).toThrow(/empty/);
+		expect(() => sanitizeTranslation('')).toThrow(/empty/);
+		expect(() => sanitizeTranslation('   ')).toThrow(/empty/);
+		expect(() => sanitizeTranslation('""')).toThrow(/empty/);
 	});
 });

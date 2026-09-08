@@ -94,8 +94,8 @@ describe('ChatCompletionsTextTranslator', () => {
 		expect(sentBody()).toMatchObject({ temperature: 0, reasoning_effort: 'low', max_completion_tokens: 200 });
 	});
 
-	it('cleans up the answer, including a copied speaker label', async () => {
-		respondJson({ choices: [{ message: { content: '"Speaker 2: elle a dit que tout allait bien"' } }] });
+	it('unwraps chat formatting but does not touch the words themselves', async () => {
+		respondJson({ choices: [{ message: { content: '"elle a dit que tout allait bien"' } }] });
 
 		await expect(translator().translate(REQUEST)).resolves.toBe('elle a dit que tout allait bien');
 	});
