@@ -11,12 +11,14 @@ export interface GeminiTextTranslationConfig {
 	/** Sent in `generationConfig` only when set. */
 	temperature?: number;
 	/**
-	 * `generationConfig.thinkingConfig.thinkingBudget`, sent only when >= 0. Defaults to 0
-	 * (thinking off) at the config layer: translation needs no reasoning, and thinking costs
-	 * latency and output tokens. Set it to -1 to omit the field — required for models that cannot
-	 * turn thinking off (the Pro tier), which reject a budget of 0.
+	 * `generationConfig.thinkingConfig.thinkingBudget`, sent only when set and >= 0.
+	 *
+	 * This is the 2.x-era control. The 3.x models reject it with HTTP 400 and take
+	 * {@link thinkingLevel} instead, so neither is sent unless configured.
 	 */
 	thinkingBudget?: number;
+	/** `generationConfig.thinkingConfig.thinkingLevel` (the 3.x control), sent only when set. */
+	thinkingLevel?: string;
 }
 
 /**
@@ -34,13 +36,17 @@ export class GeminiTextTranslator implements TextTranslator {
 	}
 
 	async translate(request: TextTranslationRequest): Promise<string> {
-		const { baseUrl, apiKey, model, timeoutMs, temperature, thinkingBudget } = this.config;
+		const { baseUrl, apiKey, model, timeoutMs, temperature, thinkingBudget, thinkingLevel } = this.config;
 		const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
+		const thinkingConfig: Record<string, unknown> = {
+			...(thinkingBudget !== undefined && thinkingBudget >= 0 && { thinkingBudget }),
+			...(thinkingLevel !== undefined && { thinkingLevel }),
+		};
 		const generationConfig: Record<string, unknown> = {
 			candidateCount: 1,
 			...(temperature !== undefined && { temperature }),
-			...(thinkingBudget !== undefined && thinkingBudget >= 0 && { thinkingConfig: { thinkingBudget } }),
+			...(Object.keys(thinkingConfig).length > 0 && { thinkingConfig }),
 		};
 
 		const body = {

@@ -86,7 +86,9 @@ export interface Env {
 	TEXT_TRANSLATION_GEMINI_BASE_URL?: string;
 	TEXT_TRANSLATION_GEMINI_MODEL?: string;
 	TEXT_TRANSLATION_GEMINI_THINKING_BUDGET?: string;
+	TEXT_TRANSLATION_GEMINI_THINKING_LEVEL?: string;
 	TEXT_TRANSLATION_GOOGLE_API_KEY?: string;
+	TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON?: string;
 	TEXT_TRANSLATION_GOOGLE_URL?: string;
 	// Docker image tag the Worker's WASM Opus codec was sourced from at deploy (set by the translate
 	// deploy). Surfaced in the info message so a code/WASM version mismatch is visible to the peer.

@@ -34,7 +34,9 @@ export function isTextTranslationProviderAvailable(provider: TextTranslationProv
 		case 'gemini':
 			return !!config.textTranslation.gemini.apiKey;
 		case 'google':
-			return !!config.textTranslation.google.apiKey;
+			// Either credential works: an API key, or a service account (Cloud Translation v2 takes
+			// an OAuth2 bearer token too).
+			return !!config.textTranslation.google.apiKey || !!config.textTranslation.google.credentialsJson;
 		case 'stub':
 			return config.textTranslation.enableStub;
 		default:
@@ -95,11 +97,13 @@ export function createTextTranslator(provider: TextTranslationProvider): TextTra
 				timeoutMs: config.textTranslation.timeoutMs,
 				temperature: config.textTranslation.temperature,
 				thinkingBudget: config.textTranslation.gemini.thinkingBudget,
+				thinkingLevel: config.textTranslation.gemini.thinkingLevel,
 			});
 		case 'google':
 			return new GoogleTranslateTextTranslator({
 				url: config.textTranslation.google.url,
 				apiKey: config.textTranslation.google.apiKey,
+				credentialsJson: config.textTranslation.google.credentialsJson,
 				timeoutMs: config.textTranslation.timeoutMs,
 			});
 		case 'stub':

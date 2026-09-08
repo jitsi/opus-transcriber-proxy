@@ -1,11 +1,20 @@
 import { postJson } from './http';
+import { parseServiceAccount, ServiceAccountTokenSource } from './googleAuth';
 import { stripSpeakerLabel, type TextTranslationRequest, type TextTranslator } from './TextTranslator';
 
 export interface GoogleTranslateConfig {
 	/** Full Cloud Translation v2 endpoint. */
 	url: string;
-	/** A Google Cloud API key with the Cloud Translation API enabled. A Gemini API key does not work. */
-	apiKey: string;
+	/**
+	 * A Google Cloud API key with the Cloud Translation API enabled. A Gemini API key does not work.
+	 * Takes precedence over `credentialsJson` when both are set.
+	 */
+	apiKey?: string;
+	/**
+	 * A service-account JSON key, as an alternative to `apiKey` — the deployment already has one for
+	 * other Google APIs, and it can be scoped to Cloud Translation, which an API key cannot.
+	 */
+	credentialsJson?: string;
 	timeoutMs: number;
 }
 
@@ -23,9 +32,22 @@ export interface GoogleTranslateConfig {
  */
 export class GoogleTranslateTextTranslator implements TextTranslator {
 	private readonly config: GoogleTranslateConfig;
+	/** Set when authenticating with a service account instead of an API key. */
+	private readonly tokenSource?: ServiceAccountTokenSource;
 
 	constructor(config: GoogleTranslateConfig) {
 		this.config = config;
+		if (!config.apiKey) {
+			if (!config.credentialsJson) {
+				throw new Error('google text translation needs either an API key or service-account credentials');
+			}
+			// Fail here rather than on the first translation: malformed credentials are a configuration
+			// error, and the session should say so when the translator is created.
+			this.tokenSource = new ServiceAccountTokenSource(
+				parseServiceAccount(config.credentialsJson),
+				config.timeoutMs,
+			);
+		}
 	}
 
 	async translate(request: TextTranslationRequest): Promise<string> {
@@ -44,7 +66,10 @@ export class GoogleTranslateTextTranslator implements TextTranslator {
 		let json: any;
 		try {
 			// X-Goog-Api-Key rather than ?key=, so the key cannot leak into a URL in a log or trace.
-			json = await postJson(url, body, { 'X-Goog-Api-Key': apiKey }, timeoutMs);
+			const headers: Record<string, string> = apiKey
+				? { 'X-Goog-Api-Key': apiKey }
+				: { Authorization: `Bearer ${await this.tokenSource!.getToken()}` };
+			json = await postJson(url, body, headers, timeoutMs);
 		} catch (error) {
 			throw new Error(`google translation failed: ${error instanceof Error ? error.message : String(error)}`);
 		}

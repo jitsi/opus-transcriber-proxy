@@ -190,10 +190,12 @@ addition to the session, and it must not stop transcription.
 | `TEXT_TRANSLATION_XAI_MODEL` | `grok-4.20-0309-non-reasoning` | Model for the `xai` provider. This is the variant that does no reasoning. The Grok 4 reasoning models used 3 s to 17 s for one translation |
 | `TEXT_TRANSLATION_XAI_URL` | `https://api.x.ai/v1/chat/completions` | Endpoint for the `xai` provider |
 | `TEXT_TRANSLATION_GEMINI_API_KEY` | (falls back to `GEMINI_API_KEY`) | Key for the `gemini` provider |
-| `TEXT_TRANSLATION_GEMINI_MODEL` | `gemini-2.5-flash-lite` | Model for the `gemini` provider |
+| `TEXT_TRANSLATION_GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model for the `gemini` provider. Measured against the API: 0.4 s to 0.8 s for one translation, with no thinking tokens. Do not use a 2.5 model. The API lists them, but it refuses them for a new key ("no longer available to new users") |
 | `TEXT_TRANSLATION_GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | Base URL for the `gemini` provider |
-| `TEXT_TRANSLATION_GEMINI_THINKING_BUDGET` | `0` | `thinkingConfig.thinkingBudget` for the `gemini` provider. `0` disables thinking. Use `-1` to remove the field, which is necessary for a model that cannot disable thinking (the Pro models) |
-| `TEXT_TRANSLATION_GOOGLE_API_KEY` | (unset) | Key for the `google` provider. This must be a Google Cloud API key that has the Cloud Translation API enabled. There is **no** fallback to `GEMINI_API_KEY`, because Cloud Translation is a different API and a Gemini key is not valid for it. If this variable is unset, the `google` provider is not available |
+| `TEXT_TRANSLATION_GEMINI_THINKING_BUDGET` | (unset) | `thinkingConfig.thinkingBudget` for the `gemini` provider, where `0` disables thinking. This is the control for the 2.x models. A 3.x model rejects it with HTTP 400 |
+| `TEXT_TRANSLATION_GEMINI_THINKING_LEVEL` | (unset) | `thinkingConfig.thinkingLevel` for the `gemini` provider (for example `low`). This is the control for the 3.x models. The default model does no thinking, so you do not usually need either control |
+| `TEXT_TRANSLATION_GOOGLE_API_KEY` | (unset) | API key for the `google` provider. This must be a Google Cloud API key that has the Cloud Translation API enabled. There is **no** fallback to `GEMINI_API_KEY`, because Cloud Translation is a different API and a Gemini key is not valid for it |
+| `TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON` | (falls back to `GOOGLE_CREDENTIALS_JSON`) | Service-account JSON key for the `google` provider, as an alternative to the API key. Cloud Translation v2 also accepts an OAuth2 token, so a deployment that has a service account does not need a new API key. The API key has precedence if you set both. If you set neither, the `google` provider is not available |
 | `TEXT_TRANSLATION_GOOGLE_URL` | `https://translation.googleapis.com/language/translate/v2` | Endpoint for the `google` provider |
 
 ### Dispatcher (Optional)

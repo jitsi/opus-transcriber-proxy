@@ -510,10 +510,11 @@ export class TranscriberProxy extends EventEmitter {
 				})
 				.catch((error) => {
 					// A failed translation drops that language for this transcript only; the original
-					// transcript has already been delivered.
+					// transcript has already been delivered. The reason is interpolated rather than
+					// passed as a second argument, which the log format drops — and the reason (a
+					// provider quota, a dead model, a timeout) is the whole value of this line.
 					logger.error(
-						`Session ${this.sessionId}: failed to translate transcript into ${language}:`,
-						error instanceof Error ? error.message : String(error),
+						`Session ${this.sessionId}: failed to translate transcript into ${language}: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				});
 		}

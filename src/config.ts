@@ -198,18 +198,30 @@ export const config = {
 		gemini: {
 			apiKey: process.env.TEXT_TRANSLATION_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '',
 			baseUrl: process.env.TEXT_TRANSLATION_GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-			model: process.env.TEXT_TRANSLATION_GEMINI_MODEL || 'gemini-2.5-flash-lite',
-			// Thinking off (the Flash tiers think by default, which costs latency and output tokens
-			// for a task that needs no reasoning). Set to -1 to omit the field, which is required for
-			// models that cannot turn thinking off (the Pro tier rejects a budget of 0).
-			thinkingBudget: parseIntOrDefault(process.env.TEXT_TRANSLATION_GEMINI_THINKING_BUDGET, 0),
+			// Measured against the live API: ~0.5-0.7s per translation with no thinking tokens. The
+			// 2.5 models the API still lists are refused for new keys ("no longer available to new
+			// users"), so the default has to be a 3.x one.
+			model: process.env.TEXT_TRANSLATION_GEMINI_MODEL || 'gemini-3.5-flash-lite',
+			// Thinking controls, both unset by default and sent only when configured, because the two
+			// model generations disagree about them: the 3.x models reject `thinkingBudget` outright
+			// (HTTP 400) and take `thinkingLevel` instead, while 2.x takes only `thinkingBudget`.
+			// Sending neither is right for the default model, which does no thinking anyway.
+			thinkingBudget: parseIntOrUndefined(process.env.TEXT_TRANSLATION_GEMINI_THINKING_BUDGET),
+			thinkingLevel: process.env.TEXT_TRANSLATION_GEMINI_THINKING_LEVEL || undefined,
 		},
 		google: {
 			// Cloud Translation v2. Deliberately NO fallback to GEMINI_API_KEY: this is a different
 			// API (translation.googleapis.com) and a Gemini/AI Studio key is not valid for it, so
 			// falling back would make the provider look configured and then fail every request.
-			// Unset means unavailable, and the priority list skips it.
 			apiKey: process.env.TEXT_TRANSLATION_GOOGLE_API_KEY || '',
+			// The alternative to an API key: a service-account JSON key, which v2 also accepts (as an
+			// OAuth2 bearer token). Falls back to the deployment's existing GOOGLE_CREDENTIALS_JSON,
+			// so a deployment that already has a service account needs no new credential. Verified
+			// against the live API: v2 works with a service-account token where v3 needs an extra IAM
+			// permission. With neither this nor the API key set, the provider is unavailable and the
+			// priority list skips it.
+			credentialsJson:
+				process.env.TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON || process.env.GOOGLE_CREDENTIALS_JSON || '',
 			url: process.env.TEXT_TRANSLATION_GOOGLE_URL || 'https://translation.googleapis.com/language/translate/v2',
 		},
 	},

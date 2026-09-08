@@ -146,9 +146,8 @@ describe('GeminiTextTranslator', () => {
 		return new GeminiTextTranslator({
 			baseUrl: 'https://generativelanguage.googleapis.com',
 			apiKey: 'gem-test',
-			model: 'gemini-2.5-flash-lite',
+			model: 'gemini-3.5-flash-lite',
 			timeoutMs: 1000,
-			thinkingBudget: 0,
 			...overrides,
 		});
 	}
@@ -159,7 +158,7 @@ describe('GeminiTextTranslator', () => {
 		await expect(translator().translate(REQUEST)).resolves.toBe('elle a dit que tout allait bien');
 
 		expect(fetchMock.mock.calls[0][0]).toBe(
-			'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+			'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
 		);
 		expect(sentHeaders()['x-goog-api-key']).toBe('gem-test');
 		const body = sentBody();
@@ -167,10 +166,25 @@ describe('GeminiTextTranslator', () => {
 		expect(body.contents[0].parts[0].text).toContain('did you check the encoder');
 	});
 
-	it('turns thinking off by default and omits the field for a negative budget', async () => {
+	it('sends no thinking config unless one is set', async () => {
 		respondJson({ candidates: [{ content: { parts: [{ text: 'bonjour' }] } }] });
+
 		await translator().translate(REQUEST);
+
+		// The 3.x models reject `thinkingBudget` outright and take `thinkingLevel`, so neither can be
+		// sent by default. The default model does no thinking anyway.
+		expect(sentBody().generationConfig).not.toHaveProperty('thinkingConfig');
+	});
+
+	it('sends thinkingBudget (2.x) or thinkingLevel (3.x) when configured', async () => {
+		respondJson({ candidates: [{ content: { parts: [{ text: 'bonjour' }] } }] });
+		await translator({ thinkingBudget: 0 }).translate(REQUEST);
 		expect(sentBody().generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+
+		fetchMock.mockClear();
+		respondJson({ candidates: [{ content: { parts: [{ text: 'bonjour' }] } }] });
+		await translator({ thinkingLevel: 'low' }).translate(REQUEST);
+		expect(sentBody().generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'low' });
 
 		fetchMock.mockClear();
 		respondJson({ candidates: [{ content: { parts: [{ text: 'bonjour' }] } }] });
@@ -249,5 +263,85 @@ describe('GoogleTranslateTextTranslator', () => {
 		respondJson({ error: { message: 'API key not valid' } }, 403);
 
 		await expect(translator().translate(REQUEST)).rejects.toThrow(/google translation failed.*HTTP 403/);
+	});
+
+	describe('service-account credentials', () => {
+		/** A key that really signs, so the JWT path runs instead of being mocked out. */
+		async function credentialsJson() {
+			const pair = await crypto.subtle.generateKey(
+				{ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+				true,
+				['sign', 'verify'],
+			);
+			const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+			let binary = '';
+			for (const byte of pkcs8) binary += String.fromCharCode(byte);
+			return JSON.stringify({
+				type: 'service_account',
+				client_email: 'translator@jitsi-test.iam.gserviceaccount.com',
+				private_key: `-----BEGIN PRIVATE KEY-----\n${btoa(binary).replace(/(.{64})/g, '$1\n')}\n-----END PRIVATE KEY-----\n`,
+				token_uri: 'https://oauth2.googleapis.com/token',
+			});
+		}
+
+		it('gets a bearer token and uses it instead of an API key', async () => {
+			const credentials = await credentialsJson();
+			fetchMock
+				.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'tok', expires_in: 3600 }) })
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					json: async () => ({ data: { translations: [{ translatedText: 'bonjour' }] } }),
+					text: async () => '',
+				});
+
+			const google = new GoogleTranslateTextTranslator({
+				url: 'https://translation.googleapis.com/language/translate/v2',
+				credentialsJson: credentials,
+				timeoutMs: 1000,
+			});
+			await expect(google.translate(REQUEST)).resolves.toBe('bonjour');
+
+			expect(fetchMock.mock.calls[0][0]).toBe('https://oauth2.googleapis.com/token');
+			const translateHeaders = fetchMock.mock.calls[1][1].headers;
+			expect(translateHeaders.Authorization).toBe('Bearer tok');
+			expect(translateHeaders).not.toHaveProperty('X-Goog-Api-Key');
+		});
+
+		it('prefers an API key when both are configured, and mints no token', async () => {
+			respondJson({ data: { translations: [{ translatedText: 'bonjour' }] } });
+
+			const google = new GoogleTranslateTextTranslator({
+				url: 'https://translation.googleapis.com/language/translate/v2',
+				apiKey: 'goog-test',
+				credentialsJson: await credentialsJson(),
+				timeoutMs: 1000,
+			});
+			await google.translate(REQUEST);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(sentHeaders()['X-Goog-Api-Key']).toBe('goog-test');
+		});
+
+		it('fails at construction on malformed credentials, not on the first translation', async () => {
+			expect(
+				() =>
+					new GoogleTranslateTextTranslator({
+						url: 'https://translation.googleapis.com/language/translate/v2',
+						credentialsJson: 'not json',
+						timeoutMs: 1000,
+					}),
+			).toThrow(/not valid JSON/);
+		});
+
+		it('fails at construction when neither credential is configured', () => {
+			expect(
+				() =>
+					new GoogleTranslateTextTranslator({
+						url: 'https://translation.googleapis.com/language/translate/v2',
+						timeoutMs: 1000,
+					}),
+			).toThrow(/API key or service-account credentials/);
+		});
 	});
 });

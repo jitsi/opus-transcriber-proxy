@@ -32,8 +32,8 @@ vi.mock('../../../src/config', () => ({
 			maxOutputTokens: undefined,
 			openai: { apiKey: '', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
 			xai: { apiKey: '', url: 'https://api.x.ai/v1/chat/completions', model: 'grok-4.20-0309-non-reasoning' },
-			gemini: { apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.5-flash-lite', thinkingBudget: 0 },
-			google: { apiKey: '', url: 'https://translation.googleapis.com/language/translate/v2' },
+			gemini: { apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-3.5-flash-lite', thinkingBudget: undefined, thinkingLevel: undefined },
+			google: { apiKey: '', credentialsJson: '', url: 'https://translation.googleapis.com/language/translate/v2' },
 		},
 	},
 }));
@@ -48,6 +48,7 @@ beforeEach(async () => {
 	textTranslation.xai.apiKey = '';
 	textTranslation.gemini.apiKey = '';
 	textTranslation.google.apiKey = '';
+	textTranslation.google.credentialsJson = '';
 });
 
 describe('isValidTextTranslationProvider', () => {
@@ -65,6 +66,14 @@ describe('availability', () => {
 		expect(isTextTranslationProviderAvailable('openai')).toBe(false);
 		textTranslation.openai.apiKey = 'sk-test';
 		expect(isTextTranslationProviderAvailable('openai')).toBe(true);
+	});
+
+	it('accepts either credential for google', () => {
+		expect(isTextTranslationProviderAvailable('google')).toBe(false);
+		// Cloud Translation v2 takes an OAuth2 bearer token as well as an API key, so a deployment
+		// that already has a service account needs no new credential.
+		textTranslation.google.credentialsJson = '{"client_email":"a@b","private_key":"k"}';
+		expect(isTextTranslationProviderAvailable('google')).toBe(true);
 	});
 
 	it('gates the stub behind its own flag, like the dummy transcription provider', () => {
@@ -118,6 +127,7 @@ describe('createTextTranslator', () => {
 	});
 
 	it('creates the provider-specific clients for gemini, google and stub', () => {
+		textTranslation.google.apiKey = 'goog-test';
 		expect(createTextTranslator('gemini')).toBeInstanceOf(GeminiTextTranslator);
 		expect(createTextTranslator('google')).toBeInstanceOf(GoogleTranslateTextTranslator);
 		expect(createTextTranslator('stub')).toBeInstanceOf(StubTextTranslator);
