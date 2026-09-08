@@ -52,18 +52,38 @@ function formatTurn(turn: TranslationTurn): string {
 	return turn.speaker ? `${turn.speaker}: ${turn.text}` : turn.text;
 }
 
-/** The data half of the prompt: the context block (when any) and the line to translate. */
+/**
+ * The data half of the prompt: the context block (when any) and the line to translate.
+ *
+ * Two deliberate omissions from the TRANSLATE header, which is a bare `TRANSLATE:`.
+ *
+ * The **target language** is not repeated here. The system prompt already names it, and saying it
+ * twice is redundant, not reinforcing.
+ *
+ * The **speaker** is named in a sentence at the end of the context block rather than in the header.
+ * Measured against the live APIs: attribution in the header never produced an echoed label (0/24
+ * across three providers, even with the "no speaker label" rule removed from the system prompt),
+ * but a label placed on the same line as the text to translate produced one every single time
+ * (12/12 on openai and xai). So the invariant that matters is that no label may share a line with
+ * the target text — and keeping attribution out of the imperative header, in prose, is the shape
+ * that makes that invariant obvious and keeps it true as model defaults churn.
+ *
+ * The attribution is only worth sending alongside context: with no earlier turns there is nobody to
+ * contrast the speaker with, so it would be tokens spent on nothing.
+ */
 export function buildUserPrompt(request: TextTranslationRequest): string {
 	const parts: string[] = [];
+	const speaker = request.turn.speaker;
 	if (request.history.length > 0) {
 		parts.push('CONTEXT (earlier turns, do not translate):');
 		parts.push(request.history.map(formatTurn).join('\n'));
+		if (speaker) {
+			parts.push('');
+			parts.push(`The text you will be asked to translate next is coming from ${speaker}.`);
+		}
 		parts.push('');
 	}
-	const speaker = request.turn.speaker;
-	parts.push(
-		`TRANSLATE${speaker ? ` (spoken by ${speaker})` : ''} into ${targetDescription(request.targetLanguage)}:`,
-	);
+	parts.push('TRANSLATE:');
 	parts.push(request.turn.text);
 	return parts.join('\n');
 }

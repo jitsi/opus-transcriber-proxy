@@ -41,13 +41,16 @@ describe('buildSystemPrompt', () => {
 });
 
 describe('buildUserPrompt', () => {
-	it('has no context block for the first turn', () => {
+	it('is just the bare header and the text for the first turn', () => {
 		const prompt = buildUserPrompt(request());
+
 		expect(prompt).not.toContain('CONTEXT');
-		expect(prompt).toBe('TRANSLATE (spoken by Speaker 2) into French (fr):\nshe said it was fine');
+		// No attribution: with no earlier turns there is nobody to contrast the speaker with. No
+		// target language either: the system prompt already names it.
+		expect(prompt).toBe('TRANSLATE:\nshe said it was fine');
 	});
 
-	it('lists the history oldest first, labelled, before the line to translate', () => {
+	it('lists the history oldest first, then attributes the turn in prose', () => {
 		const prompt = buildUserPrompt(
 			request({
 				history: [
@@ -62,10 +65,24 @@ describe('buildUserPrompt', () => {
 				'Speaker 1: did you check the encoder',
 				'Speaker 2: yes I did',
 				'',
-				'TRANSLATE (spoken by Speaker 2) into French (fr):',
+				'The text you will be asked to translate next is coming from Speaker 2.',
+				'',
+				'TRANSLATE:',
 				'she said it was fine',
 			].join('\n'),
 		);
+	});
+
+	it('never puts a label on the line being translated', () => {
+		const prompt = buildUserPrompt(
+			request({ history: [{ speaker: 'Speaker 1', text: 'did you check the encoder' }] }),
+		);
+
+		// The one shape that reproducibly makes a model echo the label is a label sharing a line with
+		// the target text (measured 12/12 on openai and xai). The last two lines must stay clean.
+		const lines = prompt.split('\n');
+		expect(lines[lines.length - 2]).toBe('TRANSLATE:');
+		expect(lines[lines.length - 1]).toBe('she said it was fine');
 	});
 
 	it('omits every speaker mention when the turns carry no label', () => {
@@ -75,8 +92,16 @@ describe('buildUserPrompt', () => {
 			history: [{ text: 'did you check the encoder' }],
 		});
 		expect(prompt).not.toContain('Speaker');
-		expect(prompt).not.toContain('spoken by');
+		expect(prompt).not.toContain('coming from');
 		expect(prompt).toContain('did you check the encoder');
+	});
+
+	it('names the target language only in the system prompt, never twice', () => {
+		const prompt = buildUserPrompt(request({ history: [{ speaker: 'Speaker 1', text: 'earlier' }] }));
+
+		expect(prompt).not.toContain('French');
+		expect(prompt).not.toContain('(fr)');
+		expect(buildSystemPrompt('fr')).toContain('French (fr)');
 	});
 });
 
