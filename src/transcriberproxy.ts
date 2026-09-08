@@ -6,6 +6,8 @@ import type { AudioEncoding } from './utils';
 import * as fs from 'fs';
 import logger from './logger';
 import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
+import { buildDispatcherMessages } from './identity/dispatcherMessages';
+import type { AttributedSegment } from './identity/types';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';
@@ -17,9 +19,34 @@ export interface TranscriptionMessage {
 	message_id: string;
 	type: 'transcription-result';
 	event: 'transcription-result';
-	participant: { id: string; tag?: string };
+	participant: { id: string; tag?: string; name?: string };
 	timestamp: number;
 	speaker?: number;
+	/** Per-word media-time offsets (seconds), when the backend provides them (xAI). Used for speaker attribution.
+	 *  `speaker` is the backend diarization label when the backend diarizes (xAI/Deepgram). */
+	words?: Array<{ text: string; start: number; end: number; speaker?: number }>;
+	/**
+	 * When true, this final is for live display only and must NOT be forwarded to the dispatcher/store.
+	 * Set on the raw (mic-owner-attributed) final while identity is enabled: the per-speaker identity
+	 * follow-up is the authoritative store attribution, so dispatching the raw too would mis-attribute a
+	 * shared-mic speaker's words to the mic owner (JIT-16065).
+	 */
+	noDispatch?: boolean;
+	/**
+	 * When true, this final is for the STORE only and must NOT be shown in the live CC. Set on the
+	 * per-speaker identity-attributed finals: the identified speaker isn't in the XMPP room, so the
+	 * client would render it as "Guest" and duplicate the raw line. Keeping it out of the UI leaves the
+	 * live CC identical to pre-identity behaviour; the attribution still reaches the stored transcript
+	 * via the Worker's dispatch path (JIT-16065).
+	 */
+	dispatchOnly?: boolean;
+	/**
+	 * When true, a sibling final in the same diarized turn carries this turn's full per-word list and
+	 * runs identity attribution over the whole window, so this (secondary per-speaker) final's content
+	 * is already stored via that sibling. Skip its store-attribution to avoid duplicating speakers'
+	 * words; the raw final is still shown live (noDispatch). Set on xAI diarized finals #2..N (JIT-16065).
+	 */
+	attributionDeferred?: boolean;
 }
 
 export interface TranscriberProxyOptions {
@@ -193,9 +220,11 @@ export class TranscriberProxy extends EventEmitter {
 		return this.outgoingConnections.get(tag);
 	}
 
-	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
-		// Create a new connection for this tag (no limit, no reuse)
-		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
+	private createConnection(tag: string, mediaFormat: AudioFormat, diarize?: boolean): OutgoingConnection {
+		// Create a new connection for this tag (no limit, no reuse).
+		// `diarize` is a per-endpoint override from the start event (undefined = use
+		// the global DEEPGRAM_DIARIZE / XAI_DIARIZE config).
+		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options, diarize);
 
 		newConnection.onInterimTranscription = (message) => {
 			this.interimTranscriptionCount++;
@@ -216,12 +245,23 @@ export class TranscriberProxy extends EventEmitter {
 				}
 			}
 
+			const identityEnabled = config.identity?.enabled === true;
+
+			// While identity is enabled, the raw (mic-owner) final is for live display only — the
+			// per-speaker identity follow-up below is the authoritative store attribution. Flag it so the
+			// Worker forwards it to the client but NOT to the dispatcher (otherwise a shared-mic speaker's
+			// words get stored under the mic owner). JIT-16065.
+			if (identityEnabled) message.noDispatch = true;
+
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
 
-			// Send to dispatcher if connected
-			if (this.dispatcherConnection && this.sessionId) {
-				const transcriptText = message.transcript.map((t) => t.text).join(' ');
+			const transcriptText = message.transcript.map((t) => t.text).join(' ');
+			const sourceTag = message.participant?.id || tag;
+
+			// Send to dispatcher immediately — UNLESS identity is enabled, in which case the
+			// dispatcher send is deferred to the attribution result below (per-speaker + identity).
+			if (this.dispatcherConnection && this.sessionId && !identityEnabled) {
 				const dispatcherMessage: DispatcherMessage = {
 					sessionId: this.sessionId,
 					endpointId: message.participant?.id || tag,
@@ -233,11 +273,83 @@ export class TranscriberProxy extends EventEmitter {
 			}
 
 			// Broadcast this transcript to all OTHER tags in the same session
-			const sourceTag = message.participant?.id || tag;
-			const transcriptText = message.transcript.map((t) => t.text).join(' ');
-
 			if (transcriptText.trim()) {
 				this.broadcastTranscriptToOtherTags(sourceTag, transcriptText);
+			}
+
+			// Speaker-identity attribution: async, off the hot path. Emits a reconcile event and,
+			// when identity is enabled + the dispatcher is connected, sends per-speaker messages with
+			// a resolved-identity override (falling back to the plain transcript when nothing
+			// resolved). Any failure is swallowed — transcription is never affected. Gated by
+			// IDENTITY_ENABLED.
+			// Secondary per-speaker finals of a diarized turn: their content is already attributed +
+			// stored by the sibling final that carries the turn's full words, so running attribution here
+			// too would store those speakers' words twice. The raw final is still shown live (noDispatch).
+			if (identityEnabled && !message.attributionDeferred) {
+				// Fallback text under the mic owner — used when attribution can't run (no words / non-16k
+				// backend / error) so the store never loses the utterance. On the FIRST diarized final the
+				// message carries the whole turn's `words` (all speakers) but its own `transcript` is just
+				// the first speaker's text; the other speakers' finals are attributionDeferred (skipped
+				// here). So reconstruct the whole-turn text from `words` when present — otherwise a failed
+				// attribution on that final would drop speakers #2..N from the store entirely. JIT-16065.
+				const fallbackText = message.words?.length ? message.words.map((w) => w.text).join(' ') : transcriptText;
+				// A single fallback segment carrying that text. This identity_attribution (not the
+				// noDispatch'd raw) is what the Worker forwards to the store.
+				const fallbackSegment = (): AttributedSegment[] => [
+					{ sessionSpeakerId: null, identity: null, name: null, score: 0, text: fallbackText, start: 0, end: 0 },
+				];
+				const emitAttribution = (segments: AttributedSegment[]) => {
+					this.emit('identity_attribution', {
+						sessionId: this.sessionId,
+						tag,
+						participantId: message.participant?.id || tag,
+						messageId: message.message_id,
+						timestamp: message.timestamp,
+						language: message.language,
+						segments,
+					});
+				};
+				// `handled` scopes the .catch to a rejection of identityAttributeFinal itself. Without it,
+				// a throw INSIDE the .then (an 'identity_attribution' listener, or dispatcherConnection.send)
+				// would fall through to .catch and emit the fallback a SECOND time — double-storing the turn.
+				let handled = false;
+				newConnection
+					.identityAttributeFinal(message)
+					.then((segments) => {
+						handled = true;
+						const effective = segments && segments.length > 0 ? segments : fallbackSegment();
+						emitAttribution(effective);
+						if (segments && segments.length > 0) {
+							// debug, not info: this line carries transcript content + resolved speaker names
+							// (PII). All other transcript logging is debug too; don't stream it to Loki at info.
+							logger.debug(
+								`[identity] ${tag}: ${segments
+									.map((s) => `${s.name ?? s.identity ?? '?'}="${s.text}"`)
+									.join(' | ')}`,
+							);
+						}
+						// Standalone-Node dispatcher path (unused under the CF Worker, which re-dispatches
+						// the client-bound messages). buildDispatcherMessages already handles null → raw.
+						if (this.dispatcherConnection && this.sessionId) {
+							const base = {
+								sessionId: this.sessionId,
+								endpointId: message.participant?.id || tag,
+								timestamp: message.timestamp,
+								language: message.language,
+							};
+							for (const dm of buildDispatcherMessages(base, fallbackText, segments)) {
+								this.dispatcherConnection.send(dm);
+							}
+						}
+					})
+					.catch((err) => {
+						// Two rejection sources land here: (a) identityAttributeFinal itself rejecting before
+						// `handled` is set — recover by emitting the fallback once; (b) a throw from inside the
+						// .then above (an 'identity_attribution' listener or dispatcherConnection.send) AFTER
+						// `handled` — suppress the double-emit but surface it, or it would vanish silently.
+						if (!handled) emitAttribution(fallbackSegment());
+						else logger.error(`[identity] ${tag}: post-attribution emit/dispatch failed: ${(err as Error)?.message ?? err}`);
+					});
 			}
 		};
 		newConnection.onClosed = (tag) => {
@@ -278,6 +390,11 @@ export class TranscriberProxy extends EventEmitter {
 
 		this.failedStartTags.delete(tag);
 
+		// Per-endpoint diarization flag. The bridge sets `start.diarize: true` only for
+		// endpoints that carry multiple speakers (room systems, dial-in legs). Only an
+		// explicit boolean overrides the global config; anything else falls back to it.
+		const diarize = typeof parsedMessage.start?.diarize === 'boolean' ? parsedMessage.start.diarize : undefined;
+
 		// If the start event says 'opus' but the URL parameter says 'ogg-opus', the
 		// stream is containerised Ogg-Opus.  Some clients send a generic 'opus'
 		// encoding in the start event without specifying the framing; the URL parameter
@@ -289,9 +406,12 @@ export class TranscriberProxy extends EventEmitter {
 
 		const connection = this.getConnection(tag);
 		if (connection) {
-			connection.updateInputFormat(mediaFormat);
+			// A re-start updates the media format and may also change the per-endpoint
+			// diarize flag; updateInputFormat applies the new diarize (reconnecting the
+			// backend if it changed).
+			connection.updateInputFormat(mediaFormat, diarize);
 		} else {
-			this.createConnection(tag, mediaFormat);
+			this.createConnection(tag, mediaFormat, diarize);
 		}
 	}
 

@@ -129,9 +129,10 @@ export class GeminiBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
+	forceCommit(): number {
 		// Gemini doesn't have an explicit commit - it processes audio as it arrives
 		logger.debug(`Force commit called for Gemini backend ${this.tag} (no-op)`);
+		return 0;
 	}
 
 	updatePrompt(prompt: string): void {

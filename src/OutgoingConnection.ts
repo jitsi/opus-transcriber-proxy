@@ -7,9 +7,88 @@ import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig, type OpenAICustomOptions } from './backends/BackendFactory';
-import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import type { TranscriptionBackend, BackendConfig } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
+import { SidecarClient, type ISidecarClient } from './identity/SidecarClient';
+import { SidecarWsClient } from './identity/SidecarWsClient';
+import { LocalIdentityClient } from './identity/LocalIdentityClient';
+import { IdentityAttributor } from './identity/IdentityAttributor';
+import { checkEnrollConsistency } from './identity/enrollGuard';
+import { createIdentitySource, type IdentitySource, type ResolvedIdentity } from './identity/IdentitySource';
+import type { AttributedSegment } from './identity/types';
+
+// Process-wide sidecar client, built once from config when the identity feature is enabled.
+// A ws(s):// URL uses one persistent multiplexed WS (required under Cloudflare's outbound
+// connection cap); an http(s):// URL uses per-request HTTP.
+let sidecarSingleton: ISidecarClient | null | undefined;
+function getSidecar(): ISidecarClient | null {
+	if (sidecarSingleton !== undefined) return sidecarSingleton;
+	if (!config.identity?.enabled) {
+		sidecarSingleton = null;
+		return null;
+	}
+	// Footgun guard: with identity on but no KV creds, streams can't resolve their real tenant and all
+	// fall back to config.identity.tenant ('default') — so in a multi-tenant deployment every tenant's
+	// fingerprints would silently share one namespace (cross-tenant matches). Warn once. JIT-16065.
+	if (!config.identity.kvAccountId) {
+		logger.warn(
+			`[identity] IDENTITY_ENABLED but no KV configured — all streams use IDENTITY_TENANT='${config.identity.tenant}'. ` +
+				`Fingerprints are NOT tenant-isolated; safe only for single-tenant use.`,
+		);
+	}
+	// Prefer the in-container client (CAM++ embed + Vectorize match, no sidecar hop) when Vectorize
+	// creds are configured. Falls back to the WS/HTTP sidecar otherwise.
+	const { vectorizeAccountId, vectorizeIndex, vectorizeApiToken } = config.identity;
+	if (vectorizeAccountId && vectorizeIndex && vectorizeApiToken) {
+		sidecarSingleton = new LocalIdentityClient({
+			embeddingModel: config.identity.embeddingModel,
+			vectorize: { accountId: vectorizeAccountId, indexName: vectorizeIndex, apiToken: vectorizeApiToken },
+			matchThreshold: config.identity.matchThreshold,
+			maxEmbedSec: config.identity.maxEmbedSec,
+		});
+		return sidecarSingleton;
+	}
+	const url = config.identity?.sidecarUrl;
+	if (!url) {
+		sidecarSingleton = null;
+		return null;
+	}
+	if (url.startsWith('ws://') || url.startsWith('wss://')) {
+		sidecarSingleton = new SidecarWsClient({
+			url,
+			token: config.identity.sidecarToken,
+			timeoutMs: config.identity.timeoutMs,
+			maxInFlight: config.identity.maxInFlight,
+			accessClientId: config.identity.accessClientId,
+			accessClientSecret: config.identity.accessClientSecret,
+		});
+	} else {
+		sidecarSingleton = new SidecarClient({
+			baseUrl: url,
+			token: config.identity.sidecarToken,
+			timeoutMs: config.identity.timeoutMs,
+			maxInFlight: config.identity.maxInFlight,
+		});
+	}
+	// The single-mic enroll guard needs a local embed() (LocalIdentityClient only). The external
+	// sidecar clients don't expose one, so on this path auto-enroll runs WITHOUT the multi-voice guard
+	// — a shared mic could pollute a fingerprint. Warn once so operators relying on it know. JIT-16065.
+	if (!sidecarSingleton.embed) {
+		logger.warn(
+			'[identity] using an external sidecar (IDENTITY_SIDECAR_URL) — the single-mic enroll guard is ' +
+				'unavailable (no local embed); auto-enroll on a shared mic is not guarded.',
+		);
+	}
+	return sidecarSingleton;
+}
+
+// Process-wide identity source (KV REST). Null when KV creds are unset.
+let identitySourceSingleton: IdentitySource | null | undefined;
+function getIdentitySource(): IdentitySource | null {
+	if (identitySourceSingleton === undefined) identitySourceSingleton = createIdentitySource();
+	return identitySourceSingleton;
+}
 
 const tagMatcher = /^([0-9a-fA-F]+)-/;
 
@@ -60,6 +139,18 @@ export class OutgoingConnection {
 	/** The audio format the current backend instance was initialized for (set synchronously in reinitializeDecoder). */
 	private activeDesiredFormat: AudioFormat | undefined;
 
+	/** Speaker-identity attributor (only when config.identity.enabled and this is the l16/16k path). */
+	private identityAttributor?: IdentityAttributor;
+	private identitySidecar?: ISidecarClient;
+	/** Set once this stream has ever shown >1 speaker → never auto-enroll from it (it's a room). */
+	private everSawMultipleSpeakers = false;
+	private resolvedIdentityP?: Promise<ResolvedIdentity | null>;
+	private lastEnrollAt = 0;
+	private enrollCount = 0;
+	/** Consecutive divergent enroll windows; latches everSawMultipleSpeakers only past the configured
+	 *  strike count so one noisy window doesn't permanently disable a genuine single speaker. */
+	private enrollDivergenceStrikes = 0;
+
 	// Idle commit timeout - forces transcription when audio stops
 	private idleCommitTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -75,11 +166,14 @@ export class OutgoingConnection {
 	private options: TranscriberProxyOptions;
 	private metricCache: MetricCache;
 	private inputAudioFormat!: AudioFormat; // set synchronously by updateInputFormat() in the constructor
+	/** Per-endpoint diarization override (from the start event); mutable so a re-start can change it. */
+	private diarize?: boolean;
 
-	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions) {
+	constructor(tag: string, inputFormat: AudioFormat, options: TranscriberProxyOptions, diarize?: boolean) {
 		this.localTag = tag;
 		this.setServerAcknowledgedTag(tag);
 		this.options = options;
+		this.diarize = diarize;
 		this.metricCache = new MetricCache(undefined, NaN);
 
 		this.updateInputFormat(inputFormat);
@@ -91,17 +185,24 @@ export class OutgoingConnection {
 		return { ...this.inputAudioFormat };
 	}
 
-	updateInputFormat(inputFormat: AudioFormat): void {
+	updateInputFormat(inputFormat: AudioFormat, diarize?: boolean): void {
 		// Validate synchronously so callers get an immediate error rather than
 		// an async failure deep in reinitializeDecoder -> createAudioDecoder.
 		// validateAudioFormat also normalises 'ogg-opus' → 'ogg'.
 		const newFormat = validateAudioFormat(inputFormat);
 
+		// A re-start may change the per-endpoint diarize flag. It's a connect-time
+		// URL param, so honour a change by forcing a backend reconnect even when the
+		// audio format is unchanged. Only an explicit boolean is considered.
+		const diarizeChanged = diarize !== undefined && diarize !== this.diarize;
+		if (diarizeChanged) {
+			this.diarize = diarize;
+		}
+
 		if (this.backend) {
-			// Skip reinitialisation when the validated format is identical to the
-			// current one — avoids flushing pending frames and potentially
-			// reconnecting the backend for repeated start events with unchanged format.
-			if (!audioFormatsDiffer(newFormat, this.inputAudioFormat)) {
+			// Skip reinitialisation when nothing changed — avoids flushing pending
+			// frames and reconnecting the backend for repeated start events.
+			if (!audioFormatsDiffer(newFormat, this.inputAudioFormat) && !diarizeChanged) {
 				return;
 			}
 		}
@@ -114,7 +215,7 @@ export class OutgoingConnection {
 		// one via reconnectBackend().
 
 		if (this.backend) {
-			const promise = this.reinitializeDecoder();
+			const promise = this.reinitializeDecoder(diarizeChanged);
 			// reinitGeneration is incremented synchronously inside reinitializeDecoder
 			// (before its first await), so this.reinitGeneration already reflects the
 			// generation owned by this call.
@@ -141,6 +242,24 @@ export class OutgoingConnection {
 		};
 	}
 
+	/**
+	 * Copy the per-connection / per-endpoint settings onto a fresh BackendConfig.
+	 * Shared by the initial connect (initializeBackend) and the reconnect path
+	 * (reconnectBackend) so the two lists can never drift out of lockstep.
+	 */
+	private applyPerConnectionConfig(backendConfig: BackendConfig): void {
+		backendConfig.language = this.options.language;
+		backendConfig.tags = this.options.tags;
+		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.diarize = this.diarize;
+		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+	}
+
 	private async initializeBackend(): Promise<void> {
 		try {
 			// Create backend using factory
@@ -156,15 +275,7 @@ export class OutgoingConnection {
 
 			// Get backend configuration
 			const backendConfig = getBackendConfig(this.options.provider);
-			backendConfig.language = this.options.language;
-			backendConfig.tags = this.options.tags;
-			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+			this.applyPerConnectionConfig(backendConfig);
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -282,7 +393,7 @@ export class OutgoingConnection {
 		);
 	}
 
-	private async reinitializeDecoder(): Promise<void> {
+	private async reinitializeDecoder(forceReconnect = false): Promise<void> {
 		if (!this.backend) {
 			throw new Error('Cannot initialize decoder without a backend');
 		}
@@ -309,12 +420,13 @@ export class OutgoingConnection {
 		// whether it also needs to replace the backend.
 		this.activeDesiredFormat = desiredFormat;
 
-		// If the backend's desired audio format has changed and a backend already
-		// exists, close it and open a fresh connection with the new format.
-		// This covers mid-session input-format changes (e.g. Deepgram switching
-		// between raw-Opus pass-through and decoded PCM).
-		if (oldDesiredFormat !== undefined && audioFormatsDiffer(desiredFormat, oldDesiredFormat)) {
-			const reconnected = await this.reconnectBackend(generation);
+		// Reconnect the backend when its desired audio format has changed (e.g. Deepgram
+		// switching between raw-Opus pass-through and decoded PCM) OR when a re-start
+		// changed a connect-time flag such as diarize (forceReconnect). Only when a
+		// backend already exists — the initial connect is handled by initializeBackend.
+		const formatChanged = audioFormatsDiffer(desiredFormat, oldDesiredFormat ?? desiredFormat);
+		if (oldDesiredFormat !== undefined && (formatChanged || forceReconnect)) {
+			const reconnected = await this.reconnectBackend(generation, formatChanged ? undefined : 'diarize changed');
 			if (!reconnected) {
 				return; // stale or fatal error — a newer call has taken over
 			}
@@ -346,6 +458,14 @@ export class OutgoingConnection {
 	 * stale (a newer reinitializeDecoder took over) or a fatal error occurred.
 	 */
 	private async reconnectBackend(generation: number, reason?: string): Promise<boolean> {
+		// Reset the identity ring up front — BEFORE the connect await below. The fresh backend stream
+		// restarts its per-word media clock at 0, so the ring's clock must too. It has to happen here
+		// (not after connect): on the recover path the decoder stays alive, so audio arriving during
+		// the reconnect is decoded into the ring AND queued, then flushed to the new backend afterwards
+		// (recoverBackend). Resetting after connect would wipe that queued gap audio from the ring while
+		// the new backend still receives it → every later word time runs ahead of the ring. JIT-16065.
+		this.identityAttributor?.reset();
+
 		// Detach all handlers from the old backend before closing it so that its
 		// onClosed / onError callbacks don't trigger OutgoingConnection teardown
 		// while we're replacing it.
@@ -374,15 +494,7 @@ export class OutgoingConnection {
 		newBackend.getDesiredAudioFormat(this.inputAudioFormat);
 
 		const backendConfig = getBackendConfig(this.options.provider);
-		backendConfig.language = this.options.language;
-		backendConfig.tags = this.options.tags;
-		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+		this.applyPerConnectionConfig(backendConfig);
 
 		try {
 			const connectStartTime = Date.now();
@@ -562,6 +674,17 @@ export class OutgoingConnection {
 	}
 
 	private sendOrEnqueueDecodedAudio(audioData: Uint8Array) {
+		// Identity feature: buffer decoded PCM for the sidecar (only the l16/16k path, i.e. xAI).
+		// Off the hot path — a copy into a bounded ring, no network here.
+		if (
+			config.identity?.enabled &&
+			this.activeDesiredFormat?.encoding === 'l16' &&
+			this.activeDesiredFormat?.sampleRate === 16000
+		) {
+			this.ensureIdentityAttributor();
+			this.identityAttributor?.appendPcm(audioData);
+		}
+
 		const backendStatus = this.backend?.getStatus();
 
 		if (backendStatus === 'connected' && this.backend) {
@@ -577,6 +700,163 @@ export class OutgoingConnection {
 		} else {
 			logger.debug(`Not queueing audio data for tag: ${this.localTag}: backend ${backendStatus}`);
 		}
+	}
+
+	private ensureIdentityAttributor(): void {
+		if (this.identityAttributor) return;
+		const sidecar = getSidecar();
+		const sessionId = this.options.sessionId;
+		if (!sidecar || !sessionId) return;
+		this.identitySidecar = sidecar;
+		this.identityAttributor = new IdentityAttributor(sidecar, {
+			sessionId,
+			streamId: this.localTag,
+		});
+	}
+
+	/** Resolve (once, cached) this participant's stable identity + tenant from the identity source. */
+	private resolveIdentity(): Promise<ResolvedIdentity | null> {
+		// Reuse the in-flight/resolved promise to dedupe concurrent finals — but only KEEP it once it
+		// resolves non-null. A null (KV record not written yet) must not stick for the whole session,
+		// or an early first final permanently disables identity/enrollment; clearing it lets a later
+		// final retry (the source layer rate-limits the re-query via its negative TTL). JIT-16065.
+		if (this.resolvedIdentityP) return this.resolvedIdentityP;
+		const src = getIdentitySource();
+		const sessionId = this.options.sessionId;
+		if (!src || !sessionId) return Promise.resolve(null);
+		const p = src.resolve(sessionId, this.participantId).catch(() => null);
+		this.resolvedIdentityP = p;
+		void p.then((r) => {
+			if (!r) this.resolvedIdentityP = undefined;
+		});
+		return p;
+	}
+
+	/**
+	 * Whether the backend is diarizing for this connection — mirrors the backend's own resolution
+	 * (`backendConfig.diarize ?? config.<provider>.diarize`): the per-endpoint flag when set, else the
+	 * provider's global. The identity room path relies on the backend's per-word `speaker` labels, so
+	 * this gate must match exactly when those labels are actually produced (else a globally-diarized
+	 * endpoint with no per-endpoint flag would wrongly take the individual/enroll path). JIT-16065.
+	 */
+	private diarizeActive(): boolean {
+		if (this.diarize !== undefined) return this.diarize;
+		const provider = this.options.provider ?? getDefaultProvider();
+		if (provider === 'deepgram') return config.deepgram.diarize;
+		if (provider === 'xai') return config.xai.diarize;
+		return false;
+	}
+
+	/**
+	 * Handle a final, gated by the per-endpoint `diarize` flag (the room-vs-individual discriminator,
+	 * Emil #106 — true only for endpoints carrying multiple speakers). JIT-16065:
+	 *  - diarize === true  (room): identify each backend-diarized speaker and return per-speaker
+	 *    segments so the store attributes speech to whoever actually spoke. NEVER enroll (a shared
+	 *    mic must not pollute a fingerprint).
+	 *  - diarize !== true  (individual): the owner is already known from the join, so DON'T run an
+	 *    open-set identify (a spurious match would misattribute). Just enroll in the background
+	 *    (guarded) and return null → normal mic-owner dispatch.
+	 * Returns null when the feature is off / no per-word timing / any failure. Never throws — runs
+	 * off the transcription hot path.
+	 */
+	async identityAttributeFinal(message: TranscriptionMessage): Promise<AttributedSegment[] | null> {
+		if (!this.identityAttributor || message.is_interim) return null;
+		// Snapshot the reconnect generation: resolveIdentity() below awaits a KV fetch (up to seconds),
+		// during which a backend reconnect can reset the ring to a fresh clock. If that happens, this
+		// final's word times belong to the OLD clock and must not be sliced against the new ring — bail
+		// to the mic-owner fallback rather than embed the wrong audio span. JIT-16065.
+		const gen = this.reinitGeneration;
+		try {
+			if (this.diarizeActive()) {
+				// ROOM: per-speaker identify + attribution override. Needs the backend's per-word speaker
+				// labels — skip a final that carries none (the words guard belongs HERE, not before the
+				// enroll branch: enroll uses a rolling window and works fine on word-less finals such as
+				// xAI granular commits or transcript.done). JIT-16065.
+				if (!message.words?.length) return null;
+				const resolved = await this.resolveIdentity();
+				if (gen !== this.reinitGeneration) return null; // ring was reset mid-resolve → stale timeline
+				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
+				const a = await this.identityAttributor.analyze(message.words, tenant);
+				if (!a || a.segments.length === 0) return null;
+				if (a.speakerCount > 1) this.everSawMultipleSpeakers = true;
+				return a.segments;
+			}
+			// INDIVIDUAL: background enroll only (no identify, no attribution override). Enroll from a
+			// ROLLING window of recent audio (not this final's span) so it works regardless of how the
+			// backend chunks finals — short granular finals would otherwise never reach enrollMinSpeechSec.
+			const w = this.identityAttributor.recentWindow(config.identity?.enrollMinSpeechSec ?? 8);
+			if (w) {
+				const resolved = await this.resolveIdentity();
+				const tenant = resolved?.tenant ?? config.identity?.tenant ?? 'default';
+				void this.maybeAutoEnroll(resolved, tenant, w.pcm, w.windowSec);
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Quality-gated + rate-limited enrollment of a single-person (non-diarized) stream's audio.
+	 * Before enrolling, the single-mic guard (checkEnrollConsistency) verifies the window is one
+	 * consistent voice. A divergent window skips that enroll; only after `enrollConsistencyMaxStrikes`
+	 * consecutive divergent windows is enrollment disabled for the stream (so a transient cough/pause
+	 * doesn't permanently disable a genuine single speaker). JIT-16065.
+	 */
+	private async maybeAutoEnroll(resolved: ResolvedIdentity | null, tenant: string, pcm: Buffer, windowSec: number): Promise<void> {
+		const c = config.identity;
+		if (!resolved || !this.identitySidecar || !c) return;
+		if (this.everSawMultipleSpeakers) return; // this stream has shown >1 voice — don't pollute the fingerprint
+		if (windowSec < c.enrollMinSpeechSec) return;
+		const now = Date.now();
+		if (now - this.lastEnrollAt < c.enrollCooldownMs) return;
+		if (this.enrollCount >= c.maxEnrollsPerSession) return;
+		// Claim the cooldown slot synchronously (before any await) so overlapping finals don't both pass
+		// the gate. Remember the previous value so we can release it if the guard rejects this window —
+		// a rejected (multi-voice) window must not burn the full cooldown, or one noisy window would
+		// silence enrollment for the whole cooldown period. JIT-16065.
+		const prevEnrollAt = this.lastEnrollAt;
+		this.lastEnrollAt = now;
+
+		// Single-mic guard — only when the client can embed locally (LocalIdentityClient).
+		const embed = this.identitySidecar.embed?.bind(this.identitySidecar);
+		if (embed) {
+			const r = await checkEnrollConsistency(pcm, embed, {
+				subWindowSec: c.enrollConsistencySubWindowSec,
+				threshold: c.enrollConsistencyThreshold,
+			});
+			logger.debug(
+				`[identity] ${this.localTag} enroll-consistency reason=${r.reason} ` +
+					`minCos=${Number.isNaN(r.minCosine) ? 'n/a' : r.minCosine.toFixed(3)} windows=${r.windows}`,
+			);
+			if (!r.consistent) {
+				// Skip THIS enroll, but only disable the stream after enough consecutive divergent
+				// windows — a single cough/pause/music window must not permanently disable a genuine
+				// single speaker. A consistent window (below) resets the strike count.
+				this.enrollDivergenceStrikes++;
+				const maxStrikes = c.enrollConsistencyMaxStrikes;
+				if (this.enrollDivergenceStrikes >= maxStrikes) {
+					this.everSawMultipleSpeakers = true;
+					logger.info(
+						`[identity] ${this.localTag} enroll disabled — ${this.enrollDivergenceStrikes} consecutive ` +
+							`multi-voice windows (last minCos=${r.minCosine.toFixed(3)})`,
+					);
+				} else {
+					logger.debug(
+						`[identity] ${this.localTag} enroll skipped — multi-voice window ` +
+							`(minCos=${r.minCosine.toFixed(3)}, strike ${this.enrollDivergenceStrikes}/${maxStrikes})`,
+					);
+					// Release the cooldown slot so the next window can be re-evaluated promptly (unless we
+					// just latched, in which case enrollment is off anyway).
+					this.lastEnrollAt = prevEnrollAt;
+				}
+				return;
+			}
+			this.enrollDivergenceStrikes = 0; // consistent window → reset the streak
+		}
+
+		this.enrollCount++;
+		void this.identitySidecar.enroll(resolved.identity, tenant, pcm, resolved.name).catch(() => {});
 	}
 
 	private processPendingInputFrames(): void {
@@ -663,7 +943,10 @@ export class OutgoingConnection {
 		}
 
 		logger.debug(`Forcing commit for idle connection ${this.localTag}`);
-		this.backend.forceCommit();
+		const injectedSilenceSec = this.backend.forceCommit();
+		// Mirror any provider-injected idle silence into the identity ring so its media clock stays
+		// aligned with what the backend received (xAI injects silence to flush a trailing final).
+		if (injectedSilenceSec > 0) this.identityAttributor?.appendSilence(injectedSilenceSec);
 		this.idleCommitTimeout = null;
 	}
 
@@ -788,6 +1071,16 @@ export class OutgoingConnection {
 				getInstruments().backendConnectionsActive.add(-1);
 			}
 		}
+
+		// Release any sidecar-side per-session state (no-op for the in-process LocalIdentityClient;
+		// frees per-stream state on the WS/HTTP fallback sidecar). Fire-and-forget, never throws.
+		if (this.identitySidecar && this.options.sessionId) {
+			void this.identitySidecar.sessionEnd(this.options.sessionId, this.localTag).catch(() => {});
+		}
+		// Drop the per-stream PCM ring (up to ~120s of s16le audio ≈ 3.8 MB) so it's reclaimed at close
+		// rather than lingering until the whole connection object is GC'd. JIT-16065.
+		this.identityAttributor?.reset();
+		this.identityAttributor = undefined;
 
 		if (notify) {
 			this.onClosed?.(this.localTag);

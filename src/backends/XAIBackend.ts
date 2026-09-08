@@ -59,6 +59,10 @@ export class XAIBackend implements TranscriptionBackend {
 	async connect(backendConfig: BackendConfig): Promise<void> {
 		this.backendConfig = backendConfig;
 
+		// Per-endpoint diarization override (start event's `diarize`) takes precedence
+		// over the global XAI_DIARIZE config.
+		const diarize = backendConfig.diarize ?? config.xai.diarize;
+
 		if (!this.apiKey) {
 			throw new Error('XAI_API_KEY not configured');
 		}
@@ -68,7 +72,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// turned into finals. Gated by config/per-connection flag; scoped to the non-diarized path
 		// (one WS per participant), since diarization needs per-speaker hypotheses.
 		const granularEnabled = backendConfig.xaiGranularFinals ?? config.xai.granularFinals;
-		if (granularEnabled && config.xai.diarize) {
+		if (granularEnabled && diarize) {
 			logger.warn(`xAI granular finals requested but diarize is on for tag ${this.tag}; disabled (per-speaker hypotheses unsupported)`);
 		} else if (granularEnabled) {
 			const stabilityMs = backendConfig.xaiGranularStabilityMs ?? config.xai.granularStabilityMs;
@@ -93,7 +97,7 @@ export class XAIBackend implements TranscriptionBackend {
 					params.set('language', language);
 				}
 
-				if (config.xai.diarize) {
+				if (diarize) {
 					params.set('diarize', 'true');
 				}
 
@@ -187,7 +191,7 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 	}
 
-	forceCommit(): void {
+	forceCommit(): number {
 		// Finalize the trailing utterance when the stream goes idle WITHOUT closing it.
 		//
 		// xAI exposes no flush/commit message (unlike OpenAI's input_audio_buffer.commit
@@ -205,7 +209,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// the WS stays open for the next one. (Same idea as jitsi/skynet's idle flush
 		// worker, adapted: we can't force-transcribe xAI's model locally.)
 		if (!this.ws || this.status !== 'connected') {
-			return;
+			return 0;
 		}
 		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
 		const silenceMs = endpointingMs + XAI_IDLE_SILENCE_MARGIN_MS;
@@ -214,8 +218,12 @@ export class XAIBackend implements TranscriptionBackend {
 		try {
 			this.ws.send(silence);
 			logger.debug(`Injected ${silenceMs}ms idle silence to flush xAI final (WS kept open) for tag ${this.tag}`);
+			// Report the injected duration so the caller keeps the identity PCM ring aligned with the
+			// xAI stream (which now contains this silence the ring never saw).
+			return silenceMs / 1000;
 		} catch (error) {
 			logger.error(`Failed to inject idle silence for tag ${this.tag}`, error);
+			return 0;
 		}
 	}
 
@@ -315,7 +323,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Diarization re-splits per speaker. Granular finals are not initialized on the diarized
 		// path (they need per-speaker hypotheses), so this branch is reached only in default mode.
 		if (
-			config.xai.diarize &&
+			(this.backendConfig?.diarize ?? config.xai.diarize) &&
 			Array.isArray(msg.words) &&
 			msg.words.length > 0 &&
 			msg.words[0].speaker !== undefined
@@ -338,7 +346,12 @@ export class XAIBackend implements TranscriptionBackend {
 		const isFinal: boolean = msg.speech_final === true;
 		const confidence = this.avgConfidence(msg.words);
 		const transcript = config.xai.includeLanguage && language && isFinal ? `${text} [${language}]` : text;
-		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language);
+		// Per-word timing is only consumed by the speaker-identity attributor, and only on FINALS
+		// (identityAttributeFinal ignores interims). Attach it solely when identity is enabled AND this
+		// is a final — otherwise it's dead payload on every interim, and keeping it off when the feature
+		// is disabled makes IDENTITY_ENABLED a true master switch.
+		const words = config.identity?.enabled && isFinal ? this.extractWords(msg.words) : undefined;
+		const message = this.createMessage(transcript, confidence, Date.now(), randomUUID(), !isFinal, undefined, language, words);
 
 		if (isFinal) {
 			this.onCompleteTranscription?.(message);
@@ -435,7 +448,7 @@ export class XAIBackend implements TranscriptionBackend {
 		const language: string | undefined = msg.language || undefined;
 
 		if (
-			config.xai.diarize &&
+			(this.backendConfig?.diarize ?? config.xai.diarize) &&
 			Array.isArray(msg.words) &&
 			msg.words.length > 0 &&
 			msg.words[0].speaker !== undefined
@@ -480,6 +493,17 @@ export class XAIBackend implements TranscriptionBackend {
 		const languageSuffix = config.xai.includeLanguage && language ? ` [${language}]` : '';
 		const now = Date.now();
 
+		// Speaker-identity attribution (provider-independent diarization) runs off a final's full
+		// per-word timing. xAI's own diarization splits a turn into per-speaker messages that
+		// otherwise carry no `words`, so identityAttributeFinal would bail before ever calling the
+		// sidecar. Attach the complete word list (all speakers, with timing) to the FIRST emitted
+		// final so identity runs exactly once per turn over the whole audio window; the remaining
+		// per-speaker finals dispatch normally (they resolve to null and fall back to plain text).
+		// Only attach words (and thus set attributionDeferred) when identity is enabled — they exist
+		// solely for the attributor, so IDENTITY_ENABLED off = pre-identity diarized output.
+		const fullWords = !isInterim && config.identity?.enabled ? this.extractWords(words) : undefined;
+		let wordsAttached = false;
+
 		for (const segment of segments) {
 			let text = segment.words
 				.map((w: any) => w.punctuated_word ?? w.text)
@@ -495,10 +519,17 @@ export class XAIBackend implements TranscriptionBackend {
 				`Received ${isInterim ? 'interim' : 'final'} transcription from xAI for ${this.tag} speaker ${segment.speaker}: ${text}`,
 			);
 
-			const message = this.createMessage(text, confidence, now, randomUUID(), isInterim, segment.speaker, language);
+			const attachWords = fullWords && !wordsAttached ? fullWords : undefined;
+			// A secondary per-speaker final of this turn (the turn's words went to an earlier segment).
+			// Its content is attributed + stored via that sibling, so flag it to skip store-attribution
+			// (otherwise every non-first speaker's words are stored twice). Only meaningful for finals.
+			const attributionDeferred = !isInterim && !!fullWords && wordsAttached;
+			const message = this.createMessage(text, confidence, now, randomUUID(), isInterim, segment.speaker, language, attachWords);
 			if (isInterim) {
 				this.onInterimTranscription?.(message);
 			} else {
+				if (attachWords) wordsAttached = true;
+				if (attributionDeferred) message.attributionDeferred = true;
 				this.onCompleteTranscription?.(message);
 			}
 		}
@@ -519,6 +550,7 @@ export class XAIBackend implements TranscriptionBackend {
 		isInterim: boolean,
 		speaker?: number,
 		language?: string,
+		words?: Array<{ text: string; start: number; end: number; speaker?: number }>,
 	): TranscriptionMessage {
 		return {
 			transcript: [
@@ -535,6 +567,23 @@ export class XAIBackend implements TranscriptionBackend {
 			timestamp,
 			...(speaker !== undefined && { speaker }),
 			...(language !== undefined && { language }),
+			...(words && words.length > 0 && { words }),
 		};
+	}
+
+	/** Extract per-word media-time offsets (seconds) + diarization speaker from an xAI words[] array. */
+	private extractWords(
+		words: any[] | undefined,
+	): Array<{ text: string; start: number; end: number; speaker?: number }> | undefined {
+		if (!Array.isArray(words) || words.length === 0) return undefined;
+		const out = words
+			.filter((w) => typeof w.start === 'number' && typeof w.end === 'number')
+			.map((w) => ({
+				text: (w.punctuated_word ?? w.text ?? '') as string,
+				start: w.start as number,
+				end: w.end as number,
+				...(typeof w.speaker === 'number' && { speaker: w.speaker as number }),
+			}));
+		return out.length > 0 ? out : undefined;
 	}
 }

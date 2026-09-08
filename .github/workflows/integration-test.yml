@@ -67,6 +67,12 @@ jobs:
                   path: dist/opus-*
                   retention-days: 1
 
+            # CAM++ speaker-embedding model for the in-container identity path. Architecture-
+            # independent (like the WASM artifacts), fetched on the host and baked into the image via
+            # COPY — the Dockerfile's `COPY models/campplus.onnx` fails without this.
+            - name: Fetch identity model
+              run: npm run fetch-models
+
             # Ships both Opus backends (Dockerfile default); OPUS_BACKEND selects at container runtime.
             - name: Build Docker image
               run: docker build -t opus-transcriber-proxy:itest .

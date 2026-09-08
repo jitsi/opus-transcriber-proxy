@@ -271,6 +271,69 @@ function setupSessionEventHandlers(ws: WebSocket, session: TranscriberProxy, con
 		// Note: Cross-tag context sharing is handled automatically within TranscriberProxy
 		// When one tag generates a transcript, it's broadcast to other tags in the same session
 	});
+
+	// Speaker-identity attribution → client. Arrives after the plain transcription-result (identity
+	// is resolved async), so it's a follow-up per-speaker transcript carrying the resolved identity
+	// in `participant` (name = resolved name, else provisional handle). No client change needed — a
+	// client that ignores the extra `name`/duplicate still works; proper in-place reconciliation of
+	// the earlier line is a later step.
+	session.on(
+		'identity_attribution',
+		(data: {
+			participantId: string;
+			messageId: string;
+			timestamp: number;
+			language?: string;
+			segments: Array<{ identity: string | null; name: string | null; text: string }>;
+		}) => {
+			if (!sendBack) return;
+			// These are STORE-ONLY (dispatchOnly) finals, relayed over the client WS purely so the
+			// fronting Cloudflare Worker can intercept them (strip from the client, route to the
+			// dispatcher DO). Only do that when actually running as a CF Container behind that worker
+			// (CLOUDFLARE_DURABLE_OBJECT_ID is injected by the CF runtime). On a plain Node/k8s deploy
+			// there is no stripping worker, so emitting here would leak resolved emails + duplicate CC
+			// lines to real clients; the store still receives identity via the Node dispatcher path
+			// (buildDispatcherMessages in transcriberproxy). JIT-16065.
+			if (!process.env.CLOUDFLARE_DURABLE_OBJECT_ID) return;
+			const currentWs = session.getWebSocket();
+			if (!currentWs || currentWs.readyState !== 1) return;
+			data.segments.forEach((s, i) => {
+				// Only a RESOLVED (known-enrolled) identity overrides the speaker. An unresolved cluster is
+				// attributed to the mic-owner endpoint — NOT a synthetic "unknown:<id>" id, which the
+				// dispatcher would turn into a phantom virtual participant (mis-attribution + inflated
+				// meeting roster). JIT-16065.
+				const id = s.identity ?? data.participantId;
+				// A resolved speaker ALWAYS carries a name (fall back to the identity itself when the
+				// fingerprint has no display name), mirroring the Node dispatcher builder. Otherwise the
+				// worker — which detects identity finals by name presence — would miss it and the
+				// dispatcher's KV lookup of the email endpoint finds nothing → the utterance is dropped
+				// from the store. Unresolved segments stay name-less (mic-owner, normal KV path). JIT-16065.
+				const name = s.identity ? (s.name ?? s.identity) : undefined;
+				const msg: TranscriptionMessage = {
+					type: 'transcription-result',
+					event: 'transcription-result',
+					is_interim: false,
+					transcript: [{ text: s.text }],
+					participant: { id, ...(name && { name }) },
+					timestamp: data.timestamp,
+					...(data.language && { language: data.language }),
+					message_id: `${data.messageId}-id-${i}`,
+					// Store-only: the Worker dispatches this to the transcript store but does NOT show it in
+					// the live CC (the identified speaker isn't in the XMPP room → would render as "Guest" and
+					// duplicate the raw line). Keeps the live CC identical to pre-identity behaviour. JIT-16065.
+					dispatchOnly: true,
+				};
+				try {
+					// No transcriptionsDeliveredTotal increment: these are store-only (dispatchOnly) relays
+					// for the fronting worker, stripped before the client — counting them would inflate the
+					// client-delivery metric with traffic the client never sees. JIT-16065.
+					currentWs.send(JSON.stringify(msg));
+				} catch (error) {
+					logger.error(`[WS-${connectionId}] Failed to send identity attribution:`, error);
+				}
+			});
+		},
+	);
 }
 
 function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameters, translationToken?: string) {
