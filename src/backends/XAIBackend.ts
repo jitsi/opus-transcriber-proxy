@@ -14,6 +14,7 @@ import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
+import { getInstruments } from '../telemetry/instruments';
 import { XAIGranularSegmenter, type GranularResult } from './XAIGranularSegmenter';
 
 // Reused across messages; TextDecoder is stateless for our usage (one full frame per call).
@@ -62,10 +63,25 @@ const XAI_ERROR_BODY_TIMEOUT_MS = 1000;
 // for the default 4 attempts is ~4x this plus ~1.75s of backoff.
 const XAI_HANDSHAKE_TIMEOUT_MS = 5000;
 
-// Ceiling on an honoured Retry-After. Longer than this and we don't wait at all: a
-// participant's audio is buffering behind connect(), so stalling seconds inside it is
-// worse than failing and letting the next media event start a fresh connection.
+// Ceiling on an honoured Retry-After. A participant's audio is buffering behind
+// connect(), so we never hold it longer than this however long the server asks for.
+// (Refusing to retry on a long Retry-After would not honour it either: the owner tears
+// the connection down and the next media frame opens a fresh one immediately.)
 const XAI_RETRY_AFTER_MAX_MS = XAI_CONNECT_BACKOFF_MAX_MS;
+
+// Process-wide cooldown after connect() exhausts its attempts on a transient rejection.
+// When that happens the OutgoingConnection is torn down and the participant's next media
+// frame (~20 ms later) creates a fresh backend with no memory of the failure — so without
+// this, an xAI outage degrades into a per-participant hammer loop at one attempt-burst per
+// RTT, and any Retry-After xAI sent dies with the connection that received it. An outage
+// is process-wide, so the cooldown is shared by every instance: a new connect() first
+// waits out the remainder, bounded by XAI_RETRY_AFTER_MAX_MS like every other wait here.
+let connectCooldownUntil = 0;
+
+/** Clears the process-wide connect cooldown. Test hook only. */
+export function resetXAIConnectCooldown(): void {
+	connectCooldownUntil = 0;
+}
 
 // Response headers that may carry xAI's request id. Logged on both a successful and a
 // rejected handshake — it is the identifier xAI support needs to trace a failed call.
@@ -214,50 +230,68 @@ export class XAIBackend implements TranscriptionBackend {
 		const url = this.buildStreamUrl(backendConfig);
 		const attempts = Math.max(1, config.xai.connectAttempts);
 		let lastError: unknown;
+		let attemptsMade = 0;
+
+		// A recent connect() in this process exhausted its retries on a transient
+		// rejection: wait out what is left of the cooldown before the first attempt (see
+		// connectCooldownUntil). close() cuts the wait short like any backoff wait.
+		const cooldownMs = connectCooldownUntil - Date.now();
+		if (cooldownMs > 0) {
+			logger.warn(
+				`xAI connect for tag ${this.tag} deferred ${cooldownMs}ms: xAI recently rejected a handshake as temporarily unavailable`,
+			);
+			await this.waitBeforeRetry(cooldownMs);
+		}
 
 		// Bounded retry with backoff. A rejected upgrade used to be fatal: the
 		// OutgoingConnection was torn down and the next media event immediately opened a
 		// fresh connection, i.e. an unbacked-off retry loop that also dropped the client
 		// WebSocket. Retrying here rides out a short provider blip in place instead.
-		for (let attempt = 1; attempt <= attempts; attempt++) {
+		// (Status is read through getStatus() so it is re-read after each await, not
+		// narrowed: close() during a wait means the owner has given up on us.)
+		for (let attempt = 1; attempt <= attempts && this.getStatus() !== 'closed'; attempt++) {
+			attemptsMade = attempt;
 			try {
 				await this.connectOnce(url, attempt, attempts);
 				return;
 			} catch (error) {
 				lastError = error;
 				const retryable = error instanceof XAIConnectError ? error.retryable : true;
-				if (!retryable || attempt === attempts || this.getStatus() === 'closed') break;
+				if (!retryable || this.getStatus() === 'closed') break;
 
-				// Honour Retry-After when the server sent one, but only up to
-				// XAI_RETRY_AFTER_MAX_MS: audio is buffering behind connect(), so a long
-				// wait in here is worse than failing and reconnecting on the next media
-				// event. A longer-than-ceiling ask is treated as "don't retry".
 				const retryAfterMs = error instanceof XAIConnectError ? error.retryAfterMs : undefined;
-				if (retryAfterMs !== undefined && retryAfterMs > XAI_RETRY_AFTER_MAX_MS) {
-					logger.warn(
-						`xAI asked for a ${retryAfterMs}ms Retry-After for tag ${this.tag}, ` +
-							`beyond the ${XAI_RETRY_AFTER_MAX_MS}ms we are willing to hold audio for; not retrying`,
-					);
+				const delayMs = this.retryDelayMs(retryAfterMs, attempt);
+
+				if (attempt === attempts) {
+					// Out of attempts on a transient failure. The owner will tear this
+					// connection down and the participant's next media frame opens a fresh
+					// one, so leave the delay we would have waited as a process-wide cooldown
+					// for it — otherwise an outage becomes a hammer loop with no backoff.
+					connectCooldownUntil = Math.max(connectCooldownUntil, Date.now() + delayMs);
 					break;
 				}
 
-				const delayMs = retryAfterMs ?? this.backoffDelayMs(attempt);
 				logger.warn(
 					`xAI handshake failed for tag ${this.tag} (attempt ${attempt}/${attempts}): ` +
 						`${error instanceof Error ? error.message : String(error)}; retrying in ${delayMs}ms` +
 						`${retryAfterMs !== undefined ? ' (Retry-After)' : ''}`,
 				);
 				await this.waitBeforeRetry(delayMs);
-				// close() during the backoff window means the owner has given up on us — it
-				// cuts the wait short via abortConnectWait. (Read through getStatus() so it
-				// is re-read after the await, not narrowed.)
-				if (this.getStatus() === 'closed') break;
 			}
+		}
+
+		if (this.getStatus() === 'closed') {
+			// close() ran while we were waiting or mid-handshake: the owner gave up on this
+			// connection (participant left, session torn down). That is not a provider
+			// failure, so no error log, no metric and no onError — which is already detached.
+			const reason = lastError instanceof Error ? lastError.message : 'closed before the handshake completed';
+			logger.info(`xAI connect abandoned for tag ${this.tag} after ${attemptsMade} attempt(s): ${reason}`);
+			throw lastError instanceof Error ? lastError : new Error(reason);
 		}
 
 		const errorType = lastError instanceof XAIConnectError ? lastError.errorType : 'websocket_error';
 		const message = lastError instanceof Error ? lastError.message : String(lastError);
-		logger.error(`xAI connect failed for tag ${this.tag} after ${attempts} attempt(s): ${message}`);
+		logger.error(`xAI connect failed for tag ${this.tag} after ${attemptsMade} attempt(s): ${message}`);
 		writeMetric(undefined, {
 			name: 'xai_api_error',
 			worker: 'opus-transcriber-proxy',
@@ -283,6 +317,23 @@ export class XAIBackend implements TranscriptionBackend {
 		return promise.finally(() => {
 			this.abortConnectWait = undefined;
 		});
+	}
+
+	/**
+	 * Delay before the next handshake attempt. A Retry-After xAI sent wins over our own
+	 * backoff, capped at XAI_RETRY_AFTER_MAX_MS — a participant's audio is buffering
+	 * behind connect(), so we hold it no longer than that however long the server asks.
+	 */
+	private retryDelayMs(retryAfterMs: number | undefined, attempt: number): number {
+		if (retryAfterMs === undefined) return this.backoffDelayMs(attempt);
+		if (retryAfterMs > XAI_RETRY_AFTER_MAX_MS) {
+			logger.warn(
+				`xAI asked for a ${retryAfterMs}ms Retry-After for tag ${this.tag}; ` +
+					`capping at ${XAI_RETRY_AFTER_MAX_MS}ms (audio is buffering behind connect())`,
+			);
+			return XAI_RETRY_AFTER_MAX_MS;
+		}
+		return retryAfterMs;
 	}
 
 	/** Exponential backoff with jitter, capped, for handshake retry `attempt` (1-based). */
@@ -444,11 +495,16 @@ export class XAIBackend implements TranscriptionBackend {
 				);
 				// Per-attempt metric, deliberately distinct from the 'websocket_error' reported
 				// once after the last attempt: this counts handshake tries, that counts
-				// connections the caller actually lost.
+				// connections the caller actually lost. (`ws` reports its handshakeTimeout as
+				// an error event too — "Opened handshake has timed out".)
 				writeMetric(undefined, {
 					name: 'xai_api_error',
 					worker: 'opus-transcriber-proxy',
 					errorType: 'handshake_error',
+				});
+				getInstruments().backendHandshakeFailuresTotal.add(1, {
+					provider: 'xai',
+					reason: /timed out/i.test(errorMessage) ? 'timeout' : 'transport',
 				});
 				fail(new XAIConnectError(errorMessage, true));
 				return;
@@ -479,6 +535,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 			if (!settled) {
 				// Closed before the handshake completed, without an 'error' event.
+				getInstruments().backendHandshakeFailuresTotal.add(1, { provider: 'xai', reason: 'transport' });
 				fail(new XAIConnectError(`WebSocket closed during handshake (code=${event.code})`, true));
 				return;
 			}
@@ -504,19 +561,41 @@ export class XAIBackend implements TranscriptionBackend {
 		const requestId = pickRequestId(res.headers);
 		const retryAfterMs = parseRetryAfterMs(res.headers['retry-after']);
 		const retryable = XAI_RETRYABLE_UPGRADE_STATUSES.has(status);
-		const body = await readUpgradeResponseBody(res);
+		const willRetry = retryable && attempt < attempts;
 
-		logger.error(
+		// The full headers + body are what a report to xAI support needs, so they go on
+		// the first attempt (the one that also names the request id support will look
+		// for) and on the final one. Not on every intermediate retry: in a fleet-wide
+		// outage every participant makes several attempts every few seconds, and shipping
+		// ~3 KB per attempt to the log pipeline at error level is its own incident. For
+		// the same reason an attempt that will be retried logs at warn — only the failure
+		// the caller actually sees is an error.
+		const includeDetail = attempt === 1 || !willRetry;
+		let body = '';
+		if (includeDetail) {
+			body = await readUpgradeResponseBody(res);
+		} else {
+			res.destroy();
+		}
+
+		const line =
 			`xAI handshake rejected for tag ${this.tag} (attempt ${attempt}/${attempts}): ` +
-				`status=${status} ${res.statusMessage ?? ''} requestId=${requestId ?? 'none'} ` +
-				`retryAfter=${res.headers['retry-after'] ?? 'none'} retryable=${retryable} url=${url} ` +
-				`headers=${JSON.stringify(res.headers)} body=${JSON.stringify(body)}`,
-		);
+			`status=${status} ${res.statusMessage ?? ''} requestId=${requestId ?? 'none'} ` +
+			`retryAfter=${res.headers['retry-after'] ?? 'none'} retryable=${retryable} url=${url}` +
+			(includeDetail ? ` headers=${JSON.stringify(res.headers)} body=${JSON.stringify(body)}` : '');
+		if (willRetry) {
+			logger.warn(line);
+		} else {
+			logger.error(line);
+		}
 		writeMetric(undefined, {
 			name: 'xai_api_error',
 			worker: 'opus-transcriber-proxy',
 			errorType: `upgrade_http_${status}`,
 		});
+		// The writeMetric above is a debug-log shim; this is the series dashboards see.
+		// Label cardinality is bounded by the HTTP status space.
+		getInstruments().backendHandshakeFailuresTotal.add(1, { provider: 'xai', reason: `http_${status}` });
 
 		return new XAIConnectError(
 			`xAI handshake rejected: HTTP ${status} (requestId=${requestId ?? 'none'})`,

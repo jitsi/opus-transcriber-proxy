@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { XAIBackend } from '../../../src/backends/XAIBackend';
+import { XAIBackend, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
 import type { MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -110,6 +110,12 @@ vi.mock('../../../src/metrics', () => ({
 	writeMetric: vi.fn(),
 }));
 
+// The OTel handshake-failure counter. vi.hoisted so the (hoisted) mock factory can see it.
+const { handshakeFailuresAdd } = vi.hoisted(() => ({ handshakeFailuresAdd: vi.fn() }));
+vi.mock('../../../src/telemetry/instruments', () => ({
+	getInstruments: () => ({ backendHandshakeFailuresTotal: { add: handshakeFailuresAdd } }),
+}));
+
 vi.mock('../../../src/config', () => ({
 	config: {
 		xai: {
@@ -141,6 +147,7 @@ describe('XAIBackend', () => {
 		lastWsInstance = null;
 		wsInstances.length = 0;
 		(config.xai as any).connectAttempts = 1;
+		resetXAIConnectCooldown();
 	});
 
 	describe('Constructor', () => {
@@ -292,6 +299,7 @@ describe('XAIBackend', () => {
 		}
 
 		const errorLogs = (): string[] => (logger.error as any).mock.calls.map((args: any[]) => String(args[0]));
+		const warnLogs = (): string[] => (logger.warn as any).mock.calls.map((args: any[]) => String(args[0]));
 
 		it('retries a 503 upgrade rejection and connects on the next attempt', async () => {
 			(config.xai as any).connectAttempts = 3;
@@ -332,7 +340,7 @@ describe('XAIBackend', () => {
 
 			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
 
-			const rejection = errorLogs().find((line) => line.includes('handshake rejected'));
+			const rejection = errorLogs().find((line) => line.includes('handshake rejected for tag'));
 			expect(rejection).toBeDefined();
 			expect(rejection).toContain('status=503');
 			expect(rejection).toContain('requestId=req-abc123');
@@ -405,17 +413,23 @@ describe('XAIBackend', () => {
 			}
 		});
 
-		it('gives up rather than holding audio for a Retry-After beyond the ceiling', async () => {
+		it('caps a Retry-After beyond the ceiling instead of giving up', async () => {
 			(config.xai as any).connectAttempts = 4;
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 
-			// 30s is far longer than we are willing to buffer a participant's audio for.
+			// 30s is far longer than we are willing to buffer a participant's audio for — but
+			// not retrying at all would not honour it either (the next media frame would open
+			// a fresh connection immediately), so the wait is capped, not skipped.
 			wsInstances[0].simulateUnexpectedResponse(503, { 'retry-after': '30' });
+			await vi.waitFor(() => expect(warnLogs().some((line) => line.includes('capping at 4000ms'))).toBe(true));
+			expect(warnLogs().some((line) => line.includes('retrying in 4000ms (Retry-After)'))).toBe(true);
+			expect(wsInstances).toHaveLength(1);
 
+			// Cut the capped wait short rather than sitting through 4s in a unit test.
+			backend.close();
 			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
 			expect(wsInstances).toHaveLength(1);
-			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('not retrying'))).toBe(true);
 		});
 
 		it('does not retry when connectAttempts is 1, even for a retryable status', async () => {
@@ -475,13 +489,14 @@ describe('XAIBackend', () => {
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 
 			// A date ~60s out is past the ceiling, so this both proves the HTTP-date form
-			// parses and that the ceiling applies to it.
+			// parses and that the cap applies to it.
 			const httpDate = new Date(Date.now() + 60_000).toUTCString();
 			wsInstances[0].simulateUnexpectedResponse(503, { 'retry-after': httpDate });
+			await vi.waitFor(() => expect(warnLogs().some((line) => line.includes('capping at 4000ms'))).toBe(true));
 
+			backend.close();
 			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
 			expect(wsInstances).toHaveLength(1);
-			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('not retrying'))).toBe(true);
 		});
 
 		it('counts each rejection under its HTTP status', async () => {
@@ -515,6 +530,115 @@ describe('XAIBackend', () => {
 			wsInstances[0].simulateMessage(JSON.stringify({ type: 'error', message: 'ASR stream timed out' }));
 
 			expect(errorLogs().some((line) => line.includes('requestId=req-live'))).toBe(true);
+		});
+
+		it('leaves a process-wide cooldown after exhausting attempts, which the next connect waits out', async () => {
+			(config.xai as any).connectBackoffMs = 250;
+			try {
+				const first = new XAIBackend('tag-a', { id: 'p1' });
+				const firstConnect = first.connect(DEFAULT_CONFIG);
+				wsInstances[0].simulateUnexpectedResponse(503);
+				await expect(firstConnect).rejects.toThrow(/HTTP 503/);
+
+				// A fresh backend — what the participant's next media frame creates once the
+				// first one is torn down — must not hit xAI again immediately.
+				const second = new XAIBackend('tag-b', { id: 'p2' });
+				const secondConnect = second.connect(DEFAULT_CONFIG);
+				expect(wsInstances).toHaveLength(1);
+				expect(warnLogs().some((line) => line.includes('deferred'))).toBe(true);
+
+				const ws = await vi.waitFor(
+					() => {
+						expect(wsInstances).toHaveLength(2);
+						return wsInstances[1];
+					},
+					{ timeout: 2000 },
+				);
+				ws.simulateOpen();
+				await secondConnect;
+				expect(second.getStatus()).toBe('connected');
+			} finally {
+				(config.xai as any).connectBackoffMs = 0;
+			}
+		});
+
+		it('leaves no cooldown behind after a non-retryable rejection', async () => {
+			(config.xai as any).connectBackoffMs = 250;
+			try {
+				const first = new XAIBackend('tag-a', { id: 'p1' });
+				const firstConnect = first.connect(DEFAULT_CONFIG);
+				wsInstances[0].simulateUnexpectedResponse(401);
+				await expect(firstConnect).rejects.toThrow(/HTTP 401/);
+
+				const second = new XAIBackend('tag-b', { id: 'p2' });
+				const secondConnect = second.connect(DEFAULT_CONFIG);
+				expect(wsInstances).toHaveLength(2);
+				expect(warnLogs().some((line) => line.includes('deferred'))).toBe(false);
+				wsInstances[1].simulateOpen();
+				await secondConnect;
+			} finally {
+				(config.xai as any).connectBackoffMs = 0;
+			}
+		});
+
+		it('treats close() during the handshake as an abandonment, not a provider failure', async () => {
+			(config.xai as any).connectAttempts = 4;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const onError = vi.fn();
+			backend.onError = onError;
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			backend.close();
+			// The mock's close() emits nothing; deliver the abort the way `ws` does.
+			wsInstances[0].simulateError('WebSocket was closed before the connection was established');
+
+			await expect(connectPromise).rejects.toThrow(/closed before the connection/);
+			expect(wsInstances).toHaveLength(1);
+			expect(onError).not.toHaveBeenCalled();
+			expect(errorLogs().some((line) => line.includes('connect failed'))).toBe(false);
+			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('connect abandoned'))).toBe(true);
+		});
+
+		it('counts every failed attempt on otp_backend_handshake_failures_total', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503);
+			const second = await waitForWsInstances(2);
+			second.simulateError('ECONNRESET');
+
+			await expect(connectPromise).rejects.toThrow(/ECONNRESET/);
+			expect(handshakeFailuresAdd).toHaveBeenCalledWith(1, { provider: 'xai', reason: 'http_503' });
+			expect(handshakeFailuresAdd).toHaveBeenCalledWith(1, { provider: 'xai', reason: 'transport' });
+		});
+
+		it('logs retried attempts at warn, with full detail only on the first and final attempt', async () => {
+			(config.xai as any).connectAttempts = 3;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503, { 'x-request-id': 'req-1' }, 'body-1');
+			const second = await waitForWsInstances(2);
+			second.simulateUnexpectedResponse(503, { 'x-request-id': 'req-2' }, 'body-2');
+			const third = await waitForWsInstances(3);
+			third.simulateUnexpectedResponse(503, { 'x-request-id': 'req-3' }, 'body-3');
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+
+			const warned = warnLogs().filter((line) => line.includes('handshake rejected for tag'));
+			const errored = errorLogs().filter((line) => line.includes('handshake rejected for tag'));
+			expect(warned).toHaveLength(2);
+			expect(errored).toHaveLength(1);
+			// First attempt: full detail, so support has the request id + body of the first failure.
+			expect(warned[0]).toContain('requestId=req-1');
+			expect(warned[0]).toContain('body-1');
+			// Intermediate attempt: status + request id only — no headers/body.
+			expect(warned[1]).toContain('requestId=req-2');
+			expect(warned[1]).not.toContain('headers=');
+			expect(warned[1]).not.toContain('body-2');
+			// Final attempt: the failure the caller sees — full detail, at error.
+			expect(errored[0]).toContain('requestId=req-3');
+			expect(errored[0]).toContain('body-3');
 		});
 	});
 
