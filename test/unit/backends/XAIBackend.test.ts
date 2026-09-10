@@ -9,6 +9,7 @@ import type { BackendConfig, AudioFormat } from '../../../src/backends/Transcrip
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
 import { config } from '../../../src/config';
 import logger from '../../../src/logger';
+import { writeMetric } from '../../../src/metrics';
 
 // Track the WsWebSocket instances created by the ws mock (one per handshake attempt).
 // Defined at module scope so the vi.mock factory (hoisted before imports) can reference them.
@@ -28,9 +29,12 @@ vi.mock('ws', () => {
 		static OPEN = 1;
 		static CLOSED = 3;
 
-		constructor(url: string, _options?: any) {
+		public options: any;
+
+		constructor(url: string, options?: any) {
 			super();
 			this.url = url;
+			this.options = options;
 			lastWsInstance = this;
 			wsInstances.push(this);
 		}
@@ -271,7 +275,12 @@ describe('XAIBackend', () => {
 	});
 
 	describe('handshake failures (retry + diagnostics)', () => {
-		/** Wait until the mock has created `count` sockets — each retry creates a new one. */
+		/**
+		 * Wait until the mock has created `count` sockets — each retry creates a new one.
+		 * Yields via setImmediate rather than a fixed sleep, so it doesn't depend on the
+		 * backoff timing (connectBackoffMs is 0 in these tests); the generous iteration
+		 * count keeps it robust on a loaded runner.
+		 */
 		async function waitForWsInstances(count: number): Promise<any> {
 			for (let i = 0; i < 200 && wsInstances.length < count; i++) {
 				await new Promise((resolve) => setImmediate(resolve));
@@ -434,22 +443,66 @@ describe('XAIBackend', () => {
 
 		it('stops retrying when close() is called during the backoff window', async () => {
 			(config.xai as any).connectAttempts = 4;
-			(config.xai as any).connectBackoffMs = 30;
+			// Long enough that the retry cannot fire before close() lands, whatever the
+			// runner's timing — the test is about the guard, not about racing the sleep.
+			(config.xai as any).connectBackoffMs = 5000;
 			try {
 				const backend = new XAIBackend('test-tag', { id: 'p1' });
 				const connectPromise = backend.connect(DEFAULT_CONFIG);
 
 				wsInstances[0].simulateUnexpectedResponse(503);
-				// Let the rejection settle the attempt, then close before the retry fires.
-				await new Promise((resolve) => setImmediate(resolve));
-				await new Promise((resolve) => setImmediate(resolve));
+				// Wait for the attempt to actually fail (the retry log) before closing, so
+				// we are provably inside the backoff window and not ahead of it.
+				await vi.waitFor(() =>
+					expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('retrying in'))).toBe(true),
+				);
+				const closedAt = Date.now();
 				backend.close();
 
 				await expect(connectPromise).rejects.toThrow(/HTTP 503/);
 				expect(wsInstances).toHaveLength(1);
+				// close() cuts the wait short instead of leaving connect() parked for the
+				// remaining 5s of backoff.
+				expect(Date.now() - closedAt).toBeLessThan(1000);
 			} finally {
 				(config.xai as any).connectBackoffMs = 0;
 			}
+		});
+
+		it('accepts an HTTP-date Retry-After as well as delay-seconds', async () => {
+			(config.xai as any).connectAttempts = 4;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			// A date ~60s out is past the ceiling, so this both proves the HTTP-date form
+			// parses and that the ceiling applies to it.
+			const httpDate = new Date(Date.now() + 60_000).toUTCString();
+			wsInstances[0].simulateUnexpectedResponse(503, { 'retry-after': httpDate });
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+			expect(wsInstances).toHaveLength(1);
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('not retrying'))).toBe(true);
+		});
+
+		it('counts each rejection under its HTTP status', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503);
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+			expect(writeMetric).toHaveBeenCalledWith(undefined, expect.objectContaining({ errorType: 'upgrade_http_503' }));
+			// The terminal metric keeps the historical type, whatever the status was.
+			expect(writeMetric).toHaveBeenCalledWith(undefined, expect.objectContaining({ errorType: 'websocket_error' }));
+		});
+
+		it('bounds each handshake attempt so a silent endpoint cannot hang connect()', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			expect(wsInstances[0].options.handshakeTimeout).toBeGreaterThan(0);
+
+			wsInstances[0].simulateOpen();
+			await connectPromise;
 		});
 
 		it('records the request id of a successful handshake and includes it in stream errors', async () => {

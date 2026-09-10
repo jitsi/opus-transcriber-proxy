@@ -55,6 +55,13 @@ const XAI_CONNECT_BACKOFF_JITTER = 0.25;
 const XAI_ERROR_BODY_MAX_CHARS = 2048;
 const XAI_ERROR_BODY_TIMEOUT_MS = 1000;
 
+// Per-attempt handshake ceiling. `ws` sets no handshakeTimeout by default, so an xAI
+// endpoint that accepts the TCP connection and then goes quiet would hang connect()
+// until the OS gives up (minutes) with the participant's audio buffering behind it —
+// and the retry loop would stack that serially. Bounds one attempt, so the worst case
+// for the default 4 attempts is ~4x this plus ~1.75s of backoff.
+const XAI_HANDSHAKE_TIMEOUT_MS = 5000;
+
 // Ceiling on an honoured Retry-After. Longer than this and we don't wait at all: a
 // participant's audio is buffering behind connect(), so stalling seconds inside it is
 // worse than failing and letting the next media event start a fresh connection.
@@ -115,8 +122,11 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 	let body = '';
 
 	// resolve() past the first call is a no-op, so no `done` bookkeeping is needed.
+	// Dropping the 'data' listener matters though: destroy() is not synchronous, so
+	// chunks can still arrive and would keep growing a string nobody reads.
 	const finish = (note = ''): void => {
 		clearTimeout(timer);
+		res.removeAllListeners('data');
 		res.destroy();
 		resolve(body.trim() + note);
 	};
@@ -133,8 +143,6 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 
 	return promise;
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class XAIBackend implements TranscriptionBackend {
 	private ws?: WsWebSocket;
@@ -159,6 +167,13 @@ export class XAIBackend implements TranscriptionBackend {
 	 * the exact call. Undefined if xAI sent no recognised request-id header.
 	 */
 	private requestId?: string;
+
+	/**
+	 * Cuts short the backoff wait between handshake attempts. Set while connect() is
+	 * sleeping, called by close() so a torn-down connection doesn't leave connect()
+	 * parked for the remainder of the delay.
+	 */
+	private abortConnectWait?: () => void;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
@@ -232,9 +247,10 @@ export class XAIBackend implements TranscriptionBackend {
 						`${error instanceof Error ? error.message : String(error)}; retrying in ${delayMs}ms` +
 						`${retryAfterMs !== undefined ? ' (Retry-After)' : ''}`,
 				);
-				await sleep(delayMs);
-				// close() during the backoff window means the owner has given up on us.
-				// (Read through getStatus() so it is re-read after the await, not narrowed.)
+				await this.waitBeforeRetry(delayMs);
+				// close() during the backoff window means the owner has given up on us — it
+				// cuts the wait short via abortConnectWait. (Read through getStatus() so it
+				// is re-read after the await, not narrowed.)
 				if (this.getStatus() === 'closed') break;
 			}
 		}
@@ -254,6 +270,19 @@ export class XAIBackend implements TranscriptionBackend {
 		this.status = 'failed';
 		this.close();
 		throw lastError instanceof Error ? lastError : new Error(message);
+	}
+
+	/** Sleep between handshake attempts, interruptible by close(). */
+	private waitBeforeRetry(delayMs: number): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const timer = setTimeout(resolve, delayMs);
+		this.abortConnectWait = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		return promise.finally(() => {
+			this.abortConnectWait = undefined;
+		});
 	}
 
 	/** Exponential backoff with jitter, capped, for handshake retry `attempt` (1-based). */
@@ -321,6 +350,7 @@ export class XAIBackend implements TranscriptionBackend {
 			// The global WebSocket (undici) does not support custom headers.
 			ws = new WsWebSocket(url, {
 				headers: { Authorization: `Bearer ${this.apiKey}` },
+				handshakeTimeout: XAI_HANDSHAKE_TIMEOUT_MS,
 			});
 		} catch (error) {
 			// Synchronous construction failure (e.g. a malformed XAI_STT_URL) — a retry
@@ -329,6 +359,10 @@ export class XAIBackend implements TranscriptionBackend {
 			throw new XAIConnectError(error instanceof Error ? error.message : 'Unknown error', false, 'connection_failed');
 		}
 
+		// Published before the socket is open so close() can tear a half-open handshake
+		// down. Safe against sendAudio()/forceCommit() reaching an abandoned socket
+		// because status stays 'pending' for the whole retry loop and both of those
+		// require 'connected' — and fail() clears this.ws before the next attempt.
 		this.ws = ws;
 		this.requestId = undefined;
 
@@ -548,6 +582,9 @@ export class XAIBackend implements TranscriptionBackend {
 	close(): void {
 		logger.debug(`Closing xAI backend for tag: ${this.tag}`);
 		this.clearGranularTimer();
+		// If connect() is between attempts, stop it waiting; status is set below and the
+		// loop bails on the next check.
+		this.abortConnectWait?.();
 		// Null callbacks before tearing down the socket so events fired during/after
 		// ws.close() (and any re-entrant close() call) are dropped; onClosed fires once.
 		const onClosed = this.onClosed;
