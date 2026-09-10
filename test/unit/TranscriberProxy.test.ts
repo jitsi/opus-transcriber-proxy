@@ -37,6 +37,10 @@ vi.mock('../../src/config', () => ({
 			wsUrl: '',
 			headers: {},
 		},
+		textTranslation: {
+			enabled: false,
+			provider: 'stub',
+		},
 	},
 }));
 

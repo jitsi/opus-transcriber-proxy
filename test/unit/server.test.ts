@@ -70,6 +70,19 @@ vi.mock('../../src/config', () => ({
 		openaiCustomRequireWss: true,
 		dispatcher: { wsUrl: '', headers: {} },
 		server: { port: 8080, host: '0.0.0.0' },
+		textTranslation: {
+			enabled: true,
+			providersPriority: ['openai'],
+			enableStub: false,
+			historyTurns: 6,
+			historyMaxChars: 2000,
+			includeSpeakers: true,
+			timeoutMs: 10000,
+			openai: { apiKey: 'sk-test', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+			xai: { apiKey: '', url: 'https://api.x.ai/v1/chat/completions', model: 'grok-4.20-0309-non-reasoning' },
+			gemini: { apiKey: '', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-3.5-flash-lite' },
+			google: { apiKey: '', credentialsJson: '', url: 'https://translation.googleapis.com/language/translate/v2' },
+		},
 	},
 	// Plain functions (not vi.fn) so mockReset doesn't clear their implementations
 	getAvailableProviders: () => ['openai', 'openai_custom'],
@@ -112,7 +125,7 @@ import { sessionManager } from '../../src/SessionManager';
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeMockWs() {
-	return { close: vi.fn(), addEventListener: vi.fn(), readyState: 1 };
+	return { close: vi.fn(), addEventListener: vi.fn(), send: vi.fn(), readyState: 1 };
 }
 
 const openaiCustomParams: ISessionParameters = {
@@ -209,6 +222,111 @@ describe('handleWebSocketConnection – openai_custom validation', () => {
 		);
 
 		expect(mockWs.close).not.toHaveBeenCalledWith(1002, expect.anything());
+	});
+});
+
+describe('handleWebSocketConnection – text translation send-back', () => {
+	const translation = {
+		event: 'transcription-result',
+		type: 'translation-result',
+		message_id: 'msg-1',
+		language: 'fr',
+		text: '[FR] hello there',
+		participant: { id: 'abc123', tag: 'abc123-a0' },
+		timestamp: 1_700_000_000_000,
+	};
+
+	/**
+	 * Connect with the given options and return the 'translation' handler server.ts registered on the session,
+	 * together with the WebSocket it should send on.
+	 */
+	function connectAndGetTranslationHandler(options: { sendBack: boolean }) {
+		const mockWs = makeMockWs();
+		const handlers = new Map<string, Function>();
+		vi.mocked(TranscriberProxy as any).mockReturnValue({
+			on: vi.fn((event: string, handler: Function) => handlers.set(event, handler)),
+			getOptions: () => ({ sendBack: options.sendBack, sendBackInterim: false }),
+			getWebSocket: () => mockWs,
+			close: vi.fn(),
+		});
+
+		handleWebSocketConnection(mockWs as any, { ...openaiCustomParams, provider: 'openai' }, undefined);
+
+		return { mockWs, handler: handlers.get('translation') };
+	}
+
+	it('sends a translation back when sendBack is set', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: true });
+
+		expect(handler).toBeDefined();
+		handler!(translation);
+
+		expect((mockWs as any).send).toHaveBeenCalledWith(JSON.stringify(translation));
+	});
+
+	it('does not send a translation when sendBack is not set', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: false });
+
+		handler!(translation);
+
+		expect((mockWs as any).send).not.toHaveBeenCalled();
+	});
+
+	it('does not throw when the WebSocket is no longer open', () => {
+		const { mockWs, handler } = connectAndGetTranslationHandler({ sendBack: true });
+		(mockWs as any).readyState = 3; // CLOSED
+
+		expect(() => handler!(translation)).not.toThrow();
+		expect((mockWs as any).send).not.toHaveBeenCalled();
+	});
+});
+
+describe('handleWebSocketConnection – text_translation_provider parameter', () => {
+	/** Connect with the given param and return the options server.ts passed to TranscriberProxy. */
+	function connectWith(textTranslationProvider: string | undefined) {
+		const mockWs = makeMockWs();
+		vi.mocked(TranscriberProxy as any).mockReturnValue({
+			on: vi.fn(),
+			getOptions: () => ({ sendBack: false, sendBackInterim: false }),
+			getWebSocket: () => mockWs,
+			close: vi.fn(),
+		});
+
+		handleWebSocketConnection(
+			mockWs as any,
+			{ ...openaiCustomParams, provider: 'openai', textTranslationProvider },
+			undefined,
+		);
+
+		return { mockWs, options: vi.mocked(TranscriberProxy as any).mock.calls[0][1] };
+	}
+
+	it('passes an available provider through to the session', () => {
+		const { options } = connectWith('openai');
+
+		expect(options.textTranslationProvider).toBe('openai');
+	});
+
+	it('falls back to the default for a provider name that does not exist', () => {
+		const { mockWs, options } = connectWith('deepl');
+
+		expect(options.textTranslationProvider).toBeUndefined();
+		// Text translation is an addition to the session: a stale URL template must not take
+		// transcription down with it.
+		expect((mockWs as any).close).not.toHaveBeenCalled();
+	});
+
+	it('falls back to the default for a known provider with no credential', () => {
+		const { mockWs, options } = connectWith('gemini');
+
+		expect(options.textTranslationProvider).toBeUndefined();
+		expect((mockWs as any).close).not.toHaveBeenCalled();
+	});
+
+	it('leaves the session on the configured default when the parameter is absent', () => {
+		const { options } = connectWith(undefined);
+
+		expect(options.textTranslationProvider).toBeUndefined();
 	});
 });
 

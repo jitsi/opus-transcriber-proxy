@@ -9,6 +9,32 @@ import { DispatcherConnection, type DispatcherMessage } from './dispatcher';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 import { buildServerInfo } from './serverInfo';
+import { isValidTargetLanguage, needsTranslation, type TextTranslationRequest, type TextTranslator, type TranslationTurn } from './textTranslate/TextTranslator';
+import {
+	createTextTranslator,
+	getDefaultTextTranslationProvider,
+	isTextTranslationProviderAvailable,
+	isValidTextTranslationProvider,
+	usesConversationContext,
+	type TextTranslationProvider,
+} from './textTranslate/factory';
+import { buildTextTranslationMessage, transcriptionText } from './textTranslate/messages';
+import { ConversationHistory } from './textTranslate/ConversationHistory';
+
+/**
+ * The exact label shape this proxy generates ("Speaker 2:"), for detection only.
+ *
+ * Used to log — never to edit — a translation that came back carrying a label. It matches the
+ * literal English string we put in the prompt, so it says nothing about labels a model might have
+ * translated; recognising those would mean guessing at names in any language, which is precisely
+ * the naive matching this code refuses to do.
+ */
+const ECHOED_SPEAKER_LABEL_RE = /^\s*speaker\s*\d+\s*[:：]/i;
+
+/** Whether two target-language lists request the same set, ignoring order. */
+function sameLanguageSet(a: string[], b: string[]): boolean {
+	return a.length === b.length && a.every((language) => b.includes(language));
+}
 
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
@@ -41,6 +67,8 @@ export interface TranscriberProxyOptions {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/** Per-connection text-translation provider override (undefined = the configured default). */
+	textTranslationProvider?: TextTranslationProvider;
 }
 
 export class TranscriberProxy extends EventEmitter {
@@ -57,6 +85,32 @@ export class TranscriberProxy extends EventEmitter {
 	private interimTranscriptionCount = 0;
 	private finalTranscriptionCount = 0;
 	private firstFrameLoggedTags = new Set<string>();
+
+	/**
+	 * Target languages for text translation, from the most recent `sources` control event. The
+	 * event carries the authoritative full set, so this is replaced wholesale on each one. Empty
+	 * (the default) means no translation is requested.
+	 */
+	private targetLanguages: string[] = [];
+
+	/** Created on the first requested language, so a session that never requests one costs nothing. */
+	private textTranslator?: TextTranslator;
+	/** The provider `textTranslator` was created for; also decides whether it gets context. */
+	private textTranslationProvider?: TextTranslationProvider;
+	private translationCount = 0;
+
+	/**
+	 * Recent finals of this session, passed to the translator as context.
+	 *
+	 * Filled for every final while text translation is enabled — not only while a language is
+	 * requested — so that a participant who turns subtitles on mid-meeting gets context-aware
+	 * translations from their first transcript.
+	 */
+	private readonly conversationHistory = new ConversationHistory({
+		maxTurns: config.textTranslation.historyTurns,
+		maxChars: config.textTranslation.historyMaxChars,
+		includeSpeakers: config.textTranslation.includeSpeakers,
+	});
 
 	constructor(ws: WebSocket, options: TranscriberProxyOptions) {
 		super({ captureRejections: true });
@@ -131,6 +185,8 @@ export class TranscriberProxy extends EventEmitter {
 				this.handleStartEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'media') {
 				this.handleMediaEvent(parsedMessage);
+			} else if (parsedMessage && parsedMessage.event === 'sources') {
+				this.handleSourcesEvent(parsedMessage);
 			} else if (parsedMessage && parsedMessage.event === 'info') {
 				// Informational message from the client (e.g. JVB application/version). Log it for
 				// runtime observability; no behavioural effect.
@@ -218,6 +274,10 @@ export class TranscriberProxy extends EventEmitter {
 
 			// Emit the transcription event for external listeners
 			this.emit('transcription', message);
+
+			// Fan out text translations of this final. Asynchronous: each translation is emitted as a
+			// separate 'translation' event when it completes, after the original above.
+			this.translateTranscription(message);
 
 			// Send to dispatcher if connected
 			if (this.dispatcherConnection && this.sessionId) {
@@ -338,6 +398,171 @@ export class TranscriberProxy extends EventEmitter {
 	}
 
 	/**
+	 * Handle the `sources` control event from the bridge.
+	 *
+	 * On a `transcriber` connect the bridge sends the conference's aggregated text-translation
+	 * target languages as bare language codes in `requests` — jicofo puts them on the colibri2
+	 * `<connect>`'s `<requests>` list and the bridge forwards them verbatim. (On a `translator`
+	 * connect the same field carries `<source>.<language>` synthetic source names instead; the two
+	 * are told apart by the connect type, i.e. by which endpoint the socket is on.)
+	 *
+	 * `requests` is the authoritative full set, so it replaces the current one: an event with an
+	 * empty list stops all translation.
+	 */
+	// Public for unit-test access; not intended as part of the public API.
+	handleSourcesEvent(parsedMessage: any): void {
+		const requests: unknown = parsedMessage?.requests;
+		const requested: string[] = Array.isArray(requests) ? requests : [];
+
+		const languages: string[] = [];
+		for (const language of requested) {
+			if (!isValidTargetLanguage(language)) {
+				logger.warn(`Ignoring invalid text translation language in sources event: ${JSON.stringify(language)}`);
+				continue;
+			}
+			if (!languages.includes(language)) {
+				languages.push(language);
+			}
+		}
+
+		if (languages.length > 0 && !config.textTranslation.enabled) {
+			logger.warn(
+				`Session ${this.sessionId}: ignoring requested text translation languages [${languages.join(', ')}] — text translation is disabled (set ENABLE_TEXT_TRANSLATION=true)`,
+			);
+			this.targetLanguages = [];
+			return;
+		}
+
+		if (languages.length > 0 && !this.textTranslator) {
+			// The connection's own provider when it asked for one (already validated in server.ts),
+			// otherwise the first available entry of TEXT_TRANSLATION_PROVIDERS_PRIORITY.
+			const provider = this.options.textTranslationProvider ?? getDefaultTextTranslationProvider();
+			if (!provider || !isValidTextTranslationProvider(provider) || !isTextTranslationProviderAvailable(provider)) {
+				logger.error(
+					`Session ${this.sessionId}: cannot translate into [${languages.join(', ')}] — no text translation provider is available (checked TEXT_TRANSLATION_PROVIDERS_PRIORITY=${config.textTranslation.providersPriority.join(',')}); set an API key for one of them`,
+				);
+				this.targetLanguages = [];
+				return;
+			}
+			try {
+				this.textTranslator = createTextTranslator(provider);
+			} catch (error) {
+				// A translator constructor rejects a configuration it cannot use — `google` throws on
+				// credentials that are not valid JSON. This runs inside the WebSocket 'message'
+				// listener, which is `async`, so an escaping throw becomes an unhandled rejection and
+				// takes the process down by default. Drop text translation for the session instead:
+				// the transcripts themselves are unaffected.
+				logger.error(
+					`Session ${this.sessionId}: cannot create "${provider}" text translator: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				this.targetLanguages = [];
+				return;
+			}
+			this.textTranslationProvider = provider;
+			logger.info(
+				`Session ${this.sessionId}: created "${provider}" text translator (context: ${usesConversationContext(provider) ? `${config.textTranslation.historyTurns} turns, speakers ${config.textTranslation.includeSpeakers ? 'on' : 'off'}` : 'not supported by this provider'})`,
+			);
+		}
+
+		// Compare as sets: the languages are fanned out in a loop, so a reordered list is the same
+		// request and should not log a change.
+		if (sameLanguageSet(languages, this.targetLanguages)) {
+			return;
+		}
+		logger.info(
+			`Session ${this.sessionId}: text translation languages [${this.targetLanguages.join(', ')}] -> [${languages.join(', ')}]`,
+		);
+		this.targetLanguages = languages;
+	}
+
+	/**
+	 * Translate a final transcript into every requested target language and emit one `translation`
+	 * event per language.
+	 *
+	 * Only finals are translated: the client treats a `translation-result` as final and has no
+	 * interim handling for it, and translating every interim would multiply provider cost for text
+	 * that is about to be revised.
+	 *
+	 * Translation is asynchronous and deliberately not awaited by the caller, so a slow translation
+	 * never delays the original transcript. A translation that arrives after a later transcript is
+	 * still rendered correctly: the client keys on `message_id`, not arrival order.
+	 *
+	 * Every requested language gets its own request, all sharing one history snapshot, and the turn
+	 * is appended to the history afterwards — a turn is not its own context.
+	 */
+	private translateTranscription(message: TranscriptionMessage): void {
+		const text = transcriptionText(message);
+		if (!text || !config.textTranslation.enabled) {
+			return;
+		}
+
+		// Undefined when speaker labels are disabled, in which case nothing about who spoke is built
+		// or sent at all.
+		const speaker = this.conversationHistory.speakerLabel(message.participant?.id ?? '');
+		const turn: TranslationTurn = {
+			...(speaker && { speaker }),
+			text,
+			...(message.language && { language: message.language }),
+		};
+		// Snapshot before recording this turn, and share it across the languages below: the
+		// translations complete out of order, and all of them describe the same point in the
+		// conversation.
+		const history = this.textTranslationProvider && usesConversationContext(this.textTranslationProvider)
+			? this.conversationHistory.snapshot()
+			: [];
+		// Record every final, even when no language is requested and even for a turn skipped below:
+		// it is still context for the turns that follow.
+		this.conversationHistory.add(turn);
+
+		const translator = this.textTranslator;
+		if (!translator || this.targetLanguages.length === 0) {
+			return;
+		}
+
+		// Snapshot the languages: the set can change while the translations are in flight, and a
+		// translation must be emitted for the language it was requested for.
+		for (const language of [...this.targetLanguages]) {
+			if (!needsTranslation(language, message.language)) {
+				logger.debug(
+					`Session ${this.sessionId}: skipping ${language} translation, transcript is already in ${message.language}`,
+				);
+				continue;
+			}
+			const request: TextTranslationRequest = { turn, targetLanguage: language, history };
+			translator
+				.translate(request)
+				.then((translated) => {
+					// Our own translators reject rather than resolve empty, but `TextTranslator` is an
+					// interface — this guards the boundary, not their behaviour.
+					if (!translated) {
+						return;
+					}
+					if (ECHOED_SPEAKER_LABEL_RE.test(translated)) {
+						// Report, do not repair. Editing the text would mean recognising a speaker label
+						// written in an arbitrary human language, which cannot be done without also
+						// mangling ordinary sentences. Measurement says this does not happen with the
+						// current prompt (0 occurrences across 96 adversarial calls), so if it ever fires
+						// the prompt or a model has changed and we want to know, not to paper over it.
+						logger.warn(
+							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed: ${JSON.stringify(translated.slice(0, 80))}`,
+						);
+					}
+					this.translationCount++;
+					this.emit('translation', buildTextTranslationMessage(message, language, translated));
+				})
+				.catch((error) => {
+					// A failed translation drops that language for this transcript only; the original
+					// transcript has already been delivered. The reason is interpolated rather than
+					// passed as a second argument, which the log format drops — and the reason (a
+					// provider quota, a dead model, a timeout) is the whole value of this line.
+					logger.error(
+						`Session ${this.sessionId}: failed to translate transcript into ${language}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				});
+		}
+	}
+
+	/**
 	 * Broadcast a transcript from one tag to all other tags in the same session
 	 * This allows participants to see what others are saying as context in their OpenAI session
 	 * @param sourceTag - The participant ID who said this
@@ -426,8 +651,18 @@ export class TranscriberProxy extends EventEmitter {
 
 	close(): void {
 		logger.info(
-			`Session ended: sessionId=${this.sessionId} provider=${this.options.provider ?? 'default'} audioPackets=${this.audioPacketCount} interims=${this.interimTranscriptionCount} finals=${this.finalTranscriptionCount} durationSec=${this.getSessionDurationSec().toFixed(1)}`,
+			`Session ended: sessionId=${this.sessionId} provider=${this.options.provider ?? 'default'} audioPackets=${this.audioPacketCount} interims=${this.interimTranscriptionCount} finals=${this.finalTranscriptionCount} translations=${this.translationCount} durationSec=${this.getSessionDurationSec().toFixed(1)}`,
 		);
+
+		this.textTranslator?.close?.();
+		this.textTranslator = undefined;
+		this.textTranslationProvider = undefined;
+		this.targetLanguages = [];
+		// Only the terminal path reaches here, so dropping the context is right. A disconnect that
+		// can still be resumed does NOT close the proxy — `SessionManager.detachSession` keeps this
+		// object alive for the grace period — so translation context and speaker ordinals survive a
+		// reconnect.
+		this.conversationHistory.clear();
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
 		});

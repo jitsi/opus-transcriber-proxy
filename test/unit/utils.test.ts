@@ -236,6 +236,20 @@ describe('extractSessionParameters', () => {
 			expect(params.deepgramMipOptOut).toBeUndefined();
 		});
 
+		it('should extract text_translation_provider, lower-cased', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test&text_translation_provider=OpenAI';
+			const params = extractSessionParameters(url);
+
+			expect(params.textTranslationProvider).toBe('openai');
+		});
+
+		it('should leave textTranslationProvider undefined when not provided', () => {
+			const url = 'ws://localhost:8080/transcribe?sessionId=test';
+			const params = extractSessionParameters(url);
+
+			expect(params.textTranslationProvider).toBeUndefined();
+		});
+
 		it('should preserve URL object', () => {
 			const url = 'ws://localhost:8080/transcribe?sessionId=test';
 			const params = extractSessionParameters(url);
