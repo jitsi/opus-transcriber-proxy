@@ -284,18 +284,22 @@ describe('XAIBackend', () => {
 	describe('handshake failures (retry + diagnostics)', () => {
 		/**
 		 * Wait until the mock has created `count` sockets — each retry creates a new one.
-		 * Yields via setImmediate rather than a fixed sleep, so it doesn't depend on the
-		 * backoff timing (connectBackoffMs is 0 in these tests); the generous iteration
-		 * count keeps it robust on a loaded runner.
+		 *
+		 * Polls on a real timer, NOT on a count of setImmediate ticks: the retry is gated
+		 * on waitBeforeRetry's setTimeout, and Node clamps even a 0ms timeout to 1ms, so a
+		 * tick-counting loop can spin out its whole budget inside that 1ms and report a
+		 * retry that was merely still pending as one that never happened.
 		 */
 		async function waitForWsInstances(count: number): Promise<any> {
-			for (let i = 0; i < 200 && wsInstances.length < count; i++) {
-				await new Promise((resolve) => setImmediate(resolve));
-			}
-			if (wsInstances.length < count) {
-				throw new Error(`expected ${count} ws instance(s), saw ${wsInstances.length}`);
-			}
-			return wsInstances[count - 1];
+			return vi.waitFor(
+				() => {
+					if (wsInstances.length < count) {
+						throw new Error(`expected ${count} ws instance(s), saw ${wsInstances.length}`);
+					}
+					return wsInstances[count - 1];
+				},
+				{ timeout: 2000, interval: 5 },
+			);
 		}
 
 		const errorLogs = (): string[] => (logger.error as any).mock.calls.map((args: any[]) => String(args[0]));
