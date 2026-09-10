@@ -177,6 +177,41 @@ describe('text translation', () => {
 			expect(translations).not.toHaveBeenCalled();
 		});
 
+		it('does not re-log or reassign when the same set arrives in a different order', () => {
+			const { proxy } = proxyRequesting(['fr', 'de']);
+			mockWebSocket.emit('message', { data: JSON.stringify({ event: 'sources', exports: [], requests: ['de', 'fr'] }) });
+
+			// The languages are fanned out in a loop, so order carries no meaning — the reordered
+			// list is the same request.
+			expect((proxy as any).targetLanguages).toEqual(['fr', 'de']);
+		});
+
+		it('drops translation for the session when the translator cannot be created', async () => {
+			const logger = (await import('../../src/logger')).default;
+			const factory = await import('../../src/textTranslate/factory');
+			// `google` throws from its constructor on credentials that are not valid JSON. This runs
+			// inside the async WebSocket 'message' listener, where an escaping throw would become an
+			// unhandled rejection and take the process down.
+			const createSpy = vi
+				.spyOn(factory, 'createTextTranslator')
+				.mockImplementation(() => {
+					throw new Error('not valid JSON');
+				});
+			try {
+				const { proxy, translations } = proxyRequesting(['fr']);
+
+				expect(createSpy).toHaveBeenCalled();
+				expect((proxy as any).textTranslator).toBeUndefined();
+				expect((proxy as any).targetLanguages).toEqual([]);
+				expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('cannot create "stub" text translator'));
+
+				await deliverFinal(proxy, finalTranscription());
+				expect(translations).not.toHaveBeenCalled();
+			} finally {
+				createSpy.mockRestore();
+			}
+		});
+
 		it('does not create a translator when no language is requested', () => {
 			const { proxy } = proxyRequesting([]);
 			expect((proxy as any).textTranslator).toBeUndefined();

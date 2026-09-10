@@ -31,6 +31,11 @@ import { ConversationHistory } from './textTranslate/ConversationHistory';
  */
 const ECHOED_SPEAKER_LABEL_RE = /^\s*speaker\s*\d+\s*[:：]/i;
 
+/** Whether two target-language lists request the same set, ignoring order. */
+function sameLanguageSet(a: string[], b: string[]): boolean {
+	return a.length === b.length && a.every((language) => b.includes(language));
+}
+
 export interface TranscriptionMessage {
 	transcript: Array<{ confidence?: number; text: string }>;
 	is_interim: boolean;
@@ -439,14 +444,29 @@ export class TranscriberProxy extends EventEmitter {
 				this.targetLanguages = [];
 				return;
 			}
-			this.textTranslator = createTextTranslator(provider);
+			try {
+				this.textTranslator = createTextTranslator(provider);
+			} catch (error) {
+				// A translator constructor rejects a configuration it cannot use — `google` throws on
+				// credentials that are not valid JSON. This runs inside the WebSocket 'message'
+				// listener, which is `async`, so an escaping throw becomes an unhandled rejection and
+				// takes the process down by default. Drop text translation for the session instead:
+				// the transcripts themselves are unaffected.
+				logger.error(
+					`Session ${this.sessionId}: cannot create "${provider}" text translator: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				this.targetLanguages = [];
+				return;
+			}
 			this.textTranslationProvider = provider;
 			logger.info(
 				`Session ${this.sessionId}: created "${provider}" text translator (context: ${usesConversationContext(provider) ? `${config.textTranslation.historyTurns} turns, speakers ${config.textTranslation.includeSpeakers ? 'on' : 'off'}` : 'not supported by this provider'})`,
 			);
 		}
 
-		if (languages.join(',') === this.targetLanguages.join(',')) {
+		// Compare as sets: the languages are fanned out in a loop, so a reordered list is the same
+		// request and should not log a change.
+		if (sameLanguageSet(languages, this.targetLanguages)) {
 			return;
 		}
 		logger.info(
@@ -512,6 +532,8 @@ export class TranscriberProxy extends EventEmitter {
 			translator
 				.translate(request)
 				.then((translated) => {
+					// Our own translators reject rather than resolve empty, but `TextTranslator` is an
+					// interface — this guards the boundary, not their behaviour.
 					if (!translated) {
 						return;
 					}
@@ -636,6 +658,10 @@ export class TranscriberProxy extends EventEmitter {
 		this.textTranslator = undefined;
 		this.textTranslationProvider = undefined;
 		this.targetLanguages = [];
+		// Only the terminal path reaches here, so dropping the context is right. A disconnect that
+		// can still be resumed does NOT close the proxy — `SessionManager.detachSession` keeps this
+		// object alive for the grace period — so translation context and speaker ordinals survive a
+		// reconnect.
 		this.conversationHistory.clear();
 		this.outgoingConnections.forEach((connection) => {
 			connection.close();
