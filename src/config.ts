@@ -86,6 +86,14 @@ export const config = {
 		// (undefined = not sent); opt in via XAI_SMART_TURN or the `smart_turn` URL param.
 		smartTurn: process.env.XAI_SMART_TURN !== undefined ? parseFloat(process.env.XAI_SMART_TURN) : undefined,
 		smartTurnTimeout: parseIntOrDefault(process.env.XAI_SMART_TURN_TIMEOUT, 500),
+		// Bounded retry with exponential backoff for a rejected/failed WS handshake.
+		// xAI documents a 503 on STT as "backend temporarily unavailable — retry with
+		// backoff" (explicitly not a 429 rate limit), so a short retry inside connect()
+		// rides out a provider blip instead of dropping the participant and immediately
+		// reconnecting with no backoff. Defaults: 4 attempts, 250/500/1000ms (±25%
+		// jitter) between them — ~1.75s of added latency worst case before giving up.
+		connectAttempts: parseIntOrDefault(process.env.XAI_CONNECT_ATTEMPTS, 4),
+		connectBackoffMs: parseIntOrDefault(process.env.XAI_CONNECT_BACKOFF_MS, 250),
 		// Consumer-side "roll-own" granular finalization. xAI commits a final only on its
 		// end-of-turn speech_final (the whole turn at once), so a long turn's text lands AFTER
 		// other speakers' short acks in the stored transcript (the GT-meeting ordering bug). When

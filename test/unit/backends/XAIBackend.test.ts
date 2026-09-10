@@ -8,10 +8,12 @@ import type { MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
 import { config } from '../../../src/config';
+import logger from '../../../src/logger';
 
-// Track the last WsWebSocket instance created by the ws mock.
-// Defined at module scope so the vi.mock factory (hoisted before imports) can reference it.
+// Track the WsWebSocket instances created by the ws mock (one per handshake attempt).
+// Defined at module scope so the vi.mock factory (hoisted before imports) can reference them.
 let lastWsInstance: any = null;
+const wsInstances: any[] = [];
 
 // vi.mock is hoisted to the top of the file by vitest — the factory cannot reference
 // symbols imported above. We define a self-contained mock here instead.
@@ -30,6 +32,7 @@ vi.mock('ws', () => {
 			super();
 			this.url = url;
 			lastWsInstance = this;
+			wsInstances.push(this);
 		}
 
 		addEventListener(event: string, handler: Function): void {
@@ -39,6 +42,7 @@ vi.mock('ws', () => {
 
 		send(data: any): void { this._sentMessages.push(data); }
 		close(): void { this.readyState = 3; }
+		terminate(): void { this.readyState = 3; }
 		getSentMessages(): any[] { return [...this._sentMessages]; }
 		clearSentMessages(): void { this._sentMessages = []; }
 
@@ -49,6 +53,30 @@ vi.mock('ws', () => {
 		simulateOpen(): void { this.readyState = 1; this._trigger('open', {}); }
 		simulateMessage(data: any): void { this._trigger('message', { data }); }
 		simulateError(msg: string): void { this._trigger('error', { message: msg }); }
+
+		/**
+		 * Reject the upgrade the way `ws` does: emit 'unexpected-response' with the
+		 * ClientRequest and the HTTP response. Real `ws` only emits this when a listener
+		 * is attached — otherwise it raises "Unexpected server response: <code>".
+		 */
+		simulateUnexpectedResponse(status: number, headers: Record<string, string> = {}, body = ''): void {
+			const req = { destroy: () => {} };
+			const res = new EventEmitter() as any;
+			res.statusCode = status;
+			res.statusMessage = 'Service Unavailable';
+			res.headers = headers;
+			res.destroy = () => {};
+			this.emit('unexpected-response', req, res);
+			// The body arrives asynchronously, after the backend has attached its readers.
+			setImmediate(() => {
+				if (body) res.emit('data', Buffer.from(body));
+				res.emit('end');
+			});
+		}
+
+		simulateUpgrade(headers: Record<string, string> = {}): void {
+			this.emit('upgrade', { statusCode: 101, headers });
+		}
 		simulateClose(code = 1000, reason = '', wasClean = true): void {
 			this.readyState = 3;
 			this._trigger('close', { code, reason, wasClean });
@@ -91,6 +119,10 @@ vi.mock('../../../src/config', () => ({
 			granularStabilityMs: 1000,
 			granularGuardWords: 3,
 			granularMinWords: 5,
+			// 1 attempt by default so the existing tests see the pre-retry behaviour;
+			// the retry tests raise it. Zero backoff keeps them fast.
+			connectAttempts: 1,
+			connectBackoffMs: 0,
 		},
 	},
 }));
@@ -101,6 +133,8 @@ describe('XAIBackend', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		lastWsInstance = null;
+		wsInstances.length = 0;
+		(config.xai as any).connectAttempts = 1;
 	});
 
 	describe('Constructor', () => {
@@ -231,6 +265,125 @@ describe('XAIBackend', () => {
 			getMockWs().simulateError('connection refused');
 			await expect(connectPromise).rejects.toThrow();
 			expect(backend.getStatus()).toBe('closed');
+		});
+	});
+
+	describe('handshake failures (retry + diagnostics)', () => {
+		/** Wait until the mock has created `count` sockets — each retry creates a new one. */
+		async function waitForWsInstances(count: number): Promise<any> {
+			for (let i = 0; i < 200 && wsInstances.length < count; i++) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			if (wsInstances.length < count) {
+				throw new Error(`expected ${count} ws instance(s), saw ${wsInstances.length}`);
+			}
+			return wsInstances[count - 1];
+		}
+
+		const errorLogs = (): string[] => (logger.error as any).mock.calls.map((args: any[]) => String(args[0]));
+
+		it('retries a 503 upgrade rejection and connects on the next attempt', async () => {
+			(config.xai as any).connectAttempts = 3;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503, { 'x-request-id': 'req-1' }, '{"error":"unavailable"}');
+			const second = await waitForWsInstances(2);
+			second.simulateOpen();
+
+			await connectPromise;
+			expect(backend.getStatus()).toBe('connected');
+			expect(wsInstances).toHaveLength(2);
+		});
+
+		it('retries a pre-open transport error', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateError('ECONNRESET');
+			const second = await waitForWsInstances(2);
+			second.simulateOpen();
+
+			await connectPromise;
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('logs the status, request id, retry-after and body of a rejected upgrade', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(
+				503,
+				{ 'x-request-id': 'req-abc123', 'retry-after': '1' },
+				'{"error":"backend temporarily unavailable"}',
+			);
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+
+			const rejection = errorLogs().find((line) => line.includes('handshake rejected'));
+			expect(rejection).toBeDefined();
+			expect(rejection).toContain('status=503');
+			expect(rejection).toContain('requestId=req-abc123');
+			expect(rejection).toContain('retryAfter=1');
+			expect(rejection).toContain('backend temporarily unavailable');
+			// The endpoint (and its params) go in the same line — xAI support asks for it.
+			expect(rejection).toContain('wss://api.x.ai/v1/stt?');
+		});
+
+		it('retries a Cloudflare origin failure (521) — api.x.ai sits behind Cloudflare', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(521, { 'cf-ray': 'ray-1' }, 'web server is down');
+			const second = await waitForWsInstances(2);
+			second.simulateOpen();
+
+			await connectPromise;
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('does not retry a non-retryable status (401)', async () => {
+			(config.xai as any).connectAttempts = 4;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(401, { 'x-request-id': 'req-auth' }, '{"error":"invalid api key"}');
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 401/);
+			expect(wsInstances).toHaveLength(1);
+		});
+
+		it('reports websocket_error with the status and request id after exhausting attempts', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const onError = vi.fn();
+			backend.onError = onError;
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503, { 'x-request-id': 'req-1' });
+			const second = await waitForWsInstances(2);
+			second.simulateUnexpectedResponse(503, { 'x-request-id': 'req-2' });
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+			// errorType stays 'websocket_error' so otp_backend_errors_total{type=...} keeps
+			// its meaning; the status and request id ride along in the message.
+			expect(onError).toHaveBeenCalledWith('websocket_error', expect.stringContaining('HTTP 503'));
+			expect(onError).toHaveBeenCalledWith('websocket_error', expect.stringContaining('req-2'));
+			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('records the request id of a successful handshake and includes it in stream errors', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			wsInstances[0].simulateUpgrade({ 'x-request-id': 'req-live' });
+			wsInstances[0].simulateOpen();
+			await connectPromise;
+
+			wsInstances[0].simulateMessage(JSON.stringify({ type: 'error', message: 'ASR stream timed out' }));
+
+			expect(errorLogs().some((line) => line.includes('requestId=req-live'))).toBe(true);
 		});
 	});
 

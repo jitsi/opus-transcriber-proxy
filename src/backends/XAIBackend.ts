@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import type { IncomingMessage } from 'http';
 import WsWebSocket from 'ws';
 import { config } from '../config';
 import logger from '../logger';
@@ -27,6 +28,96 @@ const XAI_SAMPLE_RATE = 16000;
 // sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
 const XAI_IDLE_SILENCE_MARGIN_MS = 300;
 
+// --- Handshake failure handling -----------------------------------------------------
+//
+// xAI rejects the WS upgrade with an HTTP response when its STT backend is unavailable.
+// Per xAI support, a 503 there means "temporarily unavailable, retry with backoff"
+// (distinct from a 429 rate limit), so these statuses are retried inside connect();
+// anything else (401/403 auth, 400/404 bad request) fails fast — retrying cannot help.
+//
+// api.x.ai sits behind Cloudflare, so its edge also answers with the CF-specific 52x
+// origin-failure codes when xAI's own origin is unreachable — observed in prod on
+// 2026-09-04 (521 + 525), 09-08 (522) and 09-09 (521), i.e. more often than the 503s.
+// Those never reach xAI's API at all and are just as transient, so they retry too.
+const XAI_RETRYABLE_UPGRADE_STATUSES = new Set([
+	408, 425, 429, 500, 502, 503, 504,
+	// Cloudflare origin failures: web server is down / connection timed out / origin
+	// unreachable / a timeout occurred / SSL handshake failed / invalid SSL cert /
+	// origin DNS error.
+	521, 522, 523, 524, 525, 526, 530,
+]);
+const XAI_CONNECT_BACKOFF_MAX_MS = 4000;
+const XAI_CONNECT_BACKOFF_JITTER = 0.25;
+
+// The rejected upgrade's response body is read for diagnostics (xAI support asks for it
+// alongside the request id), but it is an error payload on a socket we are about to
+// abandon: cap the bytes and time-bound the read so a slow/hung response can't stall the
+// retry loop.
+const XAI_ERROR_BODY_MAX_BYTES = 2048;
+const XAI_ERROR_BODY_TIMEOUT_MS = 1000;
+
+// Response headers that may carry xAI's request id. Logged on both a successful and a
+// rejected handshake — it is the identifier xAI support needs to trace a failed call.
+const XAI_REQUEST_ID_HEADERS = ['x-request-id', 'x-requestid', 'request-id', 'x-amzn-requestid', 'cf-ray'];
+
+/** A handshake failure, classified so connect() knows whether a retry can help. */
+class XAIConnectError extends Error {
+	constructor(
+		message: string,
+		readonly retryable: boolean,
+		readonly errorType: string = 'websocket_error',
+		readonly status?: number,
+		readonly requestId?: string,
+	) {
+		super(message);
+		this.name = 'XAIConnectError';
+	}
+}
+
+function pickRequestId(headers: IncomingMessage['headers']): string | undefined {
+	for (const name of XAI_REQUEST_ID_HEADERS) {
+		const value = headers[name];
+		const single = Array.isArray(value) ? value[0] : value;
+		if (single) return single;
+	}
+	return undefined;
+}
+
+/**
+ * Read a rejected upgrade's response body for logging: capped at
+ * XAI_ERROR_BODY_MAX_BYTES and abandoned after XAI_ERROR_BODY_TIMEOUT_MS. Never
+ * rejects — a body we couldn't read must not mask the HTTP status we already have.
+ */
+function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
+	return new Promise((resolve) => {
+		const chunks: Buffer[] = [];
+		let length = 0;
+		let done = false;
+
+		const finish = (note = ''): void => {
+			if (done) return;
+			done = true;
+			clearTimeout(timer);
+			res.destroy();
+			resolve(Buffer.concat(chunks).toString('utf-8').trim() + note);
+		};
+
+		const timer = setTimeout(() => finish(' [truncated: read timed out]'), XAI_ERROR_BODY_TIMEOUT_MS);
+
+		res.on('data', (chunk: Buffer) => {
+			if (done) return;
+			const remaining = XAI_ERROR_BODY_MAX_BYTES - length;
+			chunks.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk);
+			length += chunk.length;
+			if (length >= XAI_ERROR_BODY_MAX_BYTES) finish(' [truncated]');
+		});
+		res.on('end', () => finish());
+		res.on('error', (error: Error) => finish(` [read failed: ${error.message}]`));
+	});
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class XAIBackend implements TranscriptionBackend {
 	private ws?: WsWebSocket;
 	private status: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
@@ -43,6 +134,13 @@ export class XAIBackend implements TranscriptionBackend {
 	private segmenter?: XAIGranularSegmenter;
 	private granularTimer?: ReturnType<typeof setTimeout>;
 	private lastLanguage?: string;
+
+	/**
+	 * xAI's request id for the current stream, from the handshake response headers.
+	 * Included in every failure log for this stream so a report to xAI support can name
+	 * the exact call. Undefined if xAI sent no recognised request-id header.
+	 */
+	private requestId?: string;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage) => void;
@@ -80,97 +178,263 @@ export class XAIBackend implements TranscriptionBackend {
 			);
 		}
 
-		return new Promise((resolve, reject) => {
+		const url = this.buildStreamUrl(backendConfig);
+		const attempts = Math.max(1, config.xai.connectAttempts);
+		let lastError: unknown;
+
+		// Bounded retry with backoff. A rejected upgrade used to be fatal: the
+		// OutgoingConnection was torn down and the next media event immediately opened a
+		// fresh connection, i.e. an unbacked-off retry loop that also dropped the client
+		// WebSocket. Retrying here rides out a short provider blip in place instead.
+		for (let attempt = 1; attempt <= attempts; attempt++) {
 			try {
-				const params = new URLSearchParams({
-					sample_rate: XAI_SAMPLE_RATE.toString(),
-					encoding: 'pcm',
-					interim_results: 'true',
-				});
+				await this.connectOnce(url, attempt, attempts);
+				return;
+			} catch (error) {
+				lastError = error;
+				const retryable = error instanceof XAIConnectError ? error.retryable : true;
+				if (!retryable || attempt === attempts || this.getStatus() === 'closed') break;
 
-				const language = backendConfig.language || config.xai.language;
-				if (language) {
-					params.set('language', language);
-				}
+				const delayMs = this.backoffDelayMs(attempt);
+				logger.warn(
+					`xAI handshake failed for tag ${this.tag} (attempt ${attempt}/${attempts}): ` +
+						`${error instanceof Error ? error.message : String(error)}; retrying in ${delayMs}ms`,
+				);
+				await sleep(delayMs);
+				// close() during the backoff window means the owner has given up on us.
+				// (Read through getStatus() so it is re-read after the await, not narrowed.)
+				if (this.getStatus() === 'closed') break;
+			}
+		}
 
-				if (config.xai.diarize) {
-					params.set('diarize', 'true');
-				}
+		const errorType = lastError instanceof XAIConnectError ? lastError.errorType : 'websocket_error';
+		const message = lastError instanceof Error ? lastError.message : String(lastError);
+		logger.error(`xAI connect failed for tag ${this.tag} after ${attempts} attempt(s): ${message}`);
+		writeMetric(undefined, {
+			name: 'xai_api_error',
+			worker: 'opus-transcriber-proxy',
+			errorType,
+		});
+		// The errorType stays 'websocket_error' for a handshake rejection so the
+		// otp_backend_errors_total{type=...} series (and the alerts on it) keep their
+		// existing meaning; the status code and request id ride along in the message.
+		this.onError?.(errorType, message);
+		this.status = 'failed';
+		this.close();
+		throw lastError instanceof Error ? lastError : new Error(message);
+	}
 
-				// Endpointing (silence-based finalization) is the correct finalizer for our
-				// one-stream-per-participant topology; always sent. Per-connection override
-				// (`endpointing` URL param) wins over the XAI_ENDPOINTING config default.
-				const endpointing = backendConfig.xaiEndpointing ?? config.xai.endpointing;
-				params.set('endpointing', endpointing.toString());
+	/** Exponential backoff with jitter, capped, for handshake retry `attempt` (1-based). */
+	private backoffDelayMs(attempt: number): number {
+		const base = Math.min(config.xai.connectBackoffMs * 2 ** (attempt - 1), XAI_CONNECT_BACKOFF_MAX_MS);
+		const jitter = base * XAI_CONNECT_BACKOFF_JITTER * (Math.random() * 2 - 1);
+		return Math.max(0, Math.round(base + jitter));
+	}
 
-				// smart_turn is end-of-turn detection for a multi-speaker single stream. We
-				// run one WS per participant, so there are no turns — it's opt-in (disabled
-				// by default; it otherwise holds finals across mid-sentence pauses, producing
-				// very long chunks). Sent only when configured via XAI_SMART_TURN or the
-				// `smart_turn` URL param. smart_turn_timeout requires smart_turn.
-				const smartTurn = backendConfig.xaiSmartTurn ?? config.xai.smartTurn;
-				if (smartTurn !== undefined) {
-					params.set('smart_turn', smartTurn.toString());
-					const smartTurnTimeout = backendConfig.xaiSmartTurnTimeout ?? config.xai.smartTurnTimeout;
-					params.set('smart_turn_timeout', smartTurnTimeout.toString());
-				}
+	private buildStreamUrl(backendConfig: BackendConfig): string {
+		const params = new URLSearchParams({
+			sample_rate: XAI_SAMPLE_RATE.toString(),
+			encoding: 'pcm',
+			interim_results: 'true',
+		});
 
-				const url = `${this.wsUrl}?${params.toString()}`;
+		const language = backendConfig.language || config.xai.language;
+		if (language) {
+			params.set('language', language);
+		}
 
+		if (config.xai.diarize) {
+			params.set('diarize', 'true');
+		}
+
+		// Endpointing (silence-based finalization) is the correct finalizer for our
+		// one-stream-per-participant topology; always sent. Per-connection override
+		// (`endpointing` URL param) wins over the XAI_ENDPOINTING config default.
+		const endpointing = backendConfig.xaiEndpointing ?? config.xai.endpointing;
+		params.set('endpointing', endpointing.toString());
+
+		// smart_turn is end-of-turn detection for a multi-speaker single stream. We
+		// run one WS per participant, so there are no turns — it's opt-in (disabled
+		// by default; it otherwise holds finals across mid-sentence pauses, producing
+		// very long chunks). Sent only when configured via XAI_SMART_TURN or the
+		// `smart_turn` URL param. smart_turn_timeout requires smart_turn.
+		const smartTurn = backendConfig.xaiSmartTurn ?? config.xai.smartTurn;
+		if (smartTurn !== undefined) {
+			params.set('smart_turn', smartTurn.toString());
+			const smartTurnTimeout = backendConfig.xaiSmartTurnTimeout ?? config.xai.smartTurnTimeout;
+			params.set('smart_turn_timeout', smartTurnTimeout.toString());
+		}
+
+		return `${this.wsUrl}?${params.toString()}`;
+	}
+
+	/**
+	 * One handshake attempt. Resolves when the socket is open; rejects with an
+	 * XAIConnectError describing whether a retry can help. A failed attempt's socket is
+	 * abandoned: its late error/close events are logged at debug and must not reach the
+	 * owner's callbacks, or a retried connection would be torn down under us.
+	 */
+	private connectOnce(url: string, attempt: number, attempts: number): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			// No API key or params are in the URL (auth is an Authorization header), so it
+			// is safe to log in full — and it is the endpoint + params xAI support asks for.
+			logger.info(`Opening xAI WebSocket for tag ${this.tag} (attempt ${attempt}/${attempts}): ${url}`);
+
+			let ws: WsWebSocket;
+			try {
 				// Use the `ws` npm package so we can pass Authorization header.
 				// The global WebSocket (undici) does not support custom headers.
-				const ws = new WsWebSocket(url, {
+				ws = new WsWebSocket(url, {
 					headers: { Authorization: `Bearer ${this.apiKey}` },
 				});
+			} catch (error) {
+				// Synchronous construction failure (e.g. a malformed XAI_STT_URL) — a retry
+				// cannot help, so fail fast and keep the historical 'connection_failed' type.
+				logger.error(`Failed to create xAI WebSocket connection for tag ${this.tag}:`, error);
+				reject(new XAIConnectError(error instanceof Error ? error.message : 'Unknown error', false, 'connection_failed'));
+				return;
+			}
 
-				logger.info(`Opening xAI WebSocket to ${new URL(url).hostname} for tag: ${this.tag}`);
+			this.ws = ws;
+			this.requestId = undefined;
 
-				this.ws = ws;
+			let settled = false;
+			let abandoned = false;
 
-				ws.addEventListener('open', () => {
-					logger.info(`xAI WebSocket connected for tag: ${this.tag}`);
-					this.status = 'connected';
-					resolve();
+			const fail = (error: XAIConnectError): void => {
+				if (settled) return;
+				settled = true;
+				abandoned = true;
+				this.ws = undefined;
+				try {
+					ws.terminate();
+				} catch {
+					// Already dead — nothing to tear down.
+				}
+				reject(error);
+			};
+
+			// xAI's request id for a SUCCESSFUL handshake: recorded so any later failure on
+			// this stream (e.g. "ASR stream timed out") can be traced in xAI's own logs.
+			ws.on('upgrade', (res: IncomingMessage) => {
+				this.requestId = pickRequestId(res.headers);
+				logger.info(`xAI handshake accepted for tag ${this.tag}: requestId=${this.requestId ?? 'none'}`);
+			});
+
+			// The upgrade was answered with an HTTP response instead of a 101. `ws` emits its
+			// generic "Unexpected server response: <code>" error ONLY when nothing listens for
+			// 'unexpected-response'; with this listener attached we own the abort, and in
+			// exchange we get the status, headers (request id) and body xAI support needs.
+			ws.on('unexpected-response', (req: { destroy: () => void }, res: IncomingMessage) => {
+				void this.reportUpgradeRejection(res, url, attempt, attempts).then((error) => {
+					// fail() first: it marks the attempt settled/abandoned, so the transport
+					// error that aborting the request may raise can't replace this HTTP status
+					// as the rejection reason. terminate() inside fail() already aborts the
+					// request; destroy() is the documented way to release it from here.
+					fail(error);
+					req.destroy();
 				});
+			});
 
-				ws.addEventListener('message', async (event) => {
-					await this.handleMessage(event.data);
-				});
+			ws.addEventListener('open', () => {
+				logger.info(`xAI WebSocket connected for tag: ${this.tag} (requestId=${this.requestId ?? 'none'})`);
+				this.status = 'connected';
+				settled = true;
+				resolve();
+			});
 
-				ws.addEventListener('error', (event) => {
-					const errorMessage = (event as any)?.message || 'WebSocket error';
-					logger.error(`xAI WebSocket error for tag ${this.tag}: ${errorMessage}`);
+			ws.addEventListener('message', async (event) => {
+				await this.handleMessage(event.data);
+			});
+
+			ws.addEventListener('error', (event) => {
+				const errorMessage = (event as any)?.message || 'WebSocket error';
+
+				if (abandoned) {
+					// Fallout from tearing down an already-failed attempt's socket.
+					logger.debug(`Late error on abandoned xAI socket for tag ${this.tag}: ${errorMessage}`);
+					return;
+				}
+
+				if (!settled) {
+					// Pre-open transport failure (DNS/TCP/TLS/reset) — transient by nature, so
+					// retryable. An HTTP rejection arrives via 'unexpected-response' instead.
+					logger.warn(
+						`xAI WebSocket error during handshake for tag ${this.tag} (attempt ${attempt}/${attempts}): ${errorMessage}`,
+					);
 					writeMetric(undefined, {
 						name: 'xai_api_error',
 						worker: 'opus-transcriber-proxy',
-						errorType: 'websocket_error',
+						errorType: 'handshake_error',
 					});
-					this.onError?.('websocket_error', 'WebSocket connection error');
-					this.status = 'failed';
-					this.close();
-					reject(new Error(`WebSocket error: ${errorMessage}`));
-				});
+					fail(new XAIConnectError(errorMessage, true));
+					return;
+				}
 
-				ws.addEventListener('close', (event) => {
-					logger.info(
-						`xAI WebSocket closed for tag ${this.tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
-					);
-					// close() fires onClosed exactly once and is idempotent, so the
-					// error → close() → 'close' event → close() sequence cannot double-fire.
-					this.close();
-				});
-			} catch (error) {
-				logger.error(`Failed to create xAI WebSocket connection for tag ${this.tag}:`, error);
+				// Error on a live stream — unchanged fatal path.
+				logger.error(`xAI WebSocket error for tag ${this.tag} (requestId=${this.requestId ?? 'none'}): ${errorMessage}`);
 				writeMetric(undefined, {
 					name: 'xai_api_error',
 					worker: 'opus-transcriber-proxy',
-					errorType: 'connection_failed',
+					errorType: 'websocket_error',
 				});
-				this.onError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
+				this.onError?.('websocket_error', 'WebSocket connection error');
 				this.status = 'failed';
-				reject(error);
-			}
+				this.close();
+			});
+
+			ws.addEventListener('close', (event) => {
+				if (abandoned) {
+					logger.debug(`Abandoned xAI handshake socket closed for tag ${this.tag}: code=${event.code}`);
+					return;
+				}
+
+				if (!settled) {
+					// Closed before the handshake completed, without an 'error' event.
+					fail(new XAIConnectError(`WebSocket closed during handshake (code=${event.code})`, true));
+					return;
+				}
+
+				logger.info(
+					`xAI WebSocket closed for tag ${this.tag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean} requestId=${this.requestId ?? 'none'}`,
+				);
+				// close() fires onClosed exactly once and is idempotent, so the
+				// error → close() → 'close' event → close() sequence cannot double-fire.
+				this.close();
+			});
 		});
+	}
+
+	/**
+	 * Log everything xAI support needs to trace a rejected upgrade — status, request id,
+	 * retry-after, response headers and (capped) body — and classify it for retry.
+	 */
+	private async reportUpgradeRejection(res: IncomingMessage, url: string, attempt: number, attempts: number): Promise<XAIConnectError> {
+		const status = res.statusCode ?? 0;
+		const requestId = pickRequestId(res.headers);
+		const retryAfter = res.headers['retry-after'] ?? 'none';
+		const retryable = XAI_RETRYABLE_UPGRADE_STATUSES.has(status);
+		const body = await readUpgradeResponseBody(res);
+
+		logger.error(
+			`xAI handshake rejected for tag ${this.tag} (attempt ${attempt}/${attempts}): ` +
+				`status=${status} ${res.statusMessage ?? ''} requestId=${requestId ?? 'none'} ` +
+				`retryAfter=${retryAfter} retryable=${retryable} url=${url} ` +
+				`headers=${JSON.stringify(res.headers)} body=${JSON.stringify(body)}`,
+		);
+		writeMetric(undefined, {
+			name: 'xai_api_error',
+			worker: 'opus-transcriber-proxy',
+			errorType: `upgrade_http_${status}`,
+		});
+
+		return new XAIConnectError(
+			`xAI handshake rejected: HTTP ${status} (requestId=${requestId ?? 'none'})`,
+			retryable,
+			'websocket_error',
+			status,
+			requestId,
+		);
 	}
 
 	async sendAudio(audioBase64: string): Promise<void> {
@@ -281,7 +545,7 @@ export class XAIBackend implements TranscriptionBackend {
 		} else if (type === 'transcript.done') {
 			this.handleDone(parsedMessage);
 		} else if (type === 'error') {
-			logger.error(`xAI API error for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
+			logger.error(`xAI API error for ${this.tag} (requestId=${this.requestId ?? 'none'}): ${JSON.stringify(parsedMessage)}`);
 			const message: string = parsedMessage.message || JSON.stringify(parsedMessage);
 			// xAI closes the ASR stream after a stretch of silence/inactivity. The exact
 			// message observed on wss://api.x.ai/v1/stt (2026-06-16) is:
