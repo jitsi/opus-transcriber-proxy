@@ -108,7 +108,7 @@ Set environment variables or use a `.env` file:
 | `XAI_GRANULAR_MIN_WORDS` | `5` | Frozen words batched into segments of at least this size (or at a sentence end) |
 | `XAI_STT_URL` | `wss://api.x.ai/v1/stt` | Override STT endpoint |
 | `XAI_CONNECT_ATTEMPTS` | `4` | Handshake attempts before a connect is reported failed. A rejected upgrade with a transient status (408/425/429/500/502/503/504, plus the Cloudflare origin-failure codes 521-526/530) or a pre-open transport error is retried; 401/403/400/404 fail fast |
-| `XAI_CONNECT_BACKOFF_MS` | `250` | Base delay between handshake retries; doubles per attempt (±25% jitter, capped at 4s) |
+| `XAI_CONNECT_BACKOFF_MS` | `250` | Base delay between handshake retries; doubles per attempt (±25% jitter, capped at 4s). A `Retry-After` on the rejection takes precedence, up to the same 4s cap — a longer one means no retry |
 
 ### Server
 

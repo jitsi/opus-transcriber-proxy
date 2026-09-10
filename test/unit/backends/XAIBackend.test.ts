@@ -63,13 +63,15 @@ vi.mock('ws', () => {
 			const req = { destroy: () => {} };
 			const res = new EventEmitter() as any;
 			res.statusCode = status;
-			res.statusMessage = 'Service Unavailable';
+			res.statusMessage = status === 503 ? 'Service Unavailable' : 'Error';
 			res.headers = headers;
 			res.destroy = () => {};
+			// The backend reads the body as text, like it does off a real IncomingMessage.
+			res.setEncoding = () => {};
 			this.emit('unexpected-response', req, res);
 			// The body arrives asynchronously, after the backend has attached its readers.
 			setImmediate(() => {
-				if (body) res.emit('data', Buffer.from(body));
+				if (body) res.emit('data', body);
 				res.emit('end');
 			});
 		}
@@ -372,6 +374,82 @@ describe('XAIBackend', () => {
 			expect(onError).toHaveBeenCalledWith('websocket_error', expect.stringContaining('HTTP 503'));
 			expect(onError).toHaveBeenCalledWith('websocket_error', expect.stringContaining('req-2'));
 			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('honours a Retry-After the server sent, in place of its own backoff', async () => {
+			(config.xai as any).connectAttempts = 2;
+			(config.xai as any).connectBackoffMs = 60_000; // would never fire inside the test
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+				// Retry-After: 0 → retry immediately, rather than the 60s backoff.
+				wsInstances[0].simulateUnexpectedResponse(503, { 'retry-after': '0' });
+				const second = await waitForWsInstances(2);
+				second.simulateOpen();
+
+				await connectPromise;
+				expect(backend.getStatus()).toBe('connected');
+				expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('(Retry-After)'))).toBe(true);
+			} finally {
+				(config.xai as any).connectBackoffMs = 0;
+			}
+		});
+
+		it('gives up rather than holding audio for a Retry-After beyond the ceiling', async () => {
+			(config.xai as any).connectAttempts = 4;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			// 30s is far longer than we are willing to buffer a participant's audio for.
+			wsInstances[0].simulateUnexpectedResponse(503, { 'retry-after': '30' });
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+			expect(wsInstances).toHaveLength(1);
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('not retrying'))).toBe(true);
+		});
+
+		it('does not retry when connectAttempts is 1, even for a retryable status', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(503);
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+			expect(wsInstances).toHaveLength(1);
+		});
+
+		it('retries a close that arrives during the handshake with no error event', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateClose(1006, '', false);
+			const second = await waitForWsInstances(2);
+			second.simulateOpen();
+
+			await connectPromise;
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('stops retrying when close() is called during the backoff window', async () => {
+			(config.xai as any).connectAttempts = 4;
+			(config.xai as any).connectBackoffMs = 30;
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+				wsInstances[0].simulateUnexpectedResponse(503);
+				// Let the rejection settle the attempt, then close before the retry fires.
+				await new Promise((resolve) => setImmediate(resolve));
+				await new Promise((resolve) => setImmediate(resolve));
+				backend.close();
+
+				await expect(connectPromise).rejects.toThrow(/HTTP 503/);
+				expect(wsInstances).toHaveLength(1);
+			} finally {
+				(config.xai as any).connectBackoffMs = 0;
+			}
 		});
 
 		it('records the request id of a successful handshake and includes it in stream errors', async () => {
