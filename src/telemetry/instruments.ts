@@ -26,6 +26,7 @@ interface Instruments {
 	clientWebsocketCloseTotal: Counter;
 	backendAudioSentBytesTotal: Counter;
 	backendErrorsTotal: Counter;
+	backendHandshakeFailuresTotal: Counter;
 	transcriptionsReceivedTotal: Counter;
 	transcriptionsDeliveredTotal: Counter;
 	dispatcherMessagesSentTotal: Counter;
@@ -101,6 +102,16 @@ function createInstruments(): Instruments {
 		backendErrorsTotal: meter.createCounter('otp_backend_errors_total', {
 			description: 'Total backend errors',
 			unit: '{errors}',
+		}),
+
+		// Per-attempt handshake failures, including the ones a retry then recovers from —
+		// otp_backend_errors_total only counts a connection once its retries are exhausted,
+		// so on its own it hides a provider blip the retry absorbed (and understates the
+		// failure rate during an outage, since each loss now takes seconds to report).
+		// Labels: provider, reason (http_<status> | transport | timeout).
+		backendHandshakeFailuresTotal: meter.createCounter('otp_backend_handshake_failures_total', {
+			description: 'Backend WebSocket handshake attempts that failed (before any retry)',
+			unit: '{attempts}',
 		}),
 
 		transcriptionsReceivedTotal: meter.createCounter('otp_transcriptions_received_total', {
