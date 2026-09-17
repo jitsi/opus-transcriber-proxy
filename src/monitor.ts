@@ -139,6 +139,11 @@ function runAttempt(sessionId: string, attemptNo: number): Promise<AttemptResult
 			const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
 			const ok = code === 0;
 			const connected = /Connected!/.test(buf);
+			// The target server's `info` event (build/runtime/version), echoed by replay-dump.cjs as
+			// `<info> {...}`. Logged here so the version of OTP this check actually hit is visible in
+			// the monitor's own log stream, not just buried in the replay child's captured output.
+			const infoMatch = buf.match(/<info> (\{.*\})/);
+			if (infoMatch) log(`monitor: attempt ${attemptNo}/${ATTEMPTS} connected to ${infoMatch[1]}`);
 			const resultLine = (buf.match(/INTEGRATION_RESULT:[^\n]*/g) || []).pop();
 			const finalsMatch = buf.match(/(\d+)\s+final transcript/);
 			const finals = finalsMatch ? parseInt(finalsMatch[1], 10) : 0;
