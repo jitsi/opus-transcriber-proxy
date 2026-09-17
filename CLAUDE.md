@@ -545,6 +545,12 @@ hasn't finalized yet is not a backend failure. Passed to `replay-dump.cjs` as
 `--assert-min-finals-or-interims=<N>` instead of `--assert-min-finals=<N>`; set to `false` to require
 finals strictly.
 
+The target server's `info` message (`gitHash`, `runtime`, `provider`, `instanceId`, etc. — see
+"Info" under WebSocket Protocol) is logged on every attempt: `replay-dump.cjs` echoes it verbatim as
+`<info> {...}`, and `runAttempt` re-logs that line through the monitor's own timestamped `log()`, so
+which OTP build/version a check actually connected to is visible in the monitor's log stream, not
+just buried in the replay child's captured output.
+
 ```bash
 MONITOR_URL="wss://host/transcribe?sessionId=__SESSION_ID__&sendBack=true" node dist/bundle/monitor.js
 ```
@@ -563,10 +569,11 @@ Configured entirely from the environment:
 - `MONITOR_HEADERS` — extra request headers as a JSON object (e.g. CF Access service-token headers)
 - `MONITOR_PORT` / `PORT` — port for the metrics HTTP server (default 8080)
 
-Note: the monitor process does not self-report its build (`gitHash`) anywhere — `monitor.ts` doesn't
-import `src/buildInfo.ts`, so it emits no log line, no `/metrics` label, and sends no `info` message.
-To identify which commit a running monitor sidecar is from, check the `server.js` bundle shipped in
-the same image (same build) instead.
+Note: the monitor process does not self-report its own build (`gitHash`) anywhere — `monitor.ts`
+doesn't import `src/buildInfo.ts`, so it emits no log line, no `/metrics` label, and sends no `info`
+message of its own. To identify which commit a running monitor sidecar is from, check the `server.js`
+bundle shipped in the same image (same build) instead. This is separate from the *target* server's
+`info` message, which the monitor does log per attempt — see above.
 
 ## WebSocket Protocol
 

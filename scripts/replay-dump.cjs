@@ -454,6 +454,16 @@ ws.on('message', (data) => {
     try {
         const parsed = JSON.parse(data.toString());
 
+        // Server `info` message (build/runtime/version for this connection), sent once right after
+        // connect. Dumped verbatim — the shape isn't ours to pin down (the Worker augments it
+        // in-place) — so replay output, and the monitor sidecar that captures this output, shows
+        // what OTP build/version it actually connected to.
+        if (parsed.event === 'info') {
+            process.stdout.write('\r' + ' '.repeat(120) + '\r');
+            console.log(`<info> ${JSON.stringify(parsed)}`);
+            return;
+        }
+
         // Translated audio frames returned by /translate — count them (not printed individually).
         if (parsed.event === 'media') {
             mediaPacketsReceived++;
