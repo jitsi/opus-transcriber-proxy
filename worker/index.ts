@@ -352,6 +352,70 @@ async function handleWebSocketWithDispatcher(
 	const containerWs = containerResponse.webSocket;
 	containerWs.accept();
 
+	// Pipe: container → client (downstream, intercept for dispatcher). Attached immediately after
+	// accept() and before any `await` below (e.g. the Dispatcher DO connect) -- the container sends
+	// its `info` message the instant it accepts the connection, and a message that arrives with no
+	// listener registered yet is silently dropped (standard EventTarget semantics), not queued.
+	containerWs.addEventListener('message', (event) => {
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (typeof event.data === 'string') {
+			let parsedInfo: Record<string, unknown> | null = null;
+			try {
+				const p = JSON.parse(event.data);
+				if (p && p.event === 'info') parsedInfo = p;
+			} catch {
+				parsedInfo = null;
+			}
+			if (parsedInfo) {
+				parsedInfo.worker = buildWorkerInfo(request, env);
+				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+					serverWs.send(JSON.stringify(parsedInfo));
+				}
+				return;
+			}
+		}
+
+		// Forward to client immediately
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+			serverWs.send(event.data);
+		}
+
+		// Dispatch transcriptions via DO WebSocket
+		if (typeof event.data === 'string') {
+			try {
+				const data = JSON.parse(event.data) as TranscriptionMessage;
+				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
+				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
+				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
+					const dispatcherMessage: DispatcherTranscriptionMessage = {
+						sessionId,
+						endpointId: data.participant?.id || 'unknown',
+						text: data.transcript.map((t) => t.text).join(' '),
+						timestamp: data.timestamp,
+						language: data.language,
+					};
+
+					if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+						dispatcherWs.send(JSON.stringify(dispatcherMessage));
+					} else if (env.DISPATCHER_DO) {
+						// Queue message while disconnected
+						messageQueue.push(dispatcherMessage);
+						if (messageQueue.length === 1) {
+							console.log(`Dispatcher not connected, queueing messages, sessionId=${sessionId}`);
+						}
+						if (!isReconnecting && (!dispatcherWs || dispatcherWs.readyState !== WebSocket.READY_STATE_OPEN)) {
+							scheduleReconnect();
+						}
+					}
+				}
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				console.error(`Failed to parse/dispatch transcription: ${msg}, sessionId=${sessionId}`);
+			}
+		}
+	});
+
 	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit)
 	// Each session gets its own DO instance for isolation.
 	let dispatcherWs: WebSocket | null = null;
@@ -490,67 +554,6 @@ async function handleWebSocketWithDispatcher(
 
 	// Setup handlers for initial connection
 	setupDispatcherHandlers();
-
-	// Pipe: container → client (downstream, intercept for dispatcher)
-	containerWs.addEventListener('message', (event) => {
-		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
-		// details) and forward the combined message, so the client sees the whole path in one message.
-		if (typeof event.data === 'string') {
-			let parsedInfo: Record<string, unknown> | null = null;
-			try {
-				const p = JSON.parse(event.data);
-				if (p && p.event === 'info') parsedInfo = p;
-			} catch {
-				parsedInfo = null;
-			}
-			if (parsedInfo) {
-				parsedInfo.worker = buildWorkerInfo(request, env);
-				if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
-					serverWs.send(JSON.stringify(parsedInfo));
-				}
-				return;
-			}
-		}
-
-		// Forward to client immediately
-		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
-			serverWs.send(event.data);
-		}
-
-		// Dispatch transcriptions via DO WebSocket
-		if (typeof event.data === 'string') {
-			try {
-				const data = JSON.parse(event.data) as TranscriptionMessage;
-				// Forward both normal transcriptions and /translate transcripts (realtime-translation-result),
-				// finals only. `media` (audio) and other events have no matching `type` and are skipped.
-				if ((data.type === 'transcription-result' || data.type === 'realtime-translation-result') && !data.is_interim) {
-					const dispatcherMessage: DispatcherTranscriptionMessage = {
-						sessionId,
-						endpointId: data.participant?.id || 'unknown',
-						text: data.transcript.map((t) => t.text).join(' '),
-						timestamp: data.timestamp,
-						language: data.language,
-					};
-
-					if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
-						dispatcherWs.send(JSON.stringify(dispatcherMessage));
-					} else if (env.DISPATCHER_DO) {
-						// Queue message while disconnected
-						messageQueue.push(dispatcherMessage);
-						if (messageQueue.length === 1) {
-							console.log(`Dispatcher not connected, queueing messages, sessionId=${sessionId}`);
-						}
-						if (!isReconnecting && (!dispatcherWs || dispatcherWs.readyState !== WebSocket.READY_STATE_OPEN)) {
-							scheduleReconnect();
-						}
-					}
-				}
-			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				console.error(`Failed to parse/dispatch transcription: ${msg}, sessionId=${sessionId}`);
-			}
-		}
-	});
 
 	// Flush remaining messages before closing session
 	async function flushBeforeClose(): Promise<void> {
