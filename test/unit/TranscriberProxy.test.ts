@@ -695,4 +695,139 @@ describe('TranscriberProxy', () => {
 			expect(endMsg).toMatch(/durationSec=\d+\.\d/);
 		});
 	});
+	describe('per-participant connection failure', () => {
+		const startEvent = (tag: string, mediaFormat: object) => ({ event: 'start', start: { tag, mediaFormat } });
+		const mediaEvent = (tag: string) => ({ event: 'media', media: { tag, payload: 'AAAA' } });
+		/** The mocked OutgoingConnection instance created by the Nth constructor call. */
+		const instance = (n: number) => vi.mocked(OutgoingConnection).mock.instances[n] as any;
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it('does not emit a session error or close the client socket when one connection fails', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			const errorSpy = vi.fn();
+			const closedSpy = vi.fn();
+			proxy.on('error', errorSpy);
+			proxy.on('closed', closedSpy);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			const conn = instance(0);
+			// What a terminal backend failure does: closes itself (onClosed), then reports.
+			conn.onClosed('tag1');
+			conn.onError('tag1', 'Error initializing transcription backend: xAI handshake rejected: HTTP 404');
+
+			// The session-level 'error' handler unregisters the session and closes the client
+			// WebSocket with 1011 — one participant's provider failure must not reach it.
+			expect(errorSpy).not.toHaveBeenCalled();
+			expect(closedSpy).not.toHaveBeenCalled();
+			expect(mockWebSocket.close).not.toHaveBeenCalled();
+		});
+
+		it('leaves the other participants transcribing', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			proxy.handleStartEvent(startEvent('tag2', { encoding: 'opus' }));
+			const failing = instance(0);
+			const healthy = instance(1);
+
+			failing.onClosed('tag1');
+			failing.onError('tag1', 'boom');
+
+			proxy.handleMediaEvent(mediaEvent('tag2'));
+			expect(healthy.handleMediaEvent).toHaveBeenCalledTimes(1);
+			expect(healthy.close).not.toHaveBeenCalled();
+		});
+
+		it('reopens the failed tag with the format from its start event, not the URL default', () => {
+			vi.useFakeTimers();
+			// A tag that negotiated ogg would silently fall back to the URL default ('opus')
+			// if the recreated connection forgot what its start event said.
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'ogg-opus' }));
+			instance(0).onClosed('tag1');
+			instance(0).onError('tag1', 'boom');
+
+			vi.advanceTimersByTime(1000);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+
+			expect(OutgoingConnection).toHaveBeenCalledTimes(2);
+			expect(vi.mocked(OutgoingConnection).mock.calls[1][1]).toEqual({ encoding: 'ogg' });
+			// ...and without the "no prior start event" warning, since we do have one.
+			expect(vi.mocked(logger.warn).mock.calls.some(([m]) => String(m).includes('no prior start event'))).toBe(false);
+		});
+
+		it('backs off exponentially instead of reopening on every media frame', () => {
+			vi.useFakeTimers();
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			instance(0).onClosed('tag1');
+			instance(0).onError('tag1', 'boom');
+
+			// Media arrives every ~20ms; none of it may reopen the connection yet.
+			for (let i = 0; i < 40; i++) {
+				vi.advanceTimersByTime(20);
+				proxy.handleMediaEvent(mediaEvent('tag1'));
+			}
+			expect(OutgoingConnection).toHaveBeenCalledTimes(1);
+
+			// 1000ms base delay has now passed: exactly one new connection.
+			vi.advanceTimersByTime(300);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+			expect(OutgoingConnection).toHaveBeenCalledTimes(2);
+
+			// Second consecutive failure doubles the delay.
+			instance(1).onClosed('tag1');
+			instance(1).onError('tag1', 'boom');
+			vi.advanceTimersByTime(1500);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+			expect(OutgoingConnection).toHaveBeenCalledTimes(2);
+			vi.advanceTimersByTime(600);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+			expect(OutgoingConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('resets the backoff once a backend connects again', () => {
+			vi.useFakeTimers();
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			instance(0).onClosed('tag1');
+			instance(0).onError('tag1', 'boom');
+			vi.advanceTimersByTime(1000);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+
+			// This one connects, so the next failure starts from the base delay again.
+			instance(1).onBackendConnected('tag1');
+			instance(1).onClosed('tag1');
+			instance(1).onError('tag1', 'boom');
+
+			vi.advanceTimersByTime(1000);
+			proxy.handleMediaEvent(mediaEvent('tag1'));
+			expect(OutgoingConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('an explicit start event reopens the connection immediately, ignoring the backoff', () => {
+			vi.useFakeTimers();
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+			vi.mocked(OutgoingConnection).mockClear();
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			instance(0).onClosed('tag1');
+			instance(0).onError('tag1', 'boom');
+
+			proxy.handleStartEvent(startEvent('tag1', { encoding: 'opus' }));
+			expect(OutgoingConnection).toHaveBeenCalledTimes(2);
+		});
+	});
 });

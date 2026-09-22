@@ -70,6 +70,13 @@ export class OutgoingConnection {
 	onCompleteTranscription?: (message: TranscriptionMessage) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
 	onBackendError?: (errorType: string, errorMessage: string) => void = undefined;
+	/** Fired whenever a backend connection is established, including a reconnect in place. */
+	onBackendConnected?: (tag: string) => void = undefined;
+	/**
+	 * Fired when this connection has failed terminally and closed itself. It reports the loss of
+	 * ONE participant's stream: the owner should not tear the session down over it, since the
+	 * other participants' connections are unaffected.
+	 */
 	onError?: (tag: string, error: any) => void = undefined;
 
 	private options: TranscriberProxyOptions;
@@ -181,6 +188,7 @@ export class OutgoingConnection {
 			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
 
 			logger.info(`Transcription backend connected for tag: ${this.localTag}`);
+			this.onBackendConnected?.(this.localTag);
 
 			// Only flush if the decoder is ready.  If a newer reinitializeDecoder()
 			// call is still in flight (e.g. a start event arrived while we were
@@ -414,6 +422,7 @@ export class OutgoingConnection {
 			instruments.backendConnectionDurationSeconds.record(connectDurationSec, { provider: this.options.provider || 'unknown' });
 
 			logger.info(`Backend reconnected for tag: ${this.localTag}`);
+			this.onBackendConnected?.(this.localTag);
 			return true;
 		} catch (error) {
 			if (generation !== this.reinitGeneration) {

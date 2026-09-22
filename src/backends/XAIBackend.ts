@@ -32,21 +32,31 @@ const XAI_IDLE_SILENCE_MARGIN_MS = 300;
 // --- Handshake failure handling -----------------------------------------------------
 //
 // xAI rejects the WS upgrade with an HTTP response when its STT backend is unavailable.
-// Per xAI support, a 503 there means "temporarily unavailable, retry with backoff"
-// (distinct from a 429 rate limit), so these statuses are retried inside connect();
-// anything else (401/403 auth, 400/404 bad request) fails fast — retrying cannot help.
+// Every such rejection is retried except the ones below, where a retry provably cannot
+// help: the credential is rejected, and it will be rejected identically on every
+// attempt until someone changes the key.
 //
-// api.x.ai sits behind Cloudflare, so its edge also answers with the CF-specific 52x
-// origin-failure codes when xAI's own origin is unreachable — observed in prod on
-// 2026-09-04 (521 + 525), 09-08 (522) and 09-09 (521), i.e. more often than the 503s.
-// Those never reach xAI's API at all and are just as transient, so they retry too.
-const XAI_RETRYABLE_UPGRADE_STATUSES = new Set([
-	408, 425, 429, 500, 502, 503, 504,
-	// Cloudflare origin failures: web server is down / connection timed out / origin
-	// unreachable / a timeout occurred / SSL handshake failed / invalid SSL cert /
-	// origin DNS error.
-	521, 522, 523, 524, 525, 526, 530,
-]);
+// This is a denylist rather than an allowlist of retryable statuses because the
+// allowlist has now been wrong twice, in the same direction both times. It started as
+// 408/425/429/500/502/503/504 after the 2026-09-10 fleet-wide 503s; the Cloudflare 52x
+// origin-failure codes had to be added after 09-04/09-08/09-09, because api.x.ai sits
+// behind Cloudflare and its edge answers those when xAI's origin is unreachable; then
+// on 2026-09-22 xAI answered *404* to every /v1/stt upgrade for 7 minutes fleet-wide
+// (34 rejections across 5 colos), and 404 was explicitly listed as fail-fast on the
+// reading that it meant "you asked for a URL that does not exist", i.e. our own
+// misconfiguration. It did not: `server-timing: cfOrigin;dur=217` showed Cloudflare had
+// reached an origin which answered the 404 itself, the body was empty with no error
+// detail whatsoever, and the very same URL from the very same build connected again the
+// moment the incident cleared. Nothing in an xAI rejection distinguishes "your request
+// is wrong" from "our backend is missing", so the status cannot carry that decision.
+//
+// Failing fast on a genuinely malformed request was never worth much anyway: a bad
+// XAI_STT_URL or query param breaks every connection forever, so it is exactly as loud
+// whether or not we spend a couple of seconds retrying first. A transient rejection
+// treated as fatal, by contrast, costs a conference its captions (a malformed URL that
+// cannot even be parsed still fails fast — see connectOnce's construction catch).
+const XAI_FATAL_UPGRADE_STATUSES = new Set([401, 403]);
+
 const XAI_CONNECT_BACKOFF_MAX_MS = 4000;
 const XAI_CONNECT_BACKOFF_JITTER = 0.25;
 
@@ -560,7 +570,7 @@ export class XAIBackend implements TranscriptionBackend {
 		const status = res.statusCode ?? 0;
 		const requestId = pickRequestId(res.headers);
 		const retryAfterMs = parseRetryAfterMs(res.headers['retry-after']);
-		const retryable = XAI_RETRYABLE_UPGRADE_STATUSES.has(status);
+		const retryable = !XAI_FATAL_UPGRADE_STATUSES.has(status);
 		const willRetry = retryable && attempt < attempts;
 
 		// The full headers + body are what a report to xAI support needs, so they go on
