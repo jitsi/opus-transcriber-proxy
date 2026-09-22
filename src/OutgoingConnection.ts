@@ -134,8 +134,11 @@ export class OutgoingConnection {
 					return;
 				}
 				logger.error(`Failed to reinitialize decoder for tag ${this.localTag}:`, error);
-				this.onError?.(this.localTag, error instanceof Error ? error.message : String(error));
+				// doClose first, then onError: onError means "this stream is gone", and the
+				// owner relies on the connection having already closed and deregistered itself
+				// (onClosed) by the time it fires, same as every other onError site.
 				this.doClose(true);
+				this.onError?.(this.localTag, error instanceof Error ? error.message : String(error));
 			});
 		}
 	}

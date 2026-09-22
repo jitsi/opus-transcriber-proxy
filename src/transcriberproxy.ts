@@ -360,8 +360,11 @@ export class TranscriberProxy extends EventEmitter {
 			// — which is exactly what turned the 2026-09-22 xAI outage into a total caption
 			// outage per meeting. The client keeps its socket, the other tags keep transcribing,
 			// and this tag's next media frame reopens it (paced by scheduleConnectionRetry).
+			// warn, not error: the root cause has already been logged at error level by the
+			// backend / OutgoingConnection, and during a provider outage every participant hits
+			// this every backoff interval — a second error line per failure doubles the volume.
 			this.scheduleConnectionRetry(tag);
-			logger.error(
+			logger.warn(
 				`Connection for tag "${tag}" failed and was closed; the session stays up and the ` +
 					`next media frame will retry: ${error instanceof Error ? error.message : String(error)}`,
 			);
