@@ -25,6 +25,12 @@ export interface OpusEncoderConfig {
 export interface EncodedFrame {
 	data: Uint8Array;
 	inDtx: boolean;
+	/**
+	 * The RFC 6464 audio level of the PCM frame that was encoded (0 = full scale .. 127 = silence, in -dBov), for
+	 * the ssrc-audio-level RTP header extension. Computed by both backends from the input PCM (see audioLevel.ts);
+	 * libopus itself exposes no signal-level output.
+	 */
+	audioLevel: number;
 }
 
 /** The surface both backends implement and the facade delegates to. */

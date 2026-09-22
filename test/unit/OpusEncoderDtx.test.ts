@@ -81,6 +81,19 @@ describe.each(backends)('Opus DTX (%s backend)', (backend) => {
 		}
 	});
 
+	it('reports an RFC 6464 audio level per frame: loud for the tone, 127 for silence', async () => {
+		const enc = await makeEncoder(backend, base);
+		try {
+			const voice = enc.encodeFrame(tone(5));
+			const quiet = enc.encodeFrame(silence(5));
+			// 9000-amplitude sine: RMS 6364 -> -14.2 dBov.
+			expect(voice.map((f) => f.audioLevel)).toEqual([14, 14, 14, 14, 14]);
+			expect(quiet.map((f) => f.audioLevel)).toEqual([127, 127, 127, 127, 127]);
+		} finally {
+			enc.free();
+		}
+	});
+
 	it('never flags inDtx when DTX is disabled (default)', async () => {
 		const enc = await makeEncoder(backend, base); // dtx omitted -> off
 		try {

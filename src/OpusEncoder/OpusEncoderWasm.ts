@@ -1,3 +1,4 @@
+import { computeAudioLevel } from './audioLevel';
 import type { EncodedFrame, IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
 // This file deliberately logs via `console` (not the Winston logger): it is part of the Worker-safe
@@ -139,7 +140,8 @@ export class OpusEncoderWasm implements IOpusEncoder {
 
 		while (input.length - offset >= frameSizeBytes) {
 			// subarray is a view (no copy); the copy into the WASM heap is the .set below.
-			this.pcmBuffer.set(input.subarray(offset, offset + frameSizeBytes));
+			const framePcm = input.subarray(offset, offset + frameSizeBytes);
+			this.pcmBuffer.set(framePcm);
 
 			const encodedBytes = this.module._opus_frame_encode(
 				this.ctx,
@@ -162,7 +164,11 @@ export class OpusEncoderWasm implements IOpusEncoder {
 			// Read the DTX flag for the frame just encoded (0 unless DTX is enabled). Must copy the output:
 			// outputBuffer is the reused WASM-heap view, overwritten on the next iteration/call.
 			const inDtx = this.module._opus_frame_encoder_get_last_in_dtx(this.ctx) !== 0;
-			encodedFrames.push({ data: new Uint8Array(this.outputBuffer.subarray(0, encodedBytes)), inDtx });
+			encodedFrames.push({
+				data: new Uint8Array(this.outputBuffer.subarray(0, encodedBytes)),
+				inDtx,
+				audioLevel: computeAudioLevel(framePcm),
+			});
 
 			offset += frameSizeBytes;
 		}
