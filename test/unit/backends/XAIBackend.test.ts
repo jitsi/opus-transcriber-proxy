@@ -367,6 +367,38 @@ describe('XAIBackend', () => {
 			expect(backend.getStatus()).toBe('connected');
 		});
 
+		it('retries a 404 — xAI answered 404 fleet-wide during the 2026-09-22 outage', async () => {
+			(config.xai as any).connectAttempts = 2;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			// The real rejection carried an empty body and no error detail whatsoever.
+			wsInstances[0].simulateUnexpectedResponse(404, { 'cf-ray': 'a3ed619c9d00efd6-PDX' }, '');
+			const second = await waitForWsInstances(2);
+			second.simulateOpen();
+
+			await connectPromise;
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('retries any status that is not an auth failure', async () => {
+			for (const status of [400, 404, 418, 500, 521]) {
+				resetXAIConnectCooldown();
+				wsInstances.length = 0;
+				(config.xai as any).connectAttempts = 2;
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+				wsInstances[0].simulateUnexpectedResponse(status, {}, '');
+				const second = await waitForWsInstances(2);
+				second.simulateOpen();
+
+				await connectPromise;
+				expect(backend.getStatus(), `status ${status} should be retried`).toBe('connected');
+				backend.close();
+			}
+		});
+
 		it('does not retry a non-retryable status (401)', async () => {
 			(config.xai as any).connectAttempts = 4;
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
@@ -375,6 +407,17 @@ describe('XAIBackend', () => {
 			wsInstances[0].simulateUnexpectedResponse(401, { 'x-request-id': 'req-auth' }, '{"error":"invalid api key"}');
 
 			await expect(connectPromise).rejects.toThrow(/HTTP 401/);
+			expect(wsInstances).toHaveLength(1);
+		});
+
+		it('does not retry a non-retryable status (403)', async () => {
+			(config.xai as any).connectAttempts = 4;
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+
+			wsInstances[0].simulateUnexpectedResponse(403, { 'x-request-id': 'req-forbidden' }, '{"error":"forbidden"}');
+
+			await expect(connectPromise).rejects.toThrow(/HTTP 403/);
 			expect(wsInstances).toHaveLength(1);
 		});
 

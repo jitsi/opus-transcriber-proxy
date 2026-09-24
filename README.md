@@ -107,7 +107,7 @@ Set environment variables or use a `.env` file:
 | `XAI_GRANULAR_GUARD_WORDS` | `3` | Volatile words held back at the growing edge (per-connection: `xai_granular_guard_words`) |
 | `XAI_GRANULAR_MIN_WORDS` | `5` | Frozen words batched into segments of at least this size (or at a sentence end) |
 | `XAI_STT_URL` | `wss://api.x.ai/v1/stt` | Override STT endpoint |
-| `XAI_CONNECT_ATTEMPTS` | `4` | Handshake attempts before a connect is reported failed. A rejected upgrade with a transient status (408/425/429/500/502/503/504, plus the Cloudflare origin-failure codes 521-526/530) or a pre-open transport error is retried; 401/403/400/404 fail fast |
+| `XAI_CONNECT_ATTEMPTS` | `4` | Handshake attempts before a connect is reported failed. Every rejected upgrade is retried except an auth failure (401/403), as is a pre-open transport error; only 401/403 and a malformed `XAI_STT_URL` fail fast (a denylist: 404 was on the old fail-fast allowlist when xAI answered 404 fleet-wide on 2026-09-22) |
 | `XAI_CONNECT_BACKOFF_MS` | `250` | Base delay between handshake retries; doubles per attempt (±25% jitter, capped at 4s). A `Retry-After` on the rejection takes precedence, capped at the same 4s. When all attempts fail, the next delay is left as a process-wide cooldown that the next xAI connect waits out first |
 
 ### Server

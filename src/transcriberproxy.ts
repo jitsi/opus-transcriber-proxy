@@ -31,6 +31,17 @@ import { ConversationHistory } from './textTranslate/ConversationHistory';
  */
 const ECHOED_SPEAKER_LABEL_RE = /^\s*speaker\s*\d+\s*[:：]/i;
 
+/**
+ * Backoff for reopening a participant's connection after it failed terminally.
+ *
+ * A failed connection closes itself and the participant's next media frame reopens it, which is
+ * how a tag recovers in place once the provider does — but media frames arrive every ~20 ms, so
+ * without a delay a provider that rejects quickly would be hammered. Exponential per consecutive
+ * failure, reset the moment a backend connects for that tag.
+ */
+const CONNECTION_RETRY_BASE_MS = 1000;
+const CONNECTION_RETRY_MAX_MS = 15000;
+
 /** Whether two target-language lists request the same set, ignoring order. */
 function sameLanguageSet(a: string[], b: string[]): boolean {
 	return a.length === b.length && a.every((language) => b.includes(language));
@@ -75,6 +86,19 @@ export class TranscriberProxy extends EventEmitter {
 	private ws: WebSocket;
 	private outgoingConnections: Map<string, OutgoingConnection>;
 	private failedStartTags: Set<string> = new Set();
+	/**
+	 * The last negotiated media format per tag, kept so a connection recreated after a backend
+	 * failure reuses the format its `start` event established instead of falling back to the URL
+	 * default. The client does not replay `start` on a mid-session reconnect in place.
+	 */
+	private mediaFormats: Map<string, AudioFormat> = new Map();
+	/**
+	 * Per-tag backoff for recreating a connection that failed terminally. Without it the
+	 * participant's next media frame (~20 ms later) would immediately open another connection,
+	 * so a provider that rejects fast would be hammered ~50x/s per participant. Cleared as soon
+	 * as a backend connects for that tag.
+	 */
+	private connectionRetries: Map<string, { failures: number; nextAttemptAt: number }> = new Map();
 	private options: TranscriberProxyOptions;
 	private dumpStream?: fs.WriteStream;
 	private transcriptDumpStream?: fs.WriteStream;
@@ -249,6 +273,25 @@ export class TranscriberProxy extends EventEmitter {
 		return this.outgoingConnections.get(tag);
 	}
 
+	/**
+	 * Record a terminal connection failure for `tag` and hold off recreating one until the backoff
+	 * expires. Exponential from CONNECTION_RETRY_BASE_MS, capped at CONNECTION_RETRY_MAX_MS; the
+	 * backend's own connect retries (e.g. xAI's bounded handshake retry) run inside each attempt,
+	 * so this paces whole connections, not handshakes.
+	 */
+	private scheduleConnectionRetry(tag: string): void {
+		const failures = (this.connectionRetries.get(tag)?.failures ?? 0) + 1;
+		const delayMs = Math.min(CONNECTION_RETRY_BASE_MS * 2 ** (failures - 1), CONNECTION_RETRY_MAX_MS);
+		this.connectionRetries.set(tag, { failures, nextAttemptAt: Date.now() + delayMs });
+		logger.info(`Tag "${tag}": next connection attempt in ${delayMs}ms (consecutive failures: ${failures})`);
+	}
+
+	/** Whether a connection for `tag` may be created now, per the backoff above. */
+	private mayRetryConnection(tag: string): boolean {
+		const retry = this.connectionRetries.get(tag);
+		return retry === undefined || Date.now() >= retry.nextAttemptAt;
+	}
+
 	private createConnection(tag: string, mediaFormat: AudioFormat): OutgoingConnection {
 		// Create a new connection for this tag (no limit, no reuse)
 		const newConnection = new OutgoingConnection(tag, mediaFormat, this.options);
@@ -305,10 +348,29 @@ export class TranscriberProxy extends EventEmitter {
 			// Metrics: decrement participant count
 			getInstruments().participantsActive.add(-1);
 		};
+		newConnection.onBackendConnected = (tag) => {
+			// The tag is transcribing again: drop any backoff a previous failure left behind.
+			this.connectionRetries.delete(tag);
+		};
 		newConnection.onError = (tag, error) => {
-			this.emit('error', tag, error);
+			// ONE participant's stream has failed and closed itself (onClosed above has already
+			// removed it). Deliberately not escalated to a session-level 'error': that used to
+			// unregister the session and close the client WebSocket with 1011, so a single
+			// participant's backend failure dropped captions for everyone else in the conference
+			// — which is exactly what turned the 2026-09-22 xAI outage into a total caption
+			// outage per meeting. The client keeps its socket, the other tags keep transcribing,
+			// and this tag's next media frame reopens it (paced by scheduleConnectionRetry).
+			// warn, not error: the root cause has already been logged at error level by the
+			// backend / OutgoingConnection, and during a provider outage every participant hits
+			// this every backoff interval — a second error line per failure doubles the volume.
+			this.scheduleConnectionRetry(tag);
+			logger.warn(
+				`Connection for tag "${tag}" failed and was closed; the session stays up and the ` +
+					`next media frame will retry: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		};
 
+		this.mediaFormats.set(tag, mediaFormat);
 		this.outgoingConnections.set(tag, newConnection);
 
 		// Metrics: increment participant count
@@ -349,8 +411,12 @@ export class TranscriberProxy extends EventEmitter {
 
 		const connection = this.getConnection(tag);
 		if (connection) {
+			this.mediaFormats.set(tag, mediaFormat);
 			connection.updateInputFormat(mediaFormat);
 		} else {
+			// An explicit start event is the client telling us to (re)open this stream now, so it
+			// clears any backoff left by an earlier failure.
+			this.connectionRetries.delete(tag);
 			this.createConnection(tag, mediaFormat);
 		}
 	}
@@ -365,15 +431,28 @@ export class TranscriberProxy extends EventEmitter {
 					logger.debug(`Dropping media event for tag "${tag}": start event was rejected`);
 					return;
 				}
-				const encoding = this.options.encoding ?? 'opus';
-				// channels: 2 reflects SDP negotiation: Opus is always offered as stereo in
-				// SDP for compatibility, even when the actual content is mono.  The decoder
-				// produces mono output regardless.
-				const mediaFormat: AudioFormat = encoding === 'opus'
-					? { encoding: 'opus', sampleRate: 48000, channels: 2 }
-					: { encoding: 'ogg' };
-				logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
-				connection = this.createConnection(tag, mediaFormat);
+				if (!this.mayRetryConnection(tag)) {
+					logger.debug(`Dropping media event for tag "${tag}": backing off after a connection failure`);
+					return;
+				}
+				// A format remembered from this tag's start event survives a connection that
+				// failed and closed itself, so reopening it in place keeps the negotiated
+				// encoding. Only a tag we have genuinely never seen a start event for falls
+				// back to the URL default.
+				const remembered = this.mediaFormats.get(tag);
+				if (remembered) {
+					connection = this.createConnection(tag, remembered);
+				} else {
+					const encoding = this.options.encoding ?? 'opus';
+					// channels: 2 reflects SDP negotiation: Opus is always offered as stereo in
+					// SDP for compatibility, even when the actual content is mono.  The decoder
+					// produces mono output regardless.
+					const mediaFormat: AudioFormat = encoding === 'opus'
+						? { encoding: 'opus', sampleRate: 48000, channels: 2 }
+						: { encoding: 'ogg' };
+					logger.warn(`Received media event for tag "${tag}" with no prior start event; creating connection with encoding "${encoding}"`);
+					connection = this.createConnection(tag, mediaFormat);
+				}
 			}
 			const payloadB64 = parsedMessage.media?.payload;
 			const hasAudio = typeof payloadB64 === 'string' && payloadB64.length > 0;
@@ -667,6 +746,8 @@ export class TranscriberProxy extends EventEmitter {
 			connection.close();
 		});
 		this.outgoingConnections.clear();
+		this.mediaFormats.clear();
+		this.connectionRetries.clear();
 		this.ws.close();
 
 		// Close dispatcher connection if open
