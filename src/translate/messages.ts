@@ -23,11 +23,16 @@ export interface TranslationTranscriptMessage {
 	timestamp: number;
 }
 
-/** A /translate translated-audio message (one Opus frame), per the mediajson protocol. */
+/**
+ * A /translate translated-audio message (one Opus frame), per the mediajson protocol. `audioLevel` (RFC 6464, 0 =
+ * full scale .. 127 = silence) and `vad` are optional augmentations the bridge writes into the frame's
+ * ssrc-audio-level RTP header extension when present; they are omitted, not nulled, when the frame carries none, so
+ * a bridge that predates them sees the original shape.
+ */
 export interface TranslationMediaMessage {
 	event: 'media';
 	sequenceNumber: number;
-	media: { tag: string; chunk: number; timestamp: number; payload: string };
+	media: { tag: string; chunk: number; timestamp: number; payload: string; audioLevel?: number; vad?: boolean };
 }
 
 /**
@@ -129,12 +134,18 @@ export function buildTranslationMediaMessage(data: {
 	timestamp: number;
 	payload: string;
 	sequenceNumber: number;
+	audioLevel?: number;
+	vad?: boolean;
 }): TranslationMediaMessage {
-	return {
+	const message: TranslationMediaMessage = {
 		event: 'media',
 		sequenceNumber: data.sequenceNumber,
 		media: { tag: data.tag, chunk: data.chunk, timestamp: data.timestamp, payload: data.payload },
 	};
+	// Add the level fields only when present, so the JSON stays byte-identical to the pre-level shape otherwise.
+	if (data.audioLevel !== undefined) message.media.audioLevel = data.audioLevel;
+	if (data.vad !== undefined) message.media.vad = data.vad;
+	return message;
 }
 
 /**

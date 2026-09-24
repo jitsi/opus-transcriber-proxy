@@ -151,7 +151,13 @@ export class TranslatorConnection {
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string) => void = undefined;
 	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
-	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string) => void = undefined;
+	/**
+	 * A translated Opus frame to forward. `audioLevel` is the frame's RFC 6464 level (0 = full scale .. 127 = silence)
+	 * and `vad` its voice-activity flag, for the bridge to write into the ssrc-audio-level header extension. Only
+	 * non-DTX frames are forwarded, so `vad` is true on every frame emitted: libopus's own VAD judged it voice.
+	 */
+	onAudioFrame?: (tag: string, chunk: number, timestamp: number, payload: string, audioLevel: number, vad: boolean) => void =
+		undefined;
 	// Talk boundaries: a "talk" is one contiguous run of translated audio. onTalkStart fires on the first frame of
 	// the run (timestamp = that frame's RTP timestamp); onTalkStop fires when the output goes silent (see
 	// armTalkSilenceTimer) with a timestamp one past the end of the run (the last frame's RTP timestamp + one frame),
@@ -282,6 +288,8 @@ export class TranslatorConnection {
 				// DTX lets libopus's VAD flag comfort-noise/silence frames (EncodedFrame.inDtx). We use that to
 				// bracket talks by actual voice and to drop silence frames, since the translated audio stream is
 				// otherwise continuous (OpenAI keeps emitting during input silence). See sendAudioFrame.
+				// Also load-bearing for the ssrc-audio-level `vad` flag: sendAudioFrame reports vad=true on every frame
+				// it forwards, which is only honest because the DTX (non-voice) frames are dropped before that point.
 				dtx: true,
 			});
 
@@ -642,7 +650,7 @@ export class TranslatorConnection {
 						const pcmBytes = fromBase64(delta);
 						const opusFrames = this.opusEncoder.encodeFrame(pcmBytes);
 						for (const frame of opusFrames) {
-							this.sendAudioFrame(frame.data, frame.inDtx);
+							this.sendAudioFrame(frame.data, frame.inDtx, frame.audioLevel);
 						}
 					} catch (error) {
 						this.logError(`Failed to encode audio delta:`, error);
@@ -690,7 +698,7 @@ export class TranslatorConnection {
 		}
 	}
 
-	private sendAudioFrame(opusFrame: Uint8Array, inDtx: boolean): void {
+	private sendAudioFrame(opusFrame: Uint8Array, inDtx: boolean, audioLevel: number): void {
 		// DTX frame: libopus's VAD marked this as comfort-noise/silence, not voice. Don't forward it to the
 		// bridge and don't count it as talk activity. The silence timer (armed only by the voice frames below)
 		// then ends the talk after the configured silence, and the RtpTimestamper inserts the real gap when
@@ -727,7 +735,8 @@ export class TranslatorConnection {
 		const payload = bytesToBase64(opusFrame);
 
 		// The mediajson wire-envelope sequence number is assigned by the proxy (per-WebSocket), not here.
-		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload);
+		// Every frame that reaches here passed libopus's VAD (DTX frames were dropped above), hence vad = true.
+		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload, audioLevel, /* vad */ true);
 	}
 
 	/**

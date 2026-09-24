@@ -183,10 +183,19 @@ describe('TranslatorProxy (sources model)', () => {
 		proxy.on('audioFrame', (data) => frames.push(data));
 		// The connection supplies tag/chunk/timestamp/payload; the proxy assigns the wire-envelope
 		// sequence number itself (per-proxy, starting at 0), so any value the connection passes is ignored.
-		conn.onAudioFrame('ignored-input-tag', 5, 960, 'OPUSB64');
+		conn.onAudioFrame('ignored-input-tag', 5, 960, 'OPUSB64', 23, true);
 
 		expect(frames).toHaveLength(1);
-		expect(frames[0]).toMatchObject({ tag: '523834112-a0.en', language: 'en', chunk: 5, timestamp: 960, payload: 'OPUSB64', sequenceNumber: 0 });
+		expect(frames[0]).toMatchObject({
+			tag: '523834112-a0.en',
+			language: 'en',
+			chunk: 5,
+			timestamp: 960,
+			payload: 'OPUSB64',
+			audioLevel: 23,
+			vad: true,
+			sequenceNumber: 0,
+		});
 	});
 
 	it('draws talk start/stop from the same wire-envelope counter as audio, so start < frames < stop', () => {

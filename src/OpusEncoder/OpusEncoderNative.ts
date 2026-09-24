@@ -6,6 +6,7 @@
 // identical across the two so callers are backend-agnostic.
 
 import { nativeOpus, OPUS_APPLICATION, type NativeOpusEncoder } from '../OpusDecoder/nativeOpus';
+import { computeAudioLevel } from './audioLevel';
 import type { EncodedFrame, IOpusEncoder, OpusEncoderConfig } from './opusEncoderTypes';
 
 export class OpusEncoderNative implements IOpusEncoder {
@@ -65,7 +66,7 @@ export class OpusEncoderNative implements IOpusEncoder {
 			const frameData = this.inputBuffer.subarray(0, frameSizeBytes);
 
 			const { packet, inDtx } = this.encoder.encode(Buffer.from(frameData), this.frameSize);
-			encodedFrames.push({ data: new Uint8Array(packet), inDtx });
+			encodedFrames.push({ data: new Uint8Array(packet), inDtx, audioLevel: computeAudioLevel(frameData) });
 
 			this.inputBuffer = this.inputBuffer.subarray(frameSizeBytes);
 		}

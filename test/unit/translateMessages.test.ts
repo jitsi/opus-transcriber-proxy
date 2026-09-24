@@ -58,6 +58,21 @@ describe('buildTranslationMediaMessage', () => {
 		expect(typeof msg.sequenceNumber).toBe('number');
 		expect(typeof msg.media.chunk).toBe('number');
 		expect(typeof msg.media.timestamp).toBe('number');
+		// Without a level, the JSON has no level keys at all (not null), so an older bridge sees the original shape.
+		expect(JSON.stringify(msg)).not.toMatch(/audioLevel|vad/);
+	});
+
+	it('carries the RFC 6464 audio level and VAD flag when supplied', () => {
+		const msg = buildTranslationMediaMessage({
+			tag: '523834112-a0.es',
+			chunk: 7,
+			timestamp: 960,
+			payload: 'b64==',
+			sequenceNumber: 42,
+			audioLevel: 23,
+			vad: true,
+		});
+		expect(msg.media).toEqual({ tag: '523834112-a0.es', chunk: 7, timestamp: 960, payload: 'b64==', audioLevel: 23, vad: true });
 	});
 });
 

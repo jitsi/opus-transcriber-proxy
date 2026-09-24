@@ -82,7 +82,7 @@ function makeHarness(talkSilenceTimeoutMs = TALK_TIMEOUT_MS): { runtime: Transla
 		createOpusEncoder: () =>
 			({
 				ready: Promise.resolve(),
-				encodeFrame: () => [{ data: new Uint8Array([1, 2, 3]), inDtx: mockInDtx }],
+				encodeFrame: () => [{ data: new Uint8Array([1, 2, 3]), inDtx: mockInDtx, audioLevel: 23 }],
 				reset: () => {},
 				free: () => {},
 			}) as any,
@@ -145,6 +145,16 @@ describe('TranslatorConnection talk boundaries', () => {
 		// 2 frames of 3 bytes each -> bytesSent 6, duration 2 * 20 ms.
 		expect(stops).toEqual([['55555555-a0', 2 * SAMPLES_PER_FRAME, { bytesSent: 6, duration: 40 }]]);
 		expect(starts).toHaveLength(1);
+	});
+
+	it("forwards each voice frame's audio level with vad=true for the ssrc-audio-level extension", async () => {
+		const { conn, ws } = await connect();
+		const media: Array<[number, boolean]> = []; // [audioLevel, vad]
+		conn.onAudioFrame = (_tag, _seq, _ts, _payload, audioLevel, vad) => media.push([audioLevel, vad]);
+
+		ws.fireMessage(audioDelta());
+		// The mock encoder reports level 23 for every frame; a forwarded frame is by definition non-DTX, i.e. voice.
+		expect(media).toEqual([[23, true]]);
 	});
 
 	it('drops DTX (silence) frames: not forwarded, do not extend the talk, and end it on sustained DTX', async () => {

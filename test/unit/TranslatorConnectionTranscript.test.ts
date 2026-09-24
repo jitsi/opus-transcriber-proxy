@@ -67,7 +67,7 @@ function makeHarness(): { runtime: TranslationRuntime; sockets: FakeWs[] } {
 		createOpusEncoder: () =>
 			({
 				ready: Promise.resolve(),
-				encodeFrame: () => [{ data: new Uint8Array([1, 2, 3]), inDtx: false }],
+				encodeFrame: () => [{ data: new Uint8Array([1, 2, 3]), inDtx: false, audioLevel: 23 }],
 				reset: () => {},
 				free: () => {},
 			}) as any,
