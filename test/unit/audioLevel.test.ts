@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AUDIO_LEVEL_SILENCE, computeAudioLevel } from '../../src/OpusEncoder/audioLevel';
+import { AUDIO_LEVEL_INAUDIBLE, AUDIO_LEVEL_SILENCE, computeAudioLevel } from '../../src/OpusEncoder/audioLevel';
 
 const FRAME_SAMPLES = 480; // 20 ms at 24 kHz
 
@@ -29,15 +29,18 @@ describe('computeAudioLevel (RFC 6464 -dBov)', () => {
 		expect(computeAudioLevel(square(33))).toBe(60); // -60 dBov
 	});
 
-	it('clamps very quiet but non-zero audio to 127', () => {
-		// A single LSB in one sample of 480: RMS ~ 0.046 -> ~-117 dBov; still within range, so not clamped...
+	it('reports inaudible but non-silent audio as 126, keeping 127 for digital silence (as libwebrtc does)', () => {
+		// A single LSB in one sample of 480: RMS ~ 0.046 -> ~-117 dBov, the quietest non-silent 480-sample frame...
 		const oneLsb = new Uint8Array(FRAME_SAMPLES * 2);
 		oneLsb[0] = 1;
 		expect(computeAudioLevel(oneLsb)).toBe(117);
-		// ...whereas the formula can only exceed 127 for a frame long enough to dilute one LSB further.
+		// ...whereas a frame long enough to dilute one LSB below -127 dBov is inaudible, not silent. libwebrtc's
+		// RmsLevel returns 126 (kInaudibleButNotMuted) for exactly this input.
 		const dilute = new Uint8Array(200000 * 2);
 		dilute[0] = 1;
-		expect(computeAudioLevel(dilute)).toBe(AUDIO_LEVEL_SILENCE);
+		expect(computeAudioLevel(dilute)).toBe(AUDIO_LEVEL_INAUDIBLE);
+		expect(AUDIO_LEVEL_INAUDIBLE).toBe(126);
+		expect(computeAudioLevel(new Uint8Array(200000 * 2))).toBe(AUDIO_LEVEL_SILENCE);
 	});
 
 	it('handles an odd byte offset into a larger buffer', () => {
