@@ -1999,6 +1999,49 @@ describe('XAIBackend', () => {
 			}
 		});
 
+		it('does not repeat a late speech_final for the second of two idle-ended turns', async () => {
+			const idleEnd = async (text: string) => {
+				partial(text, true, false);
+				vi.advanceTimersByTime(15000);
+				backend.forceCommit();
+				vi.advanceTimersByTime(850 + 300 + 3000);
+				await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			};
+			await idleEnd('alpha beta gamma delta.');
+			await idleEnd('one two three four five.');
+			partial('one two three four five.', true, true); // the late answer for the second turn alone
+			expect(finalTexts()).toEqual(['alpha beta gamma delta.', 'one two three four five.']);
+			// ...and a fresh turn with early finals after both is still aligned against its own count.
+			partial('six seven eight nine.', true, false);
+			vi.advanceTimersByTime(15000);
+			partial('six seven eight nine. ten.', true, true);
+			expect(finalTexts().slice(2)).toEqual(['six seven eight nine.', 'ten.']);
+		});
+
+		it('discards a one-word held segment the speech_final re-renders rather than risk repeating it', () => {
+			partial('OK.', true, false);
+			vi.setSystemTime(5000);
+			partial('Okay, let us go.', true, true);
+			expect(finalTexts()).toEqual(['Okay, let us go.']);
+		});
+
+		it('drops a dash xAI put between the emitted part and the rest, but keeps an opening quote', () => {
+			partial('we agreed.', true, false);
+			vi.setSystemTime(16000);
+			partial('the next step.', true, false);
+			partial('We agreed — the next step — “fine”, he said.', true, true);
+			expect(finalTexts()).toEqual(['we agreed. the next step.', '“fine”, he said.']);
+		});
+
+		it('accepts the anchor when xAI spells out what was emitted a little longer', () => {
+			partial('paid 1250 for it.', true, false);
+			vi.setSystemTime(16000);
+			partial('cheap.', true, false); // 5 words emitted
+			partial('paid one thousand two hundred fifty for it. cheap. then more words.', true, true); // 9 + 3
+			expect(finalTexts()).toEqual(['paid 1250 for it. cheap.', 'then more words.']);
+			expect(warnLogs().filter((l) => l.includes('speech_final'))).toEqual([]);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;

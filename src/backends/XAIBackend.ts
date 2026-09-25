@@ -174,6 +174,9 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 /** How many leading/trailing emitted words to look for in the whole-turn text when aligning the rest. */
 const TURN_ALIGN_ANCHOR_WORDS = 3;
 
+/** How many idle-ended turns' boundaries a carried record keeps (each a place the next text may start). */
+const TURN_CARRIED_BOUNDARIES = 4;
+
 /** How much of the emitted text to quote in the debug log that accompanies a reconciliation warning. */
 const TURN_LOG_TAIL_CHARS = 120;
 
@@ -244,9 +247,11 @@ function entryAlignWords(words: any[]): AlignWord[] {
 	return out;
 }
 
-// What can close the emitted part of a turn between its last word and the first word of the rest:
-// whitespace, sentence punctuation and closing brackets/quotes. Not opening ones ("¿", "(", "“").
-const CLOSING_PUNCTUATION_RE = /^[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]+/u;
+// Between the last emitted word and the first word of the rest: what closes the emitted part
+// (whitespace, sentence punctuation, closing brackets and quotes, a dash xAI put between segments)
+// is dropped, and what is left belongs to the rest only if all of it opens it ("¿", "(", a quote).
+const CLOSING_PUNCTUATION_RE = /^[\s\p{Pe}\p{Pf}\p{Pd}.,;:!?…。！？、，；：]+/u;
+const OPENING_ONLY_RE = /^[\s\p{Ps}\p{Pi}¿¡"'«]*$/u;
 
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
 const NO_SPACE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\u3000-\u303f\uff00-\uffef]/u;
@@ -296,22 +301,26 @@ interface EmittedTurn {
 	 * speech_final or transcript.done, so alignTurnRest holds it to a stricter standard.
 	 */
 	carried?: boolean;
-	/** How many of `count` were carried over; the words of a new turn recorded since come after them. */
-	carriedCount: number;
+	/**
+	 * The counts at which a turn ended and its record was carried (oldest first, bounded): each is a
+	 * boundary the next text may start after — its late speech_final, or a fresh turn since.
+	 */
+	carriedAt: number[];
 }
 
 function emptyEmittedTurn(): EmittedTurn {
-	return { count: 0, head: [], tail: [], tailText: '', carriedCount: 0 };
+	return { count: 0, head: [], tail: [], tailText: '', carriedAt: [] };
 }
 
 /**
  * How far from where the count puts it the anchor may be found. Re-punctuation moves nothing;
- * a revision adds or drops a word or two, more in a long turn. A three-word phrase can recur
+ * a revision adds or drops a few words ("1250" spelled out is five), more in a long turn — so
+ * half the count, and at least four. A three-word phrase can recur
  * anywhere in a turn ("I think that"), so an occurrence far from the expected place is a recurrence,
  * not the emitted tail — accepting it would cut the rest in the wrong place without a warning.
  */
 function anchorSlack(expectedEnd: number): number {
-	return Math.max(TURN_ALIGN_ANCHOR_WORDS, Math.ceil(expectedEnd / 4));
+	return Math.max(TURN_ALIGN_ANCHOR_WORDS + 1, Math.ceil(expectedEnd / 2));
 }
 
 /** Add words that went out to the turn's record. */
@@ -357,11 +366,10 @@ function alignTurnRest(full: string[], emitted: EmittedTurn): { start: number; m
 	const anchor = emitted.tail;
 	// Nothing but carried words: the record may have nothing to do with this text. With a new
 	// turn's words recorded on top of a carried record, the anchor is that turn's, and is in the text
-	// whether xAI folded the ended turn into it (the anchor ends at the whole count) or started a
-	// fresh one (it ends at the new turn's count alone).
-	const carriedOnly = emitted.carried === true && emitted.carriedCount >= emitted.count;
-	const expectedEnds =
-		emitted.carried && !carriedOnly ? [emitted.count, emitted.count - emitted.carriedCount] : [emitted.count];
+	// whether xAI folded the ended turn(s) into it (the anchor ends at the whole count) or started
+	// afresh at one of the boundaries (it ends at the words recorded since that boundary).
+	const carriedOnly = emitted.carried === true && emitted.carriedAt[emitted.carriedAt.length - 1] === emitted.count;
+	const expectedEnds = [emitted.count, ...emitted.carriedAt.map((b) => emitted.count - b).filter((e) => e > 0)];
 	const slackFor = (expectedEnd: number) => (carriedOnly ? TURN_ALIGN_ANCHOR_WORDS : anchorSlack(expectedEnd));
 	const distance = (end: number) => Math.min(...expectedEnds.map((e) => Math.abs(end - e)));
 	const anchorUsable = !carriedOnly || anchor.length >= TURN_ALIGN_ANCHOR_WORDS;
@@ -946,7 +954,9 @@ export class XAIBackend implements TranscriptionBackend {
 			this.stopTurnClock();
 			if (this.emitted.count > 0) {
 				this.emitted.carried = true;
-				this.emitted.carriedCount = this.emitted.count;
+				if (this.emitted.carriedAt[this.emitted.carriedAt.length - 1] !== this.emitted.count) {
+					this.emitted.carriedAt = [...this.emitted.carriedAt, this.emitted.count].slice(-TURN_CARRIED_BOUNDARIES);
+				}
 			}
 		}, delayMs);
 		unrefTimer(this.idleTurnEndTimer);
@@ -1197,7 +1207,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Only the cap needs to know a turn ended: with it off, forceCommit() and transcript.done
 		// behave as they did before it existed.
 		if (this.capEnabled()) {
-			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true, carriedCount: this.emitted.count } : undefined;
+			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true, carriedAt: [this.emitted.count] } : undefined;
 			this.turnEndedSinceAudio = true;
 		}
 		this.resetTurn();
@@ -1208,14 +1218,17 @@ export class XAIBackend implements TranscriptionBackend {
 	 * still held are discarded in its favour. Not always: xAI has been seen to reset mid-turn, and
 	 * then its speech_final carries only what followed — the held segments are the only copy of the
 	 * rest. When neither the held text's last words nor its first are in the speech_final, it is
-	 * flushed first. (A short held anchor can be found by chance; that errs towards the old
-	 * behaviour, discarding it.)
+	 * flushed first. (A held segment shorter than an anchor is always discarded: it cannot be told
+	 * from a re-rendering, and a repeat of it is worse than the loss the old behaviour had.)
 	 */
 	private flushHeldSegmentsNotIn(text: string, words: any[] | undefined, language: string | undefined): void {
 		if (this.pendingSegments.length === 0 || this.emitted.count > 0) return;
 		const heldText = joinText(this.pendingSegments.map((s) => s.text));
 		const held = emptyEmittedTurn();
 		recordEmitted(held, textAlignWords(heldText), heldText);
+		// Fewer words than an anchor ("OK.") cannot be told from a re-rendering ("Okay,"): repeating
+		// a one-word ack is worse than dropping it, which is what always happened before the cap.
+		if (held.count < TURN_ALIGN_ANCHOR_WORDS) return;
 		const full = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
 		const { match } = alignTurnRest(full.map((w) => w.norm), held);
 		if (match !== 'tail') return;
@@ -1258,13 +1271,14 @@ export class XAIBackend implements TranscriptionBackend {
 			this.warnUnalignedRest(match, textWords.length, text, emitted);
 			if (start < textWords.length) {
 				// Cut the original text rather than re-joining words, which would put spaces into a
-				// language written without them. The cut is right after the last emitted word, minus
-				// what closes it, so punctuation that opens the rest ("¿", a quote) stays with the rest.
+				// language written without them. Punctuation that opens the rest ("¿", a quote) stays
+				// with it; anything else between the last emitted word and the rest is dropped.
 				// `words` only supplies confidence here, and lines up with the text only when the
 				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
 				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
-				const rest = text.slice(cutAt).replace(CLOSING_PUNCTUATION_RE, '');
+				const between = text.slice(cutAt, textWords[start].at).replace(CLOSING_PUNCTUATION_RE, '');
+				const rest = (OPENING_ONLY_RE.test(between) ? between : '') + text.slice(textWords[start].at);
 				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}
 			recordEmitted(emitted, textWords.slice(start), text);
