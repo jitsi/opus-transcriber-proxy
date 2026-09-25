@@ -2098,6 +2098,14 @@ describe('XAIBackend', () => {
 			expect(finalTexts().slice(2)).toEqual(['it fell. so we sold.', '“cheap”.']);
 		});
 
+		it('drops a straight closing quote or postfix currency symbol attached to the last emitted word', () => {
+			partial('he said "yes".', true, false);
+			vi.setSystemTime(16000);
+			partial('it cost 20€.', true, false);
+			partial('he said "yes". it cost 20€. "Then" the dogs\' bowls.', true, true);
+			expect(finalTexts()).toEqual(['he said "yes". it cost 20€.', '"Then" the dogs\' bowls.']);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;

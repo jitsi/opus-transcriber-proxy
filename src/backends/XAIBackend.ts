@@ -255,8 +255,10 @@ function entryAlignWords(words: any[]): AlignWord[] {
 // whitespace, sentence punctuation, closing brackets and quotes, and a dash xAI put between
 // segments (one or more followed by a space; "-5" keeps its sign). Whatever is left prefixes the
 // rest ("¿", "(", a quote, "$100", "#1", "@name") and stays with it — so the attached run stops at
-// the first such opener, which need not have a space before it ("fell—“so", 「 in CJK text).
-const ATTACHED_TO_WORD_RE = /^[^\s\p{Ps}\p{Pi}\p{Sc}¿¡"'«#@]*/u;
+// the first such opener that is followed by a letter or digit (a straight quote or a currency
+// symbol is an opener only then: `"yes".` and `20€.` close), with or without a space before it
+// ("fell—“so", 「 in CJK text).
+const ATTACHED_TO_WORD_RE = /^(?:(?![\p{Ps}\p{Pi}\p{Sc}¿¡"'«#@]+[\p{L}\p{N}])\S)*/u;
 const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]|\p{Pd}+(?=\s))+/u;
 
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
@@ -1288,11 +1290,15 @@ export class XAIBackend implements TranscriptionBackend {
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
 				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
 				// With nothing emitted from this text (start 0) it is the rest in full, opener included.
-				const between =
-					start > 0
-						? text.slice(cutAt, textWords[start].at).replace(ATTACHED_TO_WORD_RE, '').replace(CLOSING_PUNCTUATION_RE, '')
-						: text.slice(0, textWords[0].at);
-				const rest = between + text.slice(textWords[start].at);
+				// The attached run is matched on the text from the cut, not on the gap alone: whether an
+				// opener in the gap opens something is decided by the word after the gap.
+				const gapEnd = textWords[start].at;
+				let between = text.slice(0, gapEnd);
+				if (start > 0) {
+					const attached = Math.min(text.slice(cutAt).match(ATTACHED_TO_WORD_RE)![0].length, gapEnd - cutAt);
+					between = text.slice(cutAt + attached, gapEnd).replace(CLOSING_PUNCTUATION_RE, '');
+				}
+				const rest = between + text.slice(gapEnd);
 				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}
 			recordEmitted(emitted, textWords.slice(start), text);
