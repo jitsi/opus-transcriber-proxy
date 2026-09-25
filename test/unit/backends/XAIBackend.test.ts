@@ -954,6 +954,25 @@ describe('XAIBackend', () => {
 			expect(interimResults[1].transcript[0].text).toBe('how are you');
 		});
 
+		it('keeps interim words with no speaker in the preceding speaker\'s segment', () => {
+			getMockWs().simulateMessage(JSON.stringify({
+				type: 'transcript.partial',
+				is_final: false,
+				text: 'hello how are you',
+				words: [
+					{ text: 'hello', speaker: 0, confidence: 0.9 },
+					{ text: 'how', speaker: 1, confidence: 0.85 },
+					{ text: 'are', confidence: 0.88 },
+					{ text: 'you', confidence: 0.92 },
+				],
+			}));
+
+			expect(interimResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+				[0, 'hello'],
+				[1, 'how are you'],
+			]);
+		});
+
 		it('should split final transcript.partial (speech_final=true) by speaker', () => {
 			getMockWs().simulateMessage(JSON.stringify({
 				type: 'transcript.partial',
@@ -1242,14 +1261,16 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon zeta.']);
 		});
 
-		it('falls back to dropping the emitted word count when xAI revises the turn text', () => {
+		it('aligns the rest, without warning, when xAI re-punctuates the turn text', () => {
 			partial('alpha beta.', true, false);
 			vi.setSystemTime(16000);
 			partial('gamma delta.', true, false);
-			// End-of-turn text differs from what was committed (re-punctuated), so it is no prefix.
+			// End-of-turn text differs from what was committed (re-punctuated), so it is no prefix;
+			// the anchor words are still found once punctuation and case are ignored.
 			partial('Alpha, beta, gamma, delta, epsilon.', true, true);
 
 			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('does not contain the last words'))).toBe(false);
 		});
 
 		it('emits nothing more when speech_final repeats only what already went out', () => {
@@ -1312,6 +1333,77 @@ describe('XAIBackend', () => {
 			} finally {
 				(config.xai as any).diarize = false;
 			}
+		});
+
+		it('keeps a diarized segment whose trailing words have no speaker as one final (staging shape, 2026-09-23)', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker?: number) => ({ text, confidence: 0.9, ...(speaker !== undefined && { speaker }) });
+				// xAI's is_final segments label the leading words only; the speech_final labels all of them.
+				partial('why is it speaker zero? there is only one speaker here.', true, false, [
+					w('why', 0), w('is', 0), w('it', 0), w('speaker', 0), w('zero?', 0),
+					w('there'), w('is'), w('only'), w('one'), w('speaker'), w('here.'),
+				]);
+				vi.advanceTimersByTime(15000);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+					[0, 'why is it speaker zero? there is only one speaker here.'],
+				]);
+
+				partial('why is it speaker zero? there is only one speaker here. in your room?', true, true, [
+					w('why', 0), w('is', 0), w('it', 0), w('speaker', 0), w('zero?', 0),
+					w('there', 0), w('is', 0), w('only', 0), w('one', 0), w('speaker', 0), w('here.', 0),
+					w('in', 0), w('your', 0), w('room?', 0),
+				]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text]).slice(1)).toEqual([[0, 'in your room?']]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('gives a diarized rest that starts on an unlabelled word the speaker it was emitted under', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker?: number) => ({ text, confidence: 0.9, ...(speaker !== undefined && { speaker }) });
+				partial('hello there.', true, false, [w('hello', 1), w('there.', 1)]);
+				vi.advanceTimersByTime(15000);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([[1, 'hello there.']]);
+
+				partial('hello there. how are you.', true, true, [w('hello', 1), w('there.', 1), w('how'), w('are'), w('you.')]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text]).slice(1)).toEqual([[1, 'how are you.']]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('warns when the diarized speech_final has fewer words than were already emitted', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('hello there.', true, false, [w('hello', 0), w('there.', 0)]);
+				vi.advanceTimersByTime(15000);
+				partial('hello.', true, true, [w('hello.', 0)]);
+				expect(finalResults.map((m) => m.transcript[0].text)).toEqual(['hello there.']);
+				expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('carries 1 words but 2 were already emitted'))).toBe(true);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('warns when the emitted words cannot be found in the speech_final text', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			// xAI revised the anchor words, so the rest is found by word count instead.
+			partial('alpha beta. gamma foxtrot. epsilon.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('does not contain the last words already emitted'))).toBe(true);
+		});
+
+		it('says so when the cap timer fires with no committed segment', () => {
+			partial('still talking', false, false); // interims only, no is_final
+			vi.advanceTimersByTime(15000);
+			expect(finalResults).toHaveLength(0);
+			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('reached 15000ms with no committed segment'))).toBe(true);
 		});
 
 		it('flushes a held segment when the turn reaches the cap with no further commit', () => {

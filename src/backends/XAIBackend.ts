@@ -177,6 +177,14 @@ function splitWords(text: string): string[] {
 	return text.trim().split(/\s+/).filter(Boolean);
 }
 
+/** The speaker of the last labelled word, or undefined when none is labelled. */
+function lastSpeaker(words: any[]): number | undefined {
+	for (let i = words.length - 1; i >= 0; i--) {
+		if (words[i]?.speaker !== undefined) return words[i].speaker as number;
+	}
+	return undefined;
+}
+
 /** A word reduced to what survives xAI re-punctuating and re-casing it, for aligning two renderings. */
 function normalizeWord(word: string): string {
 	return word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
@@ -184,18 +192,21 @@ function normalizeWord(word: string): string {
 
 /**
  * The part of a whole-turn transcript not yet emitted, given the text already emitted from it.
- * xAI's end-of-turn text is the committed segments joined, but re-punctuated and re-cased
- * (segments ending `that.` / `person.` come back joined with commas), so a literal prefix
- * comparison is no use — and a prefix cut at a non-word boundary would split a word. Instead the
- * last few emitted words are located in the whole-turn text, at the occurrence nearest to where
- * the emitted word count says they should be, and everything after them is the rest. If xAI
- * revised those words so they cannot be found, fall back to dropping as many words as were emitted.
+ * xAI's end-of-turn text is the committed segments joined — sometimes verbatim (every staging
+ * turn read on 2026-09-23 was an exact space-join), sometimes re-punctuated and re-cased (the
+ * `xai-live-turn.json` capture: segments ending `that.` / `person.` come back joined with
+ * commas) — so a literal prefix comparison cannot be relied on, and a prefix cut at a non-word
+ * boundary would split a word. Instead the last few emitted words are located in the whole-turn
+ * text, at the occurrence nearest to where the emitted word count says they should be, and
+ * everything after them is the rest; that handles both shapes. If xAI revised those words so
+ * they cannot be found, fall back to dropping as many words as were emitted, and say so
+ * (`anchored: false`) so the caller can log it: the fallback can drop or repeat words.
  */
-function remainingTurnText(fullText: string, emittedText: string): string {
+function remainingTurnText(fullText: string, emittedText: string): { rest: string; anchored: boolean } {
 	const full = splitWords(fullText);
 	const emitted = splitWords(emittedText);
-	if (full.length === 0) return '';
-	if (emitted.length === 0) return full.join(' ');
+	if (full.length === 0) return { rest: '', anchored: true };
+	if (emitted.length === 0) return { rest: full.join(' '), anchored: true };
 
 	const fullNorm = full.map(normalizeWord);
 	const anchor = emitted.map(normalizeWord).filter(Boolean).slice(-TURN_ALIGN_ANCHOR_WORDS);
@@ -206,7 +217,7 @@ function remainingTurnText(fullText: string, emittedText: string): string {
 		const end = i + anchor.length;
 		if (bestEnd < 0 || Math.abs(end - expectedEnd) < Math.abs(bestEnd - expectedEnd)) bestEnd = end;
 	}
-	return full.slice(bestEnd >= 0 ? bestEnd : expectedEnd).join(' ');
+	return { rest: full.slice(bestEnd >= 0 ? bestEnd : expectedEnd).join(' '), anchored: bestEnd >= 0 };
 }
 
 export class XAIBackend implements TranscriptionBackend {
@@ -862,6 +873,13 @@ export class XAIBackend implements TranscriptionBackend {
 		this.turnTimer = setTimeout(() => {
 			this.turnTimer = undefined;
 			if (this.status !== 'connected') return;
+			if (this.pendingSegments.length === 0) {
+				// Nothing to emit: xAI committed no segment (is_final) in a whole cap's worth of
+				// turn. Said out loud so a run with no finals can be told apart from one where the
+				// cap never had anything to flush.
+				logger.info(`xAI turn for ${this.tag} reached ${maxTurnMs}ms with no committed segment and no speech_final`);
+				return;
+			}
 			this.flushHeldSegments(this.lastLanguage, `reached ${maxTurnMs}ms without speech_final`);
 		}, maxTurnMs);
 		// Same as the granular timer: don't keep the process alive; unref() is absent on the
@@ -916,10 +934,24 @@ export class XAIBackend implements TranscriptionBackend {
 		} else if (this.emittedWords === 0) {
 			this.emitText(text, words, language, false);
 		} else if (this.isDiarizedWords(words)) {
+			if (words!.length < this.emittedWords) {
+				// The whole-turn words are fewer than what its segments carried, so the slice below
+				// is empty and the turn ends with whatever the early finals said. Not seen from xAI
+				// (its speech_final words have always been the segments' words joined), so log it.
+				logger.warn(
+					`xAI speech_final for ${this.tag} carries ${words!.length} words but ${this.emittedWords} were already emitted; emitting nothing more for the turn`,
+				);
+			}
 			const rest = words!.slice(this.emittedWords);
-			if (rest.length > 0) this.emitDiarized(rest, language, false);
+			// A rest that starts on an unlabelled word continues the speaker it was emitted under.
+			if (rest.length > 0) this.emitDiarized(rest, language, false, lastSpeaker(words!.slice(0, this.emittedWords)));
 		} else {
-			const rest = remainingTurnText(text, this.emittedText);
+			const { rest, anchored } = remainingTurnText(text, this.emittedText);
+			if (!anchored) {
+				logger.warn(
+					`xAI speech_final for ${this.tag} does not contain the last words already emitted for the turn; falling back to dropping ${splitWords(this.emittedText).length} words by count (emitted: "${this.emittedText.slice(-80)}"; turn: "${text.slice(0, 120)}")`,
+				);
+			}
 			if (rest) {
 				const restWords = Array.isArray(words) ? words.slice(this.emittedWords) : undefined;
 				this.emitText(rest, restWords, language, false);
@@ -941,7 +973,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 	/** Diarization re-splits per speaker, when the words carry speaker labels. */
 	private isDiarizedWords(words: any[] | undefined): boolean {
-		return config.xai.diarize && Array.isArray(words) && words.length > 0 && words[0].speaker !== undefined;
+		return config.xai.diarize && Array.isArray(words) && words.some((w) => w?.speaker !== undefined);
 	}
 
 	private emitText(text: string, words: any[] | undefined, language: string | undefined, isInterim: boolean): void {
@@ -1064,10 +1096,20 @@ export class XAIBackend implements TranscriptionBackend {
 		this.endTurn(text, msg.words, language);
 	}
 
-	private emitDiarized(words: any[], language: string | undefined, isInterim: boolean): void {
+	/**
+	 * Emit the words as one message per run of consecutive same-speaker words. A word with no
+	 * `speaker` belongs to the speaker of the word before it: since 2026-09-19 xAI's committed
+	 * segments (is_final) often leave their trailing words unlabelled while the speech_final
+	 * labels every word, and treating "no label" as a speaker change would cut one sentence into
+	 * two finals, the second with no speaker at all. Leading unlabelled words take `priorSpeaker`
+	 * (the speaker the words before this slice were emitted under), else the first label found.
+	 */
+	private emitDiarized(words: any[], language: string | undefined, isInterim: boolean, priorSpeaker?: number): void {
 		const segments: Array<{ speaker: number; words: any[] }> = [];
+		let current: number | undefined = priorSpeaker ?? words.find((w) => w?.speaker !== undefined)?.speaker;
 		for (const word of words) {
-			const speaker = word.speaker as number;
+			const speaker: number = word.speaker ?? current;
+			current = speaker;
 			const last = segments[segments.length - 1];
 			if (last && last.speaker === speaker) {
 				last.words.push(word);

@@ -126,8 +126,9 @@ export const config = {
 		// the end-of-turn speech_final produces a final. A speaker who talks without a pause long
 		// enough for xAI to call end-of-speech gets no final at all — since 2026-09-19 that is any
 		// continuous monologue, because xAI stopped sending speech_final at the short pauses it
-		// used to. Once a turn is older than this, its committed segments are emitted as a final
-		// when the next one commits; the later speech_final then emits only the rest. 0 disables.
+		// used to. Once a turn is older than this, its committed segments are emitted as a final —
+		// by a per-turn timer when it reaches the cap, or by the next commit past it; the later
+		// speech_final then emits only the rest. 0 disables.
 		maxTurnMs: parseIntOrDefault(process.env.XAI_MAX_TURN_MS, 15000),
 	},
 
