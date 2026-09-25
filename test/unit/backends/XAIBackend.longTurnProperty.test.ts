@@ -260,4 +260,51 @@ describe('XAIBackend long-turn cap: property test', () => {
 			expect(splitTurns / CASES).toBeGreaterThan(0.3);
 		});
 	}
+
+	// Words the committed segments never use, so a tail can only match the turn where it is made to.
+	const TAIL_VOCAB = ['need', 'date', 'ship', 'green', 'tests', 'plan', 'budget', 'review', 'friday', 'launch'];
+
+	for (const diarize of [false, true]) {
+		it(`a speech_final carrying only the turn's tail is never cut, even when it shares the first word (${diarize ? 'diarized' : 'non-diarized'})`, async () => {
+			(config.xai as any).diarize = diarize;
+			const CASES = 200;
+			let exercised = 0;
+			for (let seed = 1; seed <= CASES; seed++) {
+				await connect();
+				const r = rng(seed * (diarize ? 6007 : 3301));
+				const turn = { ...generateTurn(r, diarize), sendSpeechFinal: false };
+				// Play the segments without the 60s no-speech_final wait: the tail's speech_final follows.
+				for (const seg of turn.segments) {
+					vi.advanceTimersByTime(seg.commitAfterMs);
+					send({ type: 'transcript.partial', is_final: true, speech_final: false,
+						text: seg.words.map((w) => w.text).join(' '), words: seg.words });
+				}
+				if (finals.length === 0) {
+					backend.close();
+					vi.clearAllMocks();
+					continue; // never reached the cap: the speech_final would be the whole turn
+				}
+				exercised++;
+
+				// xAI reset the turn: the tail starts with the turn's first word, then diverges.
+				const first = turn.segments[0].words[0];
+				const n = 2 + Math.floor(r() * 8);
+				const tailWords: Word[] = [{ ...first, text: first.text.replace(/[.?,]$/, '') }];
+				for (let i = 1; i < n; i++) {
+					tailWords.push({ text: TAIL_VOCAB[Math.floor(r() * TAIL_VOCAB.length)] + (i === n - 1 ? '.' : ''),
+						confidence: 0.9, ...(diarize && { speaker: first.speaker }) });
+				}
+				const tailText = tailWords.map((w) => w.text).join(' ');
+				send({ type: 'transcript.partial', is_final: true, speech_final: true, text: tailText, words: tailWords });
+
+				const committed = turn.segments.flatMap((s) => s.words.map((w) => w.text)).join(' ');
+				const ctx = `seed=${seed} diarize=${diarize} segments=${turn.segments.length} tail="${tailText}"`;
+				expect(norm(finals.map((m) => m.transcript[0].text).join(' ')), ctx).toEqual(norm(`${committed} ${tailText}`));
+
+				backend.close();
+				vi.clearAllMocks();
+			}
+			expect(exercised / CASES).toBeGreaterThan(0.5);
+		});
+	}
 });

@@ -173,8 +173,22 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 /** How many leading/trailing emitted words to look for in the whole-turn text when aligning the rest. */
 const TURN_ALIGN_ANCHOR_WORDS = 3;
 
-/** How many trailing emitted words to quote in a reconciliation warning. */
-const TURN_LOG_TAIL_WORDS = 12;
+/** How much of the emitted text to quote in the debug log that accompanies a reconciliation warning. */
+const TURN_LOG_TAIL_CHARS = 120;
+
+// How long after the idle silence to wait for xAI's speech_final before ending the turn without it.
+// xAI answered the silence within ~0.5s when forceCommit() was verified; since 2026-09-19 it does
+// not always answer at all.
+const XAI_IDLE_TURN_END_GRACE_MS = 3000;
+
+// UAX #29 word boundaries: splits languages written without spaces (zh/ja/th) into words, where a
+// whitespace split would make each segment one token, and skips punctuation-only tokens ("—", "…").
+const wordSegmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+
+/** Don't let a timer keep the process alive; unref() is absent on the DOM/CF timer type. */
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+	(timer as any)?.unref?.();
+}
 
 /** A word of xAI's `words` array as the text it renders to. */
 function wordText(word: any): string {
@@ -189,9 +203,41 @@ function lastSpeaker(words: any[]): number | undefined {
 	return undefined;
 }
 
-/** A word reduced to what survives xAI re-punctuating and re-casing it, for aligning two renderings. */
+/**
+ * A word reduced to what survives xAI re-punctuating and re-casing it, for aligning two renderings.
+ * Deliberately not XAIGranularSegmenter's `normalize`: that one works on a whole string and strips
+ * a fixed ASCII-ish punctuation list, so the two can disagree on the same word (e.g. combining marks
+ * or other Unicode punctuation). Each is internally consistent; they never compare with each other.
+ */
 function normalizeWord(word: string): string {
 	return word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/** A word for alignment: normalized, with where it starts — a string index for text, an entry index for `words`. */
+interface AlignWord {
+	norm: string;
+	at: number;
+}
+
+/** A transcript's words for alignment, by UAX #29 word boundaries. */
+function textAlignWords(text: string): AlignWord[] {
+	const out: AlignWord[] = [];
+	for (const { segment, index, isWordLike } of wordSegmenter.segment(text)) {
+		if (!isWordLike) continue;
+		const norm = normalizeWord(segment);
+		if (norm) out.push({ norm, at: index });
+	}
+	return out;
+}
+
+/** xAI `words` entries for alignment; an entry with no letters or digits in it is skipped. */
+function entryAlignWords(words: any[]): AlignWord[] {
+	const out: AlignWord[] = [];
+	words.forEach((word, at) => {
+		const norm = normalizeWord(wordText(word));
+		if (norm) out.push({ norm, at });
+	});
+	return out;
 }
 
 /**
@@ -205,49 +251,49 @@ interface EmittedTurn {
 	head: string[];
 	/** The last TURN_ALIGN_ANCHOR_WORDS emitted words, normalized. */
 	tail: string[];
-	/** The last few emitted words as sent, for warnings. */
-	tailRaw: string[];
+	/** The end of the emitted text, for the debug log (transcript text is not logged above debug). */
+	tailText: string;
 	/** Speaker of the last labelled word emitted, when diarized. */
 	speaker?: number;
 }
 
 function emptyEmittedTurn(): EmittedTurn {
-	return { count: 0, head: [], tail: [], tailRaw: [] };
+	return { count: 0, head: [], tail: [], tailText: '' };
 }
 
 /**
- * Where the not-yet-emitted rest of a turn starts in its speech_final, given what was emitted.
- * xAI's end-of-turn text is the committed segments joined — sometimes verbatim (every staging
- * turn read on 2026-09-23 was an exact space-join), sometimes re-punctuated and re-cased (the
- * `xai-live-turn.json` capture: segments ending `that.` / `person.` come back joined with
+ * Where the not-yet-emitted rest of a turn starts in its speech_final words, given what was
+ * emitted. xAI's end-of-turn text is the committed segments joined — sometimes verbatim (every
+ * staging turn read on 2026-09-23 was an exact space-join), sometimes re-punctuated and re-cased
+ * (the `xai-live-turn.json` capture: segments ending `that.` / `person.` come back joined with
  * commas) — so a literal prefix comparison cannot be relied on, and a prefix cut at a non-word
  * boundary would split a word. Instead the last few emitted words are located in the whole-turn
  * words, at the occurrence nearest to where the emitted word count says they should be, and
  * everything after them is the rest (`anchor`); that handles both shapes.
  *
  * If xAI revised those words so they cannot be found, the speech_final's first words decide what
- * it is. When any of them is the turn's word in that position it is the whole turn, and as many
- * words as were emitted are dropped (`count`: can drop or repeat a word at the boundary). When
- * none is, it cannot be the whole turn — it carries only what followed — so all of it is the rest
- * (`tail`), rather than slicing off words that never went out. The caller warns on both.
+ * it is. Only when they are exactly the turn's first words is it the whole turn, and then as many
+ * words as were emitted are dropped (`count`: can drop or repeat a word at the boundary).
+ * Otherwise it is taken to carry only what followed, and all of it is the rest (`tail`). The head
+ * test is strict on purpose: a turn and its tail can easily share one short word ("so", "I"), and
+ * mistaking a tail for the whole turn drops up to everything that was emitted, while the opposite
+ * mistake only repeats it. The caller warns on both fallbacks.
  */
 function alignTurnRest(full: string[], emitted: EmittedTurn): { start: number; match: 'anchor' | 'count' | 'tail' } {
 	if (emitted.count === 0) return { start: 0, match: 'anchor' };
 
-	const fullNorm = full.map(normalizeWord);
 	const anchor = emitted.tail;
 	const expectedEnd = emitted.count;
 	let bestEnd = -1;
 	for (let i = 0; anchor.length > 0 && i + anchor.length <= full.length; i++) {
-		if (!anchor.every((w, j) => fullNorm[i + j] === w)) continue;
+		if (!anchor.every((w, j) => full[i + j] === w)) continue;
 		const end = i + anchor.length;
 		if (bestEnd < 0 || Math.abs(end - expectedEnd) < Math.abs(bestEnd - expectedEnd)) bestEnd = end;
 	}
 	if (bestEnd >= 0) return { start: bestEnd, match: 'anchor' };
 
-	// Any one of the first words in place is enough: xAI may have revised the others too.
-	const fullHead = fullNorm.filter(Boolean).slice(0, emitted.head.length);
-	const startsLikeTurn = fullHead.some((w, i) => w === emitted.head[i]);
+	const head = emitted.head;
+	const startsLikeTurn = head.length > 0 && full.length >= head.length && head.every((w, i) => full[i] === w);
 	if (!startsLikeTurn) return { start: 0, match: 'tail' };
 	return { start: Math.min(emitted.count, full.length), match: 'count' };
 }
@@ -279,6 +325,10 @@ export class XAIBackend implements TranscriptionBackend {
 	private turnTimer?: ReturnType<typeof setTimeout>;
 	private pendingSegments: Array<{ text: string; words?: any[] }> = [];
 	private emitted: EmittedTurn = emptyEmittedTurn();
+	// Ends the turn when xAI sends no speech_final after the idle silence (see forceCommit()).
+	private idleTurnEndTimer?: ReturnType<typeof setTimeout>;
+	// A turn ended after the last audio was sent, so there is nothing for an idle silence to finalize.
+	private turnEndedSinceAudio = false;
 
 	/**
 	 * xAI's request id for the current stream, from the handshake response headers.
@@ -718,6 +768,10 @@ export class XAIBackend implements TranscriptionBackend {
 			throw new Error(`Cannot send audio: connection not ready (status: ${this.status})`);
 		}
 
+		// The speaker is talking again: a turn in progress continues, and the next idle has work to do.
+		this.turnEndedSinceAudio = false;
+		this.clearIdleTurnEnd();
+
 		try {
 			const audioBuffer = Buffer.from(audioBase64, 'base64');
 			this.ws.send(audioBuffer);
@@ -747,6 +801,13 @@ export class XAIBackend implements TranscriptionBackend {
 		if (!this.ws || this.status !== 'connected') {
 			return;
 		}
+		if (this.turnEndedSinceAudio) {
+			// xAI already ended the turn after the last audio we sent (a speech_final that left
+			// nothing to emit, e.g. because the long-turn cap had emitted it all, clears no idle
+			// timer in the owner). There is nothing left to finalize.
+			logger.debug(`Skipping idle silence for tag ${this.tag}: the turn already ended after the last audio`);
+			return;
+		}
 		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
 		const silenceMs = endpointingMs + XAI_IDLE_SILENCE_MARGIN_MS;
 		// Signed 16-bit mono PCM (2 bytes/sample) at the stream rate; a zero-filled buffer is silence.
@@ -756,6 +817,36 @@ export class XAIBackend implements TranscriptionBackend {
 			logger.debug(`Injected ${silenceMs}ms idle silence to flush xAI final (WS kept open) for tag ${this.tag}`);
 		} catch (error) {
 			logger.error(`Failed to inject idle silence for tag ${this.tag}`, error);
+		}
+		this.armIdleTurnEnd(silenceMs + XAI_IDLE_TURN_END_GRACE_MS);
+	}
+
+	/**
+	 * End a turn in progress if xAI answers the idle silence with no speech_final. Otherwise the
+	 * turn — and what the long-turn cap recorded as emitted from it — would stay open across the
+	 * silence: every segment the speaker commits minutes later would go out at once as past the
+	 * cap, and the next speech_final would be aligned against the stale record. What xAI committed
+	 * is flushed; interim text it never committed is lost, as it always was without a speech_final.
+	 * New audio cancels this (the speaker resumed); so does the turn ending any other way.
+	 */
+	private armIdleTurnEnd(delayMs: number): void {
+		this.clearIdleTurnEnd();
+		if (this.turnStartedAt === undefined) return;
+		this.idleTurnEndTimer = setTimeout(() => {
+			this.idleTurnEndTimer = undefined;
+			if (this.status !== 'connected' || this.turnStartedAt === undefined) return;
+			logger.info(`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle silence; ending the turn`);
+			this.flushHeldSegments(this.lastLanguage, 'ended on idle without speech_final', false);
+			this.resetTurn();
+			this.turnEndedSinceAudio = true;
+		}, delayMs);
+		unrefTimer(this.idleTurnEndTimer);
+	}
+
+	private clearIdleTurnEnd(): void {
+		if (this.idleTurnEndTimer) {
+			clearTimeout(this.idleTurnEndTimer);
+			this.idleTurnEndTimer = undefined;
 		}
 	}
 
@@ -899,7 +990,7 @@ export class XAIBackend implements TranscriptionBackend {
 	private startTurn(): void {
 		if (this.turnStartedAt !== undefined) return;
 		this.turnStartedAt = Date.now();
-		const maxTurnMs = config.xai.maxTurnMs ?? 0;
+		const maxTurnMs = config.xai.maxTurnMs;
 		if (!(maxTurnMs > 0)) return;
 		this.turnTimer = setTimeout(() => {
 			this.turnTimer = undefined;
@@ -913,9 +1004,7 @@ export class XAIBackend implements TranscriptionBackend {
 			}
 			this.flushHeldSegments(this.lastLanguage, `reached ${maxTurnMs}ms without speech_final`);
 		}, maxTurnMs);
-		// Same as the granular timer: don't keep the process alive; unref() is absent on the
-		// DOM/CF timer type, hence the cast and the optional chain.
-		(this.turnTimer as any)?.unref?.();
+		unrefTimer(this.turnTimer);
 	}
 
 	/**
@@ -926,14 +1015,15 @@ export class XAIBackend implements TranscriptionBackend {
 	private commitSegment(text: string, words: any[] | undefined, language: string | undefined): boolean {
 		this.pendingSegments.push({ text, words: Array.isArray(words) && words.length > 0 ? words : undefined });
 
-		const maxTurnMs = config.xai.maxTurnMs ?? 0;
+		const maxTurnMs = config.xai.maxTurnMs;
 		const turnAgeMs = Date.now() - (this.turnStartedAt ?? Date.now());
 		logger.debug(
 			`xAI committed a segment for ${this.tag} (turn age ${turnAgeMs}ms, ${this.pendingSegments.length} held)`,
 		);
 		if (!(maxTurnMs > 0) || turnAgeMs < maxTurnMs) return false;
 
-		this.flushHeldSegments(language, `is ${turnAgeMs}ms old without speech_final`);
+		// A partial need not carry `language`; the early final should still say what language it is.
+		this.flushHeldSegments(language ?? this.lastLanguage, `is ${turnAgeMs}ms old without speech_final`);
 		return true;
 	}
 
@@ -954,22 +1044,24 @@ export class XAIBackend implements TranscriptionBackend {
 			? segments.flatMap((s) => s.words ?? splitWords(s.text).map((text) => ({ text })))
 			: undefined;
 		logger.debug(`xAI turn for ${this.tag} ${reason}; emitting ${segments.length} committed segment(s) as a final`);
+		// Recorded in the units the speech_final will be aligned in: `words` entries when diarized,
+		// the text's words otherwise.
 		if (this.isDiarizedWords(segmentWords)) {
 			this.emitDiarized(segmentWords!, language, false, this.emitted.speaker, midUtterance);
-			this.recordEmitted(segmentWords!.map(wordText), lastSpeaker(segmentWords!));
+			this.recordEmitted(entryAlignWords(segmentWords!), segmentText, lastSpeaker(segmentWords!));
 		} else {
 			this.emitText(segmentText, segmentWords, language, false, midUtterance);
-			this.recordEmitted(splitWords(segmentText));
+			this.recordEmitted(textAlignWords(segmentText), segmentText);
 		}
 	}
 
-	private recordEmitted(words: string[], speaker?: number): void {
+	private recordEmitted(words: AlignWord[], text: string, speaker?: number): void {
 		const emitted = this.emitted;
-		const normalized = words.map(normalizeWord).filter(Boolean);
-		emitted.count += words.length;
+		const normalized = words.map((w) => w.norm);
+		emitted.count += normalized.length;
 		emitted.head = [...emitted.head, ...normalized].slice(0, TURN_ALIGN_ANCHOR_WORDS);
 		emitted.tail = [...emitted.tail, ...normalized].slice(-TURN_ALIGN_ANCHOR_WORDS);
-		emitted.tailRaw = [...emitted.tailRaw, ...words].slice(-TURN_LOG_TAIL_WORDS);
+		emitted.tailText = `${emitted.tailText} ${text}`.slice(-TURN_LOG_TAIL_CHARS);
 		if (speaker !== undefined) emitted.speaker = speaker;
 	}
 
@@ -986,42 +1078,50 @@ export class XAIBackend implements TranscriptionBackend {
 		} else if (this.emitted.count === 0) {
 			this.emitText(text, words, language, false);
 		} else if (this.isDiarizedWords(words)) {
-			const { start, match } = alignTurnRest(words!.map(wordText), this.emitted);
-			this.warnUnalignedRest(match, words!.length, text);
-			const rest = words!.slice(start);
+			const entries = entryAlignWords(words!);
+			const { start, match } = alignTurnRest(entries.map((w) => w.norm), this.emitted);
+			this.warnUnalignedRest(match, entries.length, text);
+			const restAt = start < entries.length ? entries[start].at : words!.length;
+			const rest = words!.slice(restAt);
 			// A rest that starts on an unlabelled word continues the speaker it was emitted under.
-			const priorSpeaker = lastSpeaker(words!.slice(0, start)) ?? this.emitted.speaker;
-			if (rest.length > 0) this.emitDiarized(rest, language, false, priorSpeaker);
+			const priorSpeaker = lastSpeaker(words!.slice(0, restAt)) ?? this.emitted.speaker;
+			if (rest.length > 0) this.emitDiarized(rest, language ?? this.lastLanguage, false, priorSpeaker);
 		} else {
-			const textWords = splitWords(text);
-			const { start, match } = alignTurnRest(textWords, this.emitted);
+			const textWords = textAlignWords(text);
+			const { start, match } = alignTurnRest(textWords.map((w) => w.norm), this.emitted);
 			this.warnUnalignedRest(match, textWords.length, text);
 			if (start < textWords.length) {
-				// Here `words` only supplies confidence, and lines up with the text only when the counts agree.
+				// Cut the original text rather than re-joining words, which would put spaces into a
+				// language written without them. `words` only supplies confidence here, and lines up
+				// with the text only when the counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
-				this.emitText(textWords.slice(start).join(' '), restWords, language, false);
+				this.emitText(text.slice(textWords[start].at).trim(), restWords, language ?? this.lastLanguage, false);
 			}
 		}
 		this.resetTurn();
+		this.turnEndedSinceAudio = true;
 	}
 
-	/** The fallbacks in alignTurnRest can drop or repeat words, so say when one was taken. */
+	/**
+	 * The fallbacks in alignTurnRest can drop or repeat words, so say when one was taken. Counts
+	 * only at warn: transcript text goes to the log pipeline at debug only.
+	 */
 	private warnUnalignedRest(match: 'anchor' | 'count' | 'tail', fullWords: number, text: string): void {
 		if (match === 'anchor') return;
-		const emitted = `emitted: "…${this.emitted.tailRaw.join(' ')}"; turn: "${text.slice(0, 120)}"`;
 		if (match === 'tail') {
 			logger.warn(
-				`xAI speech_final for ${this.tag} neither contains the last words already emitted for the turn nor starts with its first words; emitting it whole as the rest of the turn (${emitted})`,
+				`xAI speech_final for ${this.tag} (${fullWords} words) neither contains the last words already emitted for the turn nor starts with its first words; emitting it whole as the rest of the turn (${this.emitted.count} words already emitted)`,
 			);
-			return;
+		} else {
+			const nothingLeft =
+				fullWords <= this.emitted.count
+					? `; it carries ${fullWords} words but ${this.emitted.count} were already emitted, so nothing more is emitted`
+					: '';
+			logger.warn(
+				`xAI speech_final for ${this.tag} does not contain the last words already emitted for the turn; falling back to dropping ${this.emitted.count} words by count${nothingLeft}`,
+			);
 		}
-		const nothingLeft =
-			fullWords <= this.emitted.count
-				? `; it carries ${fullWords} words but ${this.emitted.count} were already emitted, so nothing more is emitted`
-				: '';
-		logger.warn(
-			`xAI speech_final for ${this.tag} does not contain the last words already emitted for the turn; falling back to dropping ${this.emitted.count} words by count${nothingLeft} (${emitted})`,
-		);
+		logger.debug(`xAI turn reconciliation for ${this.tag}: emitted "…${this.emitted.tailText}"; speech_final "${text}"`);
 	}
 
 	private resetTurn(): void {
@@ -1029,6 +1129,7 @@ export class XAIBackend implements TranscriptionBackend {
 			clearTimeout(this.turnTimer);
 			this.turnTimer = undefined;
 		}
+		this.clearIdleTurnEnd();
 		this.turnStartedAt = undefined;
 		this.pendingSegments = [];
 		this.emitted = emptyEmittedTurn();
@@ -1080,6 +1181,7 @@ export class XAIBackend implements TranscriptionBackend {
 			// Turn ended (the segmenter already reset its per-turn state inside endTurn); just stop
 			// the pending flush timer — there is nothing left to flush for this turn.
 			this.clearGranularTimer();
+			this.turnEndedSinceAudio = true;
 		} else {
 			this.scheduleGranularFlush();
 		}
@@ -1132,10 +1234,7 @@ export class XAIBackend implements TranscriptionBackend {
 			}
 			this.scheduleGranularFlush();
 		}, delay);
-		// Don't let the flush timer keep the process alive on its own (Node). The `as any` cast is
-		// because the DOM/CF setTimeout type (number) has no unref(); the optional chain makes it a
-		// no-op where unref isn't available.
-		(this.granularTimer as any)?.unref?.();
+		unrefTimer(this.granularTimer);
 	}
 
 	private clearGranularTimer(): void {
@@ -1166,7 +1265,12 @@ export class XAIBackend implements TranscriptionBackend {
 		// A stream that ends mid-turn: flush the turn, minus anything the long-turn cap already
 		// emitted. An empty one (the usual stream-end notification) still ends a turn in progress,
 		// like an empty speech_final: it flushes what xAI committed and stops the cap timer. With no
-		// turn in progress it emits nothing.
+		// turn in progress, a turn that ended after the last audio sent is all it can be repeating,
+		// so it is ignored; otherwise its text was never seen in a partial and is emitted.
+		if (this.turnStartedAt === undefined && this.turnEndedSinceAudio) {
+			if (text.trim()) logger.debug(`Ignoring xAI transcript.done for ${this.tag}: the turn already ended after the last audio`);
+			return;
+		}
 		this.endTurn(text, msg.words, language);
 	}
 
