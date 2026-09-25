@@ -250,11 +250,13 @@ function entryAlignWords(words: any[]): AlignWord[] {
 	return out;
 }
 
-// Between the last emitted word and the first word of the rest, what closes the emitted part is
-// dropped: whitespace, sentence punctuation, closing brackets and quotes, and a dash xAI put
-// between segments (one followed by space; "-5" keeps its sign). Whatever is left prefixes the
+// Between the last emitted word and the first word of the rest, what belongs to the emitted part
+// is dropped: whatever is attached to its last word ("20%.", "fell—", a closing quote), then
+// whitespace, sentence punctuation, closing brackets and quotes, and a dash xAI put between
+// segments (one or more followed by a space; "-5" keeps its sign). Whatever is left prefixes the
 // rest ("¿", "(", a quote, "$100", "#1", "@name") and stays with it.
-const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]|\p{Pd}(?=\s))+/u;
+const ATTACHED_TO_WORD_RE = /^\S*/u;
+const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]|\p{Pd}+(?=\s))+/u;
 
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
 const NO_SPACE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\u3000-\u303f\uff00-\uffef]/u;
@@ -1278,13 +1280,16 @@ export class XAIBackend implements TranscriptionBackend {
 			this.warnUnalignedRest(match, textWords.length, text, emitted);
 			if (start < textWords.length) {
 				// Cut the original text rather than re-joining words, which would put spaces into a
-				// language written without them. What closes the emitted part is dropped; what prefixes
-				// the rest ("¿", a quote, "$") stays with it.
+				// language written without them. What belongs to the emitted part (attached to its last
+				// word, or closing it) is dropped; what prefixes the rest ("¿", a quote, "$") stays.
 				// `words` only supplies confidence here, and lines up with the text only when the
 				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
 				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
-				const between = text.slice(cutAt, textWords[start].at).replace(CLOSING_PUNCTUATION_RE, '');
+				const between = text
+					.slice(cutAt, textWords[start].at)
+					.replace(ATTACHED_TO_WORD_RE, '')
+					.replace(CLOSING_PUNCTUATION_RE, '');
 				const rest = between + text.slice(textWords[start].at);
 				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}

@@ -2061,6 +2061,20 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['alpha beta gamma delta.', 'one two three four five.']);
 		});
 
+		it('drops what is attached to the last emitted word, and an unspaced or doubled dash', () => {
+			partial('went up 20%.', true, false);
+			vi.setSystemTime(16000);
+			partial('then it fell.', true, false);
+			partial('went up 20%, and then it fell—so we -- sold “everything”.', true, true);
+			expect(finalTexts()).toEqual(['went up 20%. then it fell.', 'so we -- sold “everything”.']);
+			// (the "--" mid-rest is inside the rest, untouched; only what sits at the cut is dropped)
+			partial('a b c.', true, false);
+			vi.setSystemTime(40000);
+			partial('d e f.', true, false);
+			partial('a b c. d e f -- “g”', true, true);
+			expect(finalTexts().slice(3)).toEqual(['“g”']);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;
