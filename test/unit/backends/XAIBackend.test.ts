@@ -2024,6 +2024,7 @@ describe('XAIBackend', () => {
 			vi.setSystemTime(5000);
 			partial('Okay, let us go.', true, true);
 			expect(finalTexts()).toEqual(['Okay, let us go.']);
+			expect((logger.debug as any).mock.calls.some((args: any[]) => String(args[0]).includes('cannot be told from a re-rendering'))).toBe(true);
 		});
 
 		it('drops a dash xAI put between the emitted part and the rest, but keeps an opening quote', () => {

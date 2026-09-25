@@ -1178,7 +1178,8 @@ export class XAIBackend implements TranscriptionBackend {
 		this.pendingSegments.push({ text, words: Array.isArray(words) && words.length > 0 ? words : undefined });
 
 		const maxTurnMs = config.xai.maxTurnMs;
-		const turnAgeMs = Date.now() - (this.turnStartedAt ?? Date.now());
+		// startTurn() ran before any commit reaches here (with the cap on, which the guard above ensures).
+		const turnAgeMs = Date.now() - this.turnStartedAt!;
 		logger.debug(
 			`xAI committed a segment for ${this.tag} (turn age ${turnAgeMs}ms, ${this.pendingSegments.length} held)`,
 		);
@@ -1268,7 +1269,12 @@ export class XAIBackend implements TranscriptionBackend {
 		recordEmitted(held, textAlignWords(heldText), heldText);
 		// Fewer words than an anchor ("OK.") cannot be told from a re-rendering ("Okay,"): repeating
 		// a one-word ack is worse than dropping it, which is what always happened before the cap.
-		if (held.count < TURN_ALIGN_ANCHOR_WORDS) return;
+		if (held.count < TURN_ALIGN_ANCHOR_WORDS) {
+			logger.debug(
+				`xAI turn for ${this.tag}: ${held.count} held word(s) cannot be told from a re-rendering; taking the speech_final as the whole turn`,
+			);
+			return;
+		}
 		const full = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
 		const { match } = alignTurnRest(full.map((w) => w.norm), held);
 		if (match !== 'tail') return;
