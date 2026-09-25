@@ -2075,6 +2075,29 @@ describe('XAIBackend', () => {
 			expect(finalTexts().slice(3)).toEqual(['“g”']);
 		});
 
+		it('keeps the opener of a fresh turn emitted whole after an idle-ended turn', async () => {
+			partial('alpha beta gamma delta.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('¿Qué pasa contigo? “Hello,” he said. $100.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta gamma delta.', '¿Qué pasa contigo? “Hello,” he said. $100.']);
+		});
+
+		it('keeps an opener that has no space before it, in a script without spaces or after a dash', () => {
+			partial('涨了。', true, false);
+			vi.setSystemTime(16000);
+			partial('然后跌了。', true, false);
+			partial('涨了。「然后跌了」，「再涨」', true, true);
+			expect(finalTexts()).toEqual(['涨了。然后跌了。', '「再涨」']);
+			partial('it fell.', true, false);
+			vi.setSystemTime(40000);
+			partial('so we sold.', true, false);
+			partial('it fell—so we sold—“cheap”.', true, true);
+			expect(finalTexts().slice(2)).toEqual(['it fell. so we sold.', '“cheap”.']);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;

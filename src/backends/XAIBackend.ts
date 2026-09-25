@@ -254,8 +254,9 @@ function entryAlignWords(words: any[]): AlignWord[] {
 // is dropped: whatever is attached to its last word ("20%.", "fell—", a closing quote), then
 // whitespace, sentence punctuation, closing brackets and quotes, and a dash xAI put between
 // segments (one or more followed by a space; "-5" keeps its sign). Whatever is left prefixes the
-// rest ("¿", "(", a quote, "$100", "#1", "@name") and stays with it.
-const ATTACHED_TO_WORD_RE = /^\S*/u;
+// rest ("¿", "(", a quote, "$100", "#1", "@name") and stays with it — so the attached run stops at
+// the first such opener, which need not have a space before it ("fell—“so", 「 in CJK text).
+const ATTACHED_TO_WORD_RE = /^[^\s\p{Ps}\p{Pi}\p{Sc}¿¡"'«#@]*/u;
 const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]|\p{Pd}+(?=\s))+/u;
 
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
@@ -1286,10 +1287,11 @@ export class XAIBackend implements TranscriptionBackend {
 				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
 				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
-				const between = text
-					.slice(cutAt, textWords[start].at)
-					.replace(ATTACHED_TO_WORD_RE, '')
-					.replace(CLOSING_PUNCTUATION_RE, '');
+				// With nothing emitted from this text (start 0) it is the rest in full, opener included.
+				const between =
+					start > 0
+						? text.slice(cutAt, textWords[start].at).replace(ATTACHED_TO_WORD_RE, '').replace(CLOSING_PUNCTUATION_RE, '')
+						: text.slice(0, textWords[0].at);
 				const rest = between + text.slice(textWords[start].at);
 				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}
