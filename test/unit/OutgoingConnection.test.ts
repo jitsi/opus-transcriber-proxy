@@ -403,7 +403,8 @@ describe('OutgoingConnection', () => {
 
 		it('should clear idle timeout on completion', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
-			await vi.runAllTimersAsync();
+			// Wait for backend initialization only: running all timers would fire the idle timeout too.
+			await vi.advanceTimersByTimeAsync(100);
 
 			// Send audio
 			const mediaEvent = {
@@ -415,7 +416,9 @@ describe('OutgoingConnection', () => {
 				},
 			};
 			conn.handleMediaEvent(mediaEvent);
-			await vi.runAllTimersAsync();
+			await vi.advanceTimersByTimeAsync(100);
+
+			const commitCountBefore = mockBackend.getForceCommitCallCount();
 
 			// Simulate backend completing transcription
 			mockBackend.simulateCompleteTranscription({
@@ -432,7 +435,41 @@ describe('OutgoingConnection', () => {
 			vi.advanceTimersByTime(3000);
 
 			// Should NOT have called forceCommit (cleared on completion)
-			// Note: This depends on implementation details
+			expect(mockBackend.getForceCommitCallCount()).toBe(commitCountBefore);
+		});
+
+		it('keeps the idle timeout armed after a mid-utterance final', async () => {
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+			// Wait for backend initialization only: running all timers would fire the idle timeout too.
+			await vi.advanceTimersByTimeAsync(100);
+
+			conn.handleMediaEvent({
+				media: {
+					tag: 'test-tag',
+					payload: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64'),
+					chunk: 0,
+					timestamp: 0,
+				},
+			});
+			await vi.advanceTimersByTimeAsync(100);
+			const commitCountBefore = mockBackend.getForceCommitCallCount();
+
+			// e.g. xAI's long-turn cap emitting part of a turn: the rest still needs the force-commit.
+			mockBackend.simulateCompleteTranscription(
+				{
+					transcript: [{ text: 'first part of a long turn' }],
+					is_interim: false,
+					message_id: '124',
+					type: 'transcription-result',
+					event: 'transcription-result',
+					participant: { id: 'endpoint1', tag: 'endpoint1-a0' },
+					timestamp: Date.now(),
+				},
+				true,
+			);
+
+			vi.advanceTimersByTime(3000);
+			expect(mockBackend.getForceCommitCallCount()).toBe(commitCountBefore + 1);
 		});
 	});
 

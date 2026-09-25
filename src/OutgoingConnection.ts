@@ -220,10 +220,13 @@ export class OutgoingConnection {
 			this.onInterimTranscription?.(message);
 		};
 
-		backend.onCompleteTranscription = (message) => {
+		backend.onCompleteTranscription = (message, midUtterance) => {
 			getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'false' });
 			this.logTranscriptionSummary(message, false);
-			this.clearIdleCommitTimeout();
+			// A final normally means the provider finalized the pending audio, so no force-commit
+			// is needed. A mid-utterance final (xAI's long-turn cap, granular finals) does not: if
+			// the speaker stops right after it, the idle force-commit is what finalizes the rest.
+			if (!midUtterance) this.clearIdleCommitTimeout();
 			this.onCompleteTranscription?.(message);
 		};
 
@@ -359,7 +362,11 @@ export class OutgoingConnection {
 	private async reconnectBackend(generation: number, reason?: string): Promise<boolean> {
 		// Detach all handlers from the old backend before closing it so that its
 		// onClosed / onError callbacks don't trigger OutgoingConnection teardown
-		// while we're replacing it.
+		// while we're replacing it. A backend that holds committed-but-unemitted text
+		// (XAIBackend's long-turn cap) relies on this ordering: it flushes that text
+		// through onCompleteTranscription *before* calling onError, because after
+		// onError the callbacks are gone. Keep the flush-before-onError contract in
+		// mind if this detachment moves.
 		const oldBackend = this.backend!;
 		const wasConnected = oldBackend.getStatus() === 'connected';
 		oldBackend.onInterimTranscription = undefined;
@@ -787,7 +794,10 @@ export class OutgoingConnection {
 		if (this.backend) {
 			// Detach callbacks before calling close() so that asynchronous backend
 			// events (e.g. a WebSocket 'close' frame arriving after we return) do
-			// not invoke handlers on this already-torn-down connection.
+			// not invoke handlers on this already-torn-down connection. XAIBackend
+			// flushes held committed text before it calls onError for the same
+			// reason: by the time close() runs here, there is nobody to send it to
+			// (see XAIBackend.flushHeldSegments).
 			this.backend.onClosed = undefined;
 			this.backend.onError = undefined;
 			this.backend.onInterimTranscription = undefined;

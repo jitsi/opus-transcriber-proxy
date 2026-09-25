@@ -61,7 +61,8 @@ export interface GranularSegmenterOptions {
 
 const SENTENCE_END = /[.?!]$/;
 
-function splitWords(s: string): string[] {
+/** Also used by XAIBackend's long-turn cap for the stand-in words of a diarized segment that has none. */
+export function splitWords(s: string): string[] {
 	return s.trim().split(/\s+/).filter(Boolean);
 }
 
