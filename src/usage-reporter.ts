@@ -1,4 +1,5 @@
 import type { Logger } from './translate/runtime';
+import { unrefTimer } from './translate/timers';
 
 /**
  * Live audio-translation usage reporter.
@@ -90,9 +91,7 @@ export function reportTranslationUsage(event: TranslationUsageEvent, deps: Usage
 		void flushTranslationUsage();
 	} else if (!flushTimer) {
 		flushTimer = setTimeout(() => void flushTranslationUsage(), FLUSH_MAX_AGE_MS);
-		// Don't keep the process alive solely for a pending flush. `unref` exists on Node's Timeout but
-		// not on the Worker's numeric timer id, so probe for it (the cast bridges both return types).
-		(flushTimer as unknown as { unref?: () => void }).unref?.();
+		unrefTimer(flushTimer);
 	}
 }
 

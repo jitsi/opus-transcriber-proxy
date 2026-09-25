@@ -1158,6 +1158,20 @@ describe('XAIBackend', () => {
 			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe(afterTurn);
 		});
 
+		it('injects the idle silence for a granular turn that opened after the previous one ended', async () => {
+			await connectGranular();
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('hello world foo bar', true, true); // turn A ends after the last audio
+			getMockWs().clearSentMessages();
+			backend.forceCommit();
+			expect(getMockWs().getSentMessages()).toHaveLength(0); // nothing left of A to finalize
+
+			partial('bye bye', false, false); // B, from audio already in flight: never speech_final'd on its own
+			getMockWs().clearSentMessages();
+			backend.forceCommit();
+			expect(getMockWs().getSentMessages()).toHaveLength(1);
+		});
+
 		it('falls back to default mode (no granular) when diarize is enabled', async () => {
 			(config.xai as any).diarize = true;
 			try {
@@ -1692,23 +1706,103 @@ describe('XAIBackend', () => {
 		});
 
 		it('does not repeat an idle-ended turn that xAI keeps open after the speaker resumes', async () => {
-			partial('alpha beta.', true, false);
-			vi.advanceTimersByTime(15000); // cap timer emits "alpha beta."
+			partial('alpha beta gamma.', true, false);
+			vi.advanceTimersByTime(15000); // cap timer emits "alpha beta gamma."
 			backend.forceCommit();
 			vi.advanceTimersByTime(850 + 300 + 3000); // idle turn end
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
-			partial('gamma', false, false); // xAI's turn is still the same one
-			partial('alpha beta. gamma delta.', true, true);
-			expect(finalTexts()).toEqual(['alpha beta.', 'gamma delta.']);
+			partial('delta', false, false); // xAI's turn is still the same one
+			partial('alpha beta gamma. delta epsilon.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta epsilon.']);
 		});
 
 		it('emits the tail a late transcript.done carries after an idle-ended turn', () => {
+			partial('alpha beta gamma.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta gamma. delta.' }));
+			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta.']);
+		});
+
+		it('does not repeat a short idle-ended turn when its speech_final arrives late', () => {
 			partial('alpha beta.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
 			vi.advanceTimersByTime(850 + 300 + 3000);
-			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta. gamma.' }));
-			expect(finalTexts()).toEqual(['alpha beta.', 'gamma.']);
+			partial('alpha beta.', true, true); // exactly the turn again: the late answer, not a new turn
+			expect(finalTexts()).toEqual(['alpha beta.']);
+		});
+
+		it('emits a fresh turn whole after an idle-ended turn whose last words it happens to contain', async () => {
+			partial('okay', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			// A one-word anchor is in most turns; at the end of this one it would drop the whole turn.
+			partial('I think that is okay', true, true);
+			expect(finalTexts()).toEqual(['okay', 'I think that is okay']);
+
+			partial('okay', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			// At the start it is as likely a repeat as a continuation: a repeat is preferred to a loss.
+			partial('okay so let us move on', true, true);
+			expect(finalTexts().slice(2)).toEqual(['okay', 'okay so let us move on']);
+		});
+
+		it('emits a fresh turn whole after an idle-ended turn whose full anchor it contains elsewhere', async () => {
+			partial('see you soon everyone bye.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			// The full anchor ("soon everyone bye") is there, but far from where the count puts it: not this turn.
+			partial('thanks. right, I will say it once more: soon everyone bye.', true, true);
+			expect(finalTexts()).toEqual(['see you soon everyone bye.', 'thanks. right, I will say it once more: soon everyone bye.']);
+		});
+
+		it('does not end the turn on idle when the silence could not be sent', () => {
+			partial('alpha beta.', true, false);
+			const ws = getMockWs();
+			const send = ws.send;
+			ws.send = () => {
+				throw new Error('EPIPE');
+			};
+			try {
+				backend.forceCommit();
+			} finally {
+				ws.send = send;
+			}
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(false);
+			expect(finalResults).toHaveLength(0);
+		});
+
+		it('emits a transcript.done that carries a turn never seen in a partial after a speech_final', async () => {
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('alpha beta gamma.', true, true); // turn A ends after the last audio
+			// The stream ends before B's partials arrive; its transcript.done is all there is of B.
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'delta epsilon.' }));
+			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta epsilon.']);
+		});
+
+		it('emits only the tail of a transcript.done that extends the turn a speech_final ended', async () => {
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('alpha beta gamma.', true, true);
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta gamma. delta.' }));
+			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta.']);
+		});
+
+		it('marks what a socket close flushes as the end of the utterance', () => {
+			const flags: Array<boolean | undefined> = [];
+			backend.onCompleteTranscription = (_msg, midUtterance) => flags.push(midUtterance);
+			partial('alpha beta.', true, false);
+			getMockWs().simulateClose(1006, '', false);
+			expect(flags).toEqual([false]);
 		});
 
 		it('injects the idle silence for a turn that opened after the previous one ended', async () => {
@@ -1749,12 +1843,30 @@ describe('XAIBackend', () => {
 			}
 		});
 
-		it('replaces a held segment when xAI\'s is_finals accumulate', () => {
-			partial('alpha beta', true, false);
-			partial('alpha beta gamma', true, false);
+		it('cuts a diarized words entry that xAI re-tokenised across the emitted boundary', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('it is regulatory', true, false, [w('it', 0), w('is', 0), w('regulatory', 0)]);
+				vi.advanceTimersByTime(15000); // emitted
+				vi.setSystemTime(20000);
+				// The speech_final joins the emitted "regulatory" and the rest into one entry.
+				partial('it is regulatory-compliant. done.', true, true, [w('it', 0), w('is', 0), w('regulatory-compliant.', 0), w('done.', 0)]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+					[0, 'it is regulatory'],
+					[0, 'compliant. done.'],
+				]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('keeps a segment that starts with the previous one\'s words: a speaker repeating themselves', () => {
+			partial('Thank you.', true, false);
+			partial('Thank you very much.', true, false);
 			vi.setSystemTime(16000);
-			partial('alpha beta gamma delta', true, false);
-			expect(finalTexts()).toEqual(['alpha beta gamma delta']);
+			partial('Okay.', true, false);
+			expect(finalTexts()).toEqual(['Thank you. Thank you very much. Okay.']);
 		});
 
 		describe('with XAI_MAX_TURN_MS=0', () => {

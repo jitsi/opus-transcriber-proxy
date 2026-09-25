@@ -1,5 +1,6 @@
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
+import { unrefTimer } from './translate/timers';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
@@ -231,9 +232,7 @@ export class TranslatorConnection {
 		const iv = this.runtime.config.usageReportIntervalMs;
 		if (this.options.onUsageReport && iv && iv > 0) {
 			this.usageReportTimer = setInterval(() => this.reportUsageDelta(), iv);
-			// Don't keep the process alive solely for the reporting timer. `unref` exists on Node's
-			// Timeout but not on the Worker's numeric timer id, so probe for it (the cast bridges both).
-			(this.usageReportTimer as unknown as { unref?: () => void }).unref?.();
+			unrefTimer(this.usageReportTimer);
 		}
 
 		this.initializeOpusDecoder();
@@ -764,8 +763,7 @@ export class TranslatorConnection {
 		}
 		this.talkDeadline = deadline;
 		this.talkTimeout = setTimeout(() => this.endTalk(), playoutAheadMs + this.talkSilenceTimeoutMs);
-		// Don't keep the process alive solely for this timer (Node's Timeout has unref; the Worker's id doesn't).
-		(this.talkTimeout as unknown as { unref?: () => void }).unref?.();
+		unrefTimer(this.talkTimeout);
 	}
 
 	/**
