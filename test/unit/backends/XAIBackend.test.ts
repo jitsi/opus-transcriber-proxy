@@ -1595,7 +1595,7 @@ describe('XAIBackend', () => {
 			vi.setSystemTime(16000);
 			partial('我们需要。', true, false);
 			partial('你好世界，我们需要，还有问题。', true, true);
-			expect(finalTexts()).toEqual(['你好世界。 我们需要。', '还有问题。']);
+			expect(finalTexts()).toEqual(['你好世界。我们需要。', '还有问题。']); // no space put between the segments
 			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('speech_final for test-tag'))).toBe(false);
 		});
 
@@ -1675,6 +1675,115 @@ describe('XAIBackend', () => {
 			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('within'))).toBe(false);
 			partial('alpha beta. gamma.', true, true);
 			expect(finalTexts()).toEqual(['alpha beta. gamma.']);
+		});
+
+		it('does not repeat an idle-ended turn when its speech_final arrives late', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false); // emitted past the cap
+			partial('epsilon.', true, false); // past the cap, emitted as it commits
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000); // the idle turn end fires
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
+
+			// xAI answers after the grace period with the whole turn: only the tail is new.
+			partial('alpha beta. gamma delta. epsilon. zeta.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.', 'zeta.']);
+		});
+
+		it('does not repeat an idle-ended turn that xAI keeps open after the speaker resumes', async () => {
+			partial('alpha beta.', true, false);
+			vi.advanceTimersByTime(15000); // cap timer emits "alpha beta."
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000); // idle turn end
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('gamma', false, false); // xAI's turn is still the same one
+			partial('alpha beta. gamma delta.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta.', 'gamma delta.']);
+		});
+
+		it('emits the tail a late transcript.done carries after an idle-ended turn', () => {
+			partial('alpha beta.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta. gamma.' }));
+			expect(finalTexts()).toEqual(['alpha beta.', 'gamma.']);
+		});
+
+		it('injects the idle silence for a turn that opened after the previous one ended', async () => {
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma.', true, false); // the cap emits everything
+			// All of "yes" was sent before A's speech_final arrived; its partials open a new turn.
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('alpha beta. gamma.', true, true);
+			partial('yes', false, false);
+			getMockWs().clearSentMessages();
+			backend.forceCommit();
+			expect(getMockWs().getSentMessages()).toHaveLength(1);
+		});
+
+		it('aligns a labelled diarized speech_final against an unlabelled segment in the same word units', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker?: number) => ({ text, confidence: 0.9, ...(speaker !== undefined && { speaker }) });
+				partial('hello there.', true, false, [w('hello', 0), w('there.', 0)]);
+				vi.advanceTimersByTime(15000); // emits under speaker 0
+				vi.setSystemTime(20000);
+				// No word labelled: it keeps speaker 0, and "regulatory-compliant" counts as two words.
+				partial('it is regulatory-compliant.', true, false, [w('it'), w('is'), w('regulatory-compliant.')]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+					[0, 'hello there.'],
+					[0, 'it is regulatory-compliant.'],
+				]);
+
+				partial('hello there. it is regulatory-compliant. done.', true, true, [
+					w('hello', 0), w('there.', 0), w('it', 0), w('is', 0), w('regulatory-compliant.', 0), w('done.', 0),
+				]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text]).slice(2)).toEqual([[0, 'done.']]);
+				expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('speech_final for test-tag'))).toBe(false);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('replaces a held segment when xAI\'s is_finals accumulate', () => {
+			partial('alpha beta', true, false);
+			partial('alpha beta gamma', true, false);
+			vi.setSystemTime(16000);
+			partial('alpha beta gamma delta', true, false);
+			expect(finalTexts()).toEqual(['alpha beta gamma delta']);
+		});
+
+		describe('with XAI_MAX_TURN_MS=0', () => {
+			beforeEach(() => {
+				(config.xai as any).maxTurnMs = 0;
+			});
+
+			it('holds nothing, so neither an error nor a close emits a committed segment', () => {
+				partial('alpha beta.', true, false);
+				getMockWs().simulateMessage(JSON.stringify({ type: 'error', message: 'ASR stream timed out' }));
+				expect(finalResults).toHaveLength(0);
+			});
+
+			it('does not end a turn on idle, and always injects the idle silence', () => {
+				partial('alpha beta.', true, false);
+				backend.forceCommit();
+				vi.advanceTimersByTime(60000);
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(false);
+				partial('', true, true); // an empty speech_final emits nothing
+				getMockWs().clearSentMessages();
+				backend.forceCommit();
+				expect(getMockWs().getSentMessages()).toHaveLength(1);
+			});
+
+			it('emits a non-empty transcript.done, as before the cap', () => {
+				partial('alpha beta.', true, true);
+				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'gamma.' }));
+				expect(finalTexts()).toEqual(['alpha beta.', 'gamma.']);
+			});
 		});
 
 		it('sends nothing on an owner-driven close', () => {
