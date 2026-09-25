@@ -1314,6 +1314,85 @@ describe('XAIBackend', () => {
 			}
 		});
 
+		it('flushes a held segment when the turn reaches the cap with no further commit', () => {
+			partial('alpha beta.', true, false); // held: inside the cap, and nothing else comes
+			vi.advanceTimersByTime(14999);
+			expect(finalResults).toHaveLength(0);
+			vi.advanceTimersByTime(1);
+			expect(finalTexts()).toEqual(['alpha beta.']);
+
+			// A late speech_final still emits only the rest.
+			partial('alpha beta. gamma.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta.', 'gamma.']);
+		});
+
+		it('does not arm the cap timer when disabled', () => {
+			(config.xai as any).maxTurnMs = 0;
+			partial('alpha beta.', true, false);
+			vi.advanceTimersByTime(60000);
+			expect(finalResults).toHaveLength(0);
+		});
+
+		it('never cuts a word when the whole-turn text extends an emitted word', () => {
+			partial('alpha beta', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma', true, false);
+			// "beta" became "betamax": a literal prefix match would emit "max delta".
+			partial('alpha betamax gamma delta', true, true);
+			expect(finalTexts()).toEqual(['alpha beta gamma', 'delta']);
+		});
+
+		it('aligns the rest by words when xAI re-tokenises an emitted word', () => {
+			partial('regulatory compliant and things like that.', true, false);
+			vi.setSystemTime(16000);
+			partial('so yeah.', true, false);
+			// Six words went out; the turn renders them as five, so dropping six would lose "so".
+			partial('Regulatory-compliant and things like that, so yeah, done.', true, true);
+			expect(finalTexts()).toEqual(['regulatory compliant and things like that. so yeah.', 'done.']);
+		});
+
+		it('ends the turn on an empty speech_final, emitting what xAI committed', () => {
+			partial('alpha beta.', true, false);
+			partial('', true, true);
+			expect(finalTexts()).toEqual(['alpha beta.']);
+
+			// The next turn starts clean: nothing is sliced off it.
+			vi.setSystemTime(20000);
+			partial('next turn.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta.', 'next turn.']);
+		});
+
+		it('does not slice the next turn after an early final and an empty speech_final', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false); // flushed early
+			partial('', true, true);
+			partial('next turn here.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'next turn here.']);
+		});
+
+		it('flushes a held segment before reporting a stream error', () => {
+			const order: string[] = [];
+			backend.onCompleteTranscription = (msg) => order.push(`final:${msg.transcript[0].text}`);
+			backend.onError = (type) => order.push(`error:${type}`);
+			partial('alpha beta.', true, false);
+			getMockWs().simulateMessage(JSON.stringify({ type: 'error', message: 'ASR stream timed out' }));
+			expect(order).toEqual(['final:alpha beta.', 'error:api_error']);
+		});
+
+		it('flushes a held segment when xAI closes the socket', () => {
+			partial('alpha beta.', true, false);
+			getMockWs().simulateClose(1006, '', false);
+			expect(finalTexts()).toEqual(['alpha beta.']);
+		});
+
+		it('sends nothing on an owner-driven close', () => {
+			partial('alpha beta.', true, false);
+			backend.onCompleteTranscription = undefined;
+			backend.close();
+			expect(finalResults).toHaveLength(0);
+		});
+
 		describe('replaying a live xAI turn', () => {
 			// test/fixtures/xai-live-turn.json: a real paused monologue. xAI commits each segment
 			// with is_final=true and ends the turn with one speech_final carrying the whole turn.

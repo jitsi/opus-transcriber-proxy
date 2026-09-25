@@ -170,22 +170,43 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 	return promise;
 }
 
-function countWords(text: string): number {
-	const trimmed = text.trim();
-	return trimmed ? trimmed.split(/\s+/).length : 0;
+/** How many trailing emitted words to look for in the whole-turn text when aligning the rest. */
+const TURN_ALIGN_ANCHOR_WORDS = 3;
+
+function splitWords(text: string): string[] {
+	return text.trim().split(/\s+/).filter(Boolean);
+}
+
+/** A word reduced to what survives xAI re-punctuating and re-casing it, for aligning two renderings. */
+function normalizeWord(word: string): string {
+	return word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 /**
  * The part of a whole-turn transcript not yet emitted, given the text already emitted from it.
- * xAI's end-of-turn text is normally the committed segments joined, so the emitted text is a
- * prefix; if xAI re-punctuated or revised it, fall back to dropping as many words as were emitted.
+ * xAI's end-of-turn text is the committed segments joined, but re-punctuated and re-cased
+ * (segments ending `that.` / `person.` come back joined with commas), so a literal prefix
+ * comparison is no use — and a prefix cut at a non-word boundary would split a word. Instead the
+ * last few emitted words are located in the whole-turn text, at the occurrence nearest to where
+ * the emitted word count says they should be, and everything after them is the rest. If xAI
+ * revised those words so they cannot be found, fall back to dropping as many words as were emitted.
  */
-function remainingTurnText(fullText: string, emittedText: string, emittedWords: number): string {
-	const normalize = (s: string) => s.trim().replace(/\s+/g, ' ');
-	const full = normalize(fullText);
-	const emitted = normalize(emittedText);
-	if (emitted && full.startsWith(emitted)) return full.slice(emitted.length).trim();
-	return full ? full.split(' ').slice(emittedWords).join(' ') : '';
+function remainingTurnText(fullText: string, emittedText: string): string {
+	const full = splitWords(fullText);
+	const emitted = splitWords(emittedText);
+	if (full.length === 0) return '';
+	if (emitted.length === 0) return full.join(' ');
+
+	const fullNorm = full.map(normalizeWord);
+	const anchor = emitted.map(normalizeWord).filter(Boolean).slice(-TURN_ALIGN_ANCHOR_WORDS);
+	const expectedEnd = emitted.length;
+	let bestEnd = -1;
+	for (let i = 0; anchor.length > 0 && i + anchor.length <= full.length; i++) {
+		if (!anchor.every((w, j) => fullNorm[i + j] === w)) continue;
+		const end = i + anchor.length;
+		if (bestEnd < 0 || Math.abs(end - expectedEnd) < Math.abs(bestEnd - expectedEnd)) bestEnd = end;
+	}
+	return full.slice(bestEnd >= 0 ? bestEnd : expectedEnd).join(' ');
 }
 
 export class XAIBackend implements TranscriptionBackend {
@@ -207,10 +228,14 @@ export class XAIBackend implements TranscriptionBackend {
 
 	// Long-turn cap for the default (one final per turn) mode — see config.xai.maxTurnMs. A turn
 	// runs from its first partial to its speech_final. Segments xAI commits (is_final) during the
-	// turn wait in pendingSegments; if the turn outlives maxTurnMs they are emitted as a final
-	// early, and emittedWords/emittedText record what went out so the speech_final (which carries
-	// the whole turn) emits only the rest.
+	// turn wait in pendingSegments; once the turn is older than maxTurnMs they are emitted as a
+	// final — by turnTimer, or by the commit that finds the turn already past the cap — and
+	// emittedWords/emittedText record what went out so the speech_final (which carries the whole
+	// turn) emits only the rest. emittedWords counts entries of xAI's `words` arrays and is used
+	// only to slice the speech_final's words; the rest of the *text* is aligned on emittedText,
+	// because the two counts need not agree.
 	private turnStartedAt?: number;
+	private turnTimer?: ReturnType<typeof setTimeout>;
 	private pendingSegments: Array<{ text: string; words?: any[] }> = [];
 	private emittedWords = 0;
 	private emittedText = '';
@@ -700,6 +725,10 @@ export class XAIBackend implements TranscriptionBackend {
 	close(): void {
 		logger.debug(`Closing xAI backend for tag: ${this.tag}`);
 		this.clearGranularTimer();
+		// A held segment is committed text that nothing else will ever emit. Flush it if the owner
+		// is still listening: after xAI closed the socket under us it is; on an owner-driven close
+		// the callbacks are already detached, and there is nobody to send it to.
+		if (this.onCompleteTranscription) this.flushHeldSegments(this.lastLanguage, 'closed while a segment was held');
 		this.resetTurn();
 		// If connect() is between attempts, stop it waiting; status is set below and the
 		// loop bails on the next check.
@@ -771,6 +800,9 @@ export class XAIBackend implements TranscriptionBackend {
 			// error level just above, so if the "ASR stream timed out" error rate climbs
 			// after an xAI API change, audit that log and update this matcher.
 			const recoverable = /timed out/i.test(message);
+			// Before onError: the owner detaches our callbacks inside it, so a segment still held
+			// (committed by xAI, never speech_final'd) would otherwise be lost with the stream.
+			this.flushHeldSegments(this.lastLanguage, 'errored while a segment was held');
 			writeMetric(undefined, {
 				name: 'xai_api_error',
 				worker: 'opus-transcriber-proxy',
@@ -785,14 +817,13 @@ export class XAIBackend implements TranscriptionBackend {
 
 	private handlePartial(msg: any): void {
 		const text: string = msg.text ?? '';
-		if (!text.trim()) return;
-
 		const language: string | undefined = msg.language || undefined;
 
 		// Roll-own granular finalization: commit a stable prefix of the growing hypothesis
 		// incrementally so a long turn interleaves in order with other speakers' acks. Never set
 		// on the diarized path (it needs per-speaker hypotheses).
 		if (this.segmenter) {
+			if (!text.trim()) return;
 			this.handlePartialGranular(text, msg.is_final === true, msg.speech_final === true, language);
 			return;
 		}
@@ -800,17 +831,42 @@ export class XAIBackend implements TranscriptionBackend {
 		// Default (one final per turn): within a turn xAI commits segments with is_final=true
 		// (text resets after each), and speech_final=true ends the turn carrying the whole turn's
 		// text — normally the only final. transcript.done fires at stream end, usually empty.
+		// An empty speech_final still ends the turn: otherwise a segment held from it, or the
+		// count of what was already emitted, would leak into the next turn.
 		if (msg.speech_final === true) {
 			this.endTurn(text, msg.words, language);
 			return;
 		}
+		if (!text.trim()) return;
+		if (language) this.lastLanguage = language;
 
-		if (this.turnStartedAt === undefined) this.turnStartedAt = Date.now();
+		this.startTurn();
 		if (msg.is_final === true && this.commitSegment(text, msg.words, language)) {
 			// The segment just went out as a final; an interim of the same text would follow it.
 			return;
 		}
 		this.emitText(text, msg.words, language, true);
+	}
+
+	/**
+	 * Mark the start of a turn on its first partial and, if the long-turn cap is on, arm a timer
+	 * for it. A segment committed inside the cap waits for the next commit or the speech_final;
+	 * if neither comes (the speaker stopped, and xAI sent no speech_final) the timer flushes it
+	 * once the turn reaches the cap instead of stranding it until the stream closes.
+	 */
+	private startTurn(): void {
+		if (this.turnStartedAt !== undefined) return;
+		this.turnStartedAt = Date.now();
+		const maxTurnMs = config.xai.maxTurnMs ?? 0;
+		if (!(maxTurnMs > 0)) return;
+		this.turnTimer = setTimeout(() => {
+			this.turnTimer = undefined;
+			if (this.status !== 'connected') return;
+			this.flushHeldSegments(this.lastLanguage, `reached ${maxTurnMs}ms without speech_final`);
+		}, maxTurnMs);
+		// Same as the granular timer: don't keep the process alive; unref() is absent on the
+		// DOM/CF timer type, hence the cast and the optional chain.
+		(this.turnTimer as any)?.unref?.();
 	}
 
 	/**
@@ -828,17 +884,24 @@ export class XAIBackend implements TranscriptionBackend {
 		);
 		if (!(maxTurnMs > 0) || turnAgeMs < maxTurnMs) return false;
 
+		this.flushHeldSegments(language, `is ${turnAgeMs}ms old without speech_final`);
+		return true;
+	}
+
+	/**
+	 * Emit everything held as one final (split per speaker when diarized) and record it as
+	 * emitted, so the turn's speech_final emits only the rest. No-op when nothing is held.
+	 */
+	private flushHeldSegments(language: string | undefined, reason: string): void {
+		if (this.pendingSegments.length === 0) return;
 		const segments = this.pendingSegments;
 		this.pendingSegments = [];
 		const segmentText = segments.map((s) => s.text.trim()).join(' ');
 		const segmentWords = segments.every((s) => s.words) ? segments.flatMap((s) => s.words!) : undefined;
-		logger.debug(
-			`xAI turn for ${this.tag} passed ${maxTurnMs}ms without speech_final; emitting ${segments.length} committed segment(s) as a final`,
-		);
+		logger.debug(`xAI turn for ${this.tag} ${reason}; emitting ${segments.length} committed segment(s) as a final`);
 		this.emitText(segmentText, segmentWords, language, false);
-		this.emittedWords += segmentWords ? segmentWords.length : countWords(segmentText);
+		this.emittedWords += segmentWords ? segmentWords.length : splitWords(segmentText).length;
 		this.emittedText = this.emittedText ? `${this.emittedText} ${segmentText}` : segmentText;
-		return true;
 	}
 
 	/**
@@ -847,13 +910,16 @@ export class XAIBackend implements TranscriptionBackend {
 	 * only the rest.
 	 */
 	private endTurn(text: string, words: any[] | undefined, language: string | undefined): void {
-		if (this.emittedWords === 0) {
+		if (!text.trim()) {
+			// xAI has nothing more for this turn, so what it committed is all there is.
+			this.flushHeldSegments(language ?? this.lastLanguage, 'ended with an empty speech_final');
+		} else if (this.emittedWords === 0) {
 			this.emitText(text, words, language, false);
 		} else if (this.isDiarizedWords(words)) {
 			const rest = words!.slice(this.emittedWords);
 			if (rest.length > 0) this.emitDiarized(rest, language, false);
 		} else {
-			const rest = remainingTurnText(text, this.emittedText, this.emittedWords);
+			const rest = remainingTurnText(text, this.emittedText);
 			if (rest) {
 				const restWords = Array.isArray(words) ? words.slice(this.emittedWords) : undefined;
 				this.emitText(rest, restWords, language, false);
@@ -863,6 +929,10 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	private resetTurn(): void {
+		if (this.turnTimer) {
+			clearTimeout(this.turnTimer);
+			this.turnTimer = undefined;
+		}
 		this.turnStartedAt = undefined;
 		this.pendingSegments = [];
 		this.emittedWords = 0;
