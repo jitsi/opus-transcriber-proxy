@@ -1231,6 +1231,7 @@ describe('XAIBackend', () => {
 				JSON.stringify({ type: 'transcript.partial', is_final: isFinal, speech_final: speechFinal, text, ...(words && { words }) }),
 			);
 		const finalTexts = () => finalResults.map((m) => m.transcript[0].text);
+		const warnLogs = (): string[] => (logger.warn as any).mock.calls.map((args: any[]) => String(args[0]));
 
 		beforeEach(async () => {
 			vi.useFakeTimers();
@@ -1891,11 +1892,111 @@ describe('XAIBackend', () => {
 				expect(getMockWs().getSentMessages()).toHaveLength(1);
 			});
 
+			it('always injects the idle silence in granular mode too', async () => {
+				const g = new XAIBackend('g-tag', { id: 'p2' });
+				const p = g.connect({ ...DEFAULT_CONFIG, xaiGranularFinals: true, xaiGranularStabilityMs: 600, xaiGranularGuardWords: 2 });
+				getMockWs().simulateOpen();
+				await p;
+				await g.sendAudio(Buffer.from([1, 2]).toString('base64'));
+				partial('hello world foo bar', true, true); // the granular turn ends after the last audio
+				getMockWs().clearSentMessages();
+				g.forceCommit();
+				expect(getMockWs().getSentMessages()).toHaveLength(1);
+				g.close();
+			});
+
 			it('emits a non-empty transcript.done, as before the cap', () => {
 				partial('alpha beta.', true, true);
 				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'gamma.' }));
 				expect(finalTexts()).toEqual(['alpha beta.', 'gamma.']);
 			});
+		});
+
+		it('does not repeat the early finals of a fresh turn that follows an idle-ended one', async () => {
+			partial('alpha beta gamma delta epsilon.', true, false);
+			vi.advanceTimersByTime(15000); // cap timer emits turn A
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000); // idle turn end: A's record is carried
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('one two three.', true, false); // turn B
+			vi.advanceTimersByTime(15000); // cap timer emits "one two three."
+			partial('four five six.', true, false); // past the cap: emitted at once
+			// xAI started a fresh turn: B's speech_final does not contain A. Only its rest goes out.
+			partial('one two three. four five six. seven eight.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta gamma delta epsilon.', 'one two three.', 'four five six.', 'seven eight.']);
+			expect(warnLogs().filter((l) => l.includes('speech_final'))).toEqual([]);
+		});
+
+		it('emits only the rest when xAI folds an idle-ended turn into the next capped turn', async () => {
+			partial('alpha beta gamma delta epsilon.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('one two three.', true, false);
+			vi.advanceTimersByTime(15000);
+			partial('four five six.', true, false);
+			partial('alpha beta gamma delta epsilon. one two three. four five six. seven eight.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta gamma delta epsilon.', 'one two three.', 'four five six.', 'seven eight.']);
+		});
+
+		it('does not accept the anchor far from where the count puts it when xAI revised the emitted tail', () => {
+			partial('I think that is right.', true, false);
+			vi.setSystemTime(16000);
+			partial('And we go with what I think that.', true, false); // flushes both (13 words, tail "I think that")
+			expect(finalTexts()).toEqual(['I think that is right. And we go with what I think that.']);
+			// The revised speech_final no longer holds the tail at the end, but does at words 0-3.
+			partial('I think that is right. And we go with what I thought that. Then more.', true, true);
+			expect(finalTexts()).toEqual(['I think that is right. And we go with what I think that.', 'Then more.']);
+			expect(warnLogs().some((l) => l.includes('dropping 13 words by count'))).toBe(true);
+		});
+
+		it('keeps the punctuation that opens the rest of the turn', () => {
+			partial('Hola.', true, false);
+			vi.setSystemTime(16000);
+			partial('Gracias.', true, false);
+			partial('Hola. Gracias. ¿Vienes mañana? "Sí", dijo.', true, true);
+			expect(finalTexts()).toEqual(['Hola. Gracias.', '¿Vienes mañana? "Sí", dijo.']);
+		});
+
+		it('flushes a held segment the speech_final does not carry before emitting the speech_final', () => {
+			partial('alpha beta gamma.', true, false); // held, inside the cap
+			vi.setSystemTime(5000);
+			partial('delta epsilon zeta.', true, true); // xAI reset mid-turn: only what followed
+			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta epsilon zeta.']);
+			expect(warnLogs().some((l) => l.includes('does not carry'))).toBe(true);
+		});
+
+		it('discards a held segment the speech_final carries, re-punctuated', () => {
+			partial('alpha beta gamma.', true, false);
+			vi.setSystemTime(5000);
+			partial('Alpha, beta gamma, delta epsilon.', true, true);
+			expect(finalTexts()).toEqual(['Alpha, beta gamma, delta epsilon.']);
+		});
+
+		it('remembers the language a speech_final carries for the next turn\'s early finals', () => {
+			const msg = (o: any) => getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', ...o }));
+			msg({ text: 'hello', is_final: false, speech_final: false, language: 'en' });
+			msg({ text: 'bonjour tout le monde.', is_final: true, speech_final: true, language: 'fr' });
+			vi.setSystemTime(1000);
+			msg({ text: 'alpha beta.', is_final: true, speech_final: false }); // no language on the commits
+			vi.setSystemTime(17000);
+			msg({ text: 'gamma.', is_final: true, speech_final: false });
+			expect(finalResults.map((m) => [m.transcript[0].text, m.language])).toEqual([
+				['bonjour tout le monde.', 'fr'],
+				['alpha beta. gamma.', 'fr'],
+			]);
+		});
+
+		it('joins diarized words of a script without spaces without one, including outside the BMP', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('𠮷野家に行った。𠮷田です。', true, true, [w('𠮷野家に', 0), w('行った。', 0), w('𠮷田です。', 0)]);
+				expect(finalTexts()).toEqual(['𠮷野家に行った。𠮷田です。']);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
 		});
 
 		it('sends nothing on an owner-driven close', () => {

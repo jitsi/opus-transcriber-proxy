@@ -213,6 +213,8 @@ function normalizeWord(word: string): string {
 interface AlignWord {
 	norm: string;
 	at: number;
+	/** Length of the word's text, so a cut can be made right after it. */
+	len: number;
 	/** For a `words` entry: where this word starts in the entry's text (0 unless the entry holds several words). */
 	offset: number;
 }
@@ -223,7 +225,7 @@ function textAlignWords(text: string): AlignWord[] {
 	for (const { segment, index, isWordLike } of wordSegmenter.segment(text)) {
 		if (!isWordLike) continue;
 		const norm = normalizeWord(segment);
-		if (norm) out.push({ norm, at: index, offset: index });
+		if (norm) out.push({ norm, at: index, offset: index, len: segment.length });
 	}
 	return out;
 }
@@ -237,13 +239,23 @@ function textAlignWords(text: string): AlignWord[] {
 function entryAlignWords(words: any[]): AlignWord[] {
 	const out: AlignWord[] = [];
 	words.forEach((word, at) => {
-		for (const { norm, offset } of textAlignWords(wordText(word))) out.push({ norm, at, offset });
+		for (const { norm, offset, len } of textAlignWords(wordText(word))) out.push({ norm, at, offset, len });
 	});
 	return out;
 }
 
+// What can close the emitted part of a turn between its last word and the first word of the rest:
+// whitespace, sentence punctuation and closing brackets/quotes. Not opening ones ("¿", "(", "“").
+const CLOSING_PUNCTUATION_RE = /^[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]+/u;
+
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
 const NO_SPACE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\u3000-\u303f\uff00-\uffef]/u;
+
+/** The last code point of a string (a surrogate pair is one character, not two). */
+function lastCodePoint(s: string): string {
+	const chars = Array.from(s.slice(-2));
+	return chars[chars.length - 1] ?? '';
+}
 
 /** Join transcript pieces with a space, except between two pieces of a language written without spaces. */
 function joinText(parts: string[]): string {
@@ -251,7 +263,14 @@ function joinText(parts: string[]): string {
 	for (const part of parts) {
 		const piece = part.trim();
 		if (!piece) continue;
-		out = !out ? piece : NO_SPACE_CHAR.test(out.slice(-1)) && NO_SPACE_CHAR.test(piece[0]) ? out + piece : `${out} ${piece}`;
+		if (!out) {
+			out = piece;
+			continue;
+		}
+		// Whole code points: a Han character outside the BMP (CJK Extension B+, common in names) is a
+		// surrogate pair, and neither half of it matches the class on its own.
+		const first = String.fromCodePoint(piece.codePointAt(0)!);
+		out = NO_SPACE_CHAR.test(lastCodePoint(out)) && NO_SPACE_CHAR.test(first) ? out + piece : `${out} ${piece}`;
 	}
 	return out;
 }
@@ -277,10 +296,22 @@ interface EmittedTurn {
 	 * speech_final or transcript.done, so alignTurnRest holds it to a stricter standard.
 	 */
 	carried?: boolean;
+	/** How many of `count` were carried over; the words of a new turn recorded since come after them. */
+	carriedCount: number;
 }
 
 function emptyEmittedTurn(): EmittedTurn {
-	return { count: 0, head: [], tail: [], tailText: '' };
+	return { count: 0, head: [], tail: [], tailText: '', carriedCount: 0 };
+}
+
+/**
+ * How far from where the count puts it the anchor may be found. Re-punctuation moves nothing;
+ * a revision adds or drops a word or two, more in a long turn. A three-word phrase can recur
+ * anywhere in a turn ("I think that"), so an occurrence far from the expected place is a recurrence,
+ * not the emitted tail — accepting it would cut the rest in the wrong place without a warning.
+ */
+function anchorSlack(expectedEnd: number): number {
+	return Math.max(TURN_ALIGN_ANCHOR_WORDS, Math.ceil(expectedEnd / 4));
 }
 
 /** Add words that went out to the turn's record. */
@@ -300,8 +331,9 @@ function recordEmitted(emitted: EmittedTurn, words: AlignWord[], text: string, s
  * (the `xai-live-turn.json` capture: segments ending `that.` / `person.` come back joined with
  * commas) — so a literal prefix comparison cannot be relied on, and a prefix cut at a non-word
  * boundary would split a word. Instead the last few emitted words are located in the whole-turn
- * words, at the occurrence nearest to where the emitted word count says they should be, and
- * everything after them is the rest (`anchor`); that handles both shapes.
+ * words, at the occurrence nearest to where the emitted word count says they should be — and
+ * within anchorSlack of it — and everything after them is the rest (`anchor`); that handles both
+ * shapes.
  *
  * If xAI revised those words so they cannot be found, the speech_final's first words decide what
  * it is. Only when they are exactly the turn's first words is it the whole turn, and then as many
@@ -323,20 +355,28 @@ function alignTurnRest(full: string[], emitted: EmittedTurn): { start: number; m
 	if (emitted.count === 0) return { start: 0, match: 'anchor' };
 
 	const anchor = emitted.tail;
-	const expectedEnd = emitted.count;
-	const anchorUsable = !emitted.carried || anchor.length >= TURN_ALIGN_ANCHOR_WORDS;
+	// Nothing but carried words: the record may have nothing to do with this text. With a new
+	// turn's words recorded on top of a carried record, the anchor is that turn's, and is in the text
+	// whether xAI folded the ended turn into it (the anchor ends at the whole count) or started a
+	// fresh one (it ends at the new turn's count alone).
+	const carriedOnly = emitted.carried === true && emitted.carriedCount >= emitted.count;
+	const expectedEnds =
+		emitted.carried && !carriedOnly ? [emitted.count, emitted.count - emitted.carriedCount] : [emitted.count];
+	const slackFor = (expectedEnd: number) => (carriedOnly ? TURN_ALIGN_ANCHOR_WORDS : anchorSlack(expectedEnd));
+	const distance = (end: number) => Math.min(...expectedEnds.map((e) => Math.abs(end - e)));
+	const anchorUsable = !carriedOnly || anchor.length >= TURN_ALIGN_ANCHOR_WORDS;
 	let bestEnd = -1;
 	for (let i = 0; anchorUsable && i + anchor.length <= full.length; i++) {
 		if (!anchor.every((w, j) => full[i + j] === w)) continue;
 		const end = i + anchor.length;
-		if (bestEnd < 0 || Math.abs(end - expectedEnd) < Math.abs(bestEnd - expectedEnd)) bestEnd = end;
+		if (bestEnd < 0 || distance(end) < distance(bestEnd)) bestEnd = end;
 	}
-	if (bestEnd >= 0 && (!emitted.carried || Math.abs(bestEnd - expectedEnd) <= TURN_ALIGN_ANCHOR_WORDS)) {
+	if (bestEnd >= 0 && expectedEnds.some((e) => Math.abs(bestEnd - e) <= slackFor(e))) {
 		return { start: bestEnd, match: 'anchor' };
 	}
 
 	const head = emitted.head;
-	if (emitted.carried) {
+	if (carriedOnly) {
 		const exactRepeat = full.length === emitted.count && head.length === full.length && head.every((w, i) => full[i] === w);
 		return exactRepeat ? { start: full.length, match: 'anchor' } : { start: 0, match: 'tail' };
 	}
@@ -904,7 +944,10 @@ export class XAIBackend implements TranscriptionBackend {
 			logger.info(`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle silence; ending the turn`);
 			this.flushHeldSegments(this.lastLanguage, 'ended on idle without speech_final', false);
 			this.stopTurnClock();
-			if (this.emitted.count > 0) this.emitted.carried = true;
+			if (this.emitted.count > 0) {
+				this.emitted.carried = true;
+				this.emitted.carriedCount = this.emitted.count;
+			}
 		}, delayMs);
 		unrefTimer(this.idleTurnEndTimer);
 	}
@@ -1128,9 +1171,9 @@ export class XAIBackend implements TranscriptionBackend {
 		logger.debug(`xAI turn for ${this.tag} ${reason}; emitting ${segments.length} committed segment(s) as a final`);
 		// Both branches record UAX #29 words (entryAlignWords splits entries the same way), so the
 		// speech_final aligns against the same units whichever branch it takes.
-		if (this.isDiarizedWords(segmentWords) || (knownSpeaker !== undefined && segmentWords)) {
-			this.emitDiarized(segmentWords!, language, false, this.emitted.speaker, midUtterance);
-			recordEmitted(this.emitted, entryAlignWords(segmentWords!), segmentText, lastSpeaker(segmentWords!));
+		if (segmentWords && (this.isDiarizedWords(segmentWords) || knownSpeaker !== undefined)) {
+			this.emitDiarized(segmentWords, language, false, this.emitted.speaker, midUtterance);
+			recordEmitted(this.emitted, entryAlignWords(segmentWords), segmentText, lastSpeaker(segmentWords));
 		} else {
 			this.emitText(segmentText, segmentWords, language, false, midUtterance);
 			recordEmitted(this.emitted, textAlignWords(segmentText), segmentText);
@@ -1143,19 +1186,45 @@ export class XAIBackend implements TranscriptionBackend {
 	 * only the rest. The whole turn is then kept as `lastTurn` for a transcript.done that follows.
 	 */
 	private endTurn(text: string, words: any[] | undefined, language: string | undefined): void {
+		if (language) this.lastLanguage = language;
 		if (!text.trim()) {
 			// xAI has nothing more for this turn, so what it committed is all there is.
 			this.flushHeldSegments(language ?? this.lastLanguage, 'ended with an empty speech_final', false);
 		} else {
+			this.flushHeldSegmentsNotIn(text, words, language);
 			this.emitTurnRest(text, words, language, this.emitted);
 		}
 		// Only the cap needs to know a turn ended: with it off, forceCommit() and transcript.done
 		// behave as they did before it existed.
 		if (this.capEnabled()) {
-			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true } : undefined;
+			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true, carriedCount: this.emitted.count } : undefined;
 			this.turnEndedSinceAudio = true;
 		}
 		this.resetTurn();
+	}
+
+	/**
+	 * A speech_final normally carries every segment xAI committed for the turn, so the segments
+	 * still held are discarded in its favour. Not always: xAI has been seen to reset mid-turn, and
+	 * then its speech_final carries only what followed — the held segments are the only copy of the
+	 * rest. When neither the held text's last words nor its first are in the speech_final, it is
+	 * flushed first. (A short held anchor can be found by chance; that errs towards the old
+	 * behaviour, discarding it.)
+	 */
+	private flushHeldSegmentsNotIn(text: string, words: any[] | undefined, language: string | undefined): void {
+		if (this.pendingSegments.length === 0 || this.emitted.count > 0) return;
+		const heldText = joinText(this.pendingSegments.map((s) => s.text));
+		const held = emptyEmittedTurn();
+		recordEmitted(held, textAlignWords(heldText), heldText);
+		const full = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
+		const { match } = alignTurnRest(full.map((w) => w.norm), held);
+		if (match !== 'tail') return;
+		logger.warn(
+			`xAI speech_final for ${this.tag} (${full.length} words) does not carry the ${held.count} words it committed for the turn; emitting them first`,
+		);
+		this.flushHeldSegments(language ?? this.lastLanguage, 'is not carried by its speech_final', false);
+		// The flush recorded the held words as emitted; the speech_final does not contain them.
+		this.emitted = emptyEmittedTurn();
 	}
 
 	/**
@@ -1189,10 +1258,14 @@ export class XAIBackend implements TranscriptionBackend {
 			this.warnUnalignedRest(match, textWords.length, text, emitted);
 			if (start < textWords.length) {
 				// Cut the original text rather than re-joining words, which would put spaces into a
-				// language written without them. `words` only supplies confidence here, and lines up
-				// with the text only when the counts agree.
+				// language written without them. The cut is right after the last emitted word, minus
+				// what closes it, so punctuation that opens the rest ("¿", a quote) stays with the rest.
+				// `words` only supplies confidence here, and lines up with the text only when the
+				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
-				this.emitText(text.slice(textWords[start].at).trim(), restWords, language ?? this.lastLanguage, false);
+				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
+				const rest = text.slice(cutAt).replace(CLOSING_PUNCTUATION_RE, '');
+				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}
 			recordEmitted(emitted, textWords.slice(start), text);
 		}
@@ -1287,7 +1360,8 @@ export class XAIBackend implements TranscriptionBackend {
 			// Turn ended (the segmenter already reset its per-turn state inside endTurn); just stop
 			// the pending flush timer — there is nothing left to flush for this turn.
 			this.clearGranularTimer();
-			this.turnEndedSinceAudio = true;
+			// The silence skip is the cap's (XAI_MAX_TURN_MS=0 restores the old behaviour in full).
+			if (this.capEnabled()) this.turnEndedSinceAudio = true;
 		} else {
 			this.scheduleGranularFlush();
 		}
@@ -1377,6 +1451,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// speech_final arrived) is emitted whole.
 		if (this.turnStartedAt === undefined && this.turnEndedSinceAudio) {
 			if (!text.trim()) return;
+			if (language) this.lastLanguage = language;
 			this.emitTurnRest(text, msg.words, language, this.lastTurn ?? emptyEmittedTurn());
 			return;
 		}
