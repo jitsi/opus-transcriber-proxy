@@ -132,6 +132,7 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 			maxTurnMs: 15000,
+			idleTurnEndGraceMs: 3000,
 			// 1 attempt by default so the existing tests see the pre-retry behaviour;
 			// the retry tests raise it. Zero backoff keeps them fast.
 			connectAttempts: 1,

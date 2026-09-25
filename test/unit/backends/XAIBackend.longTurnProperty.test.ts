@@ -72,6 +72,7 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 			maxTurnMs: 15000,
+			idleTurnEndGraceMs: 3000,
 			connectAttempts: 1,
 			connectBackoffMs: 0,
 		},

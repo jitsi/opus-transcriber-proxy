@@ -183,22 +183,29 @@ const TURN_CARRIED_BOUNDARIES = 4;
 /** How much of the emitted text to quote in the debug log that accompanies a reconciliation warning. */
 const TURN_LOG_TAIL_CHARS = 120;
 
-// How long after the idle silence to wait for xAI's speech_final before ending the turn without it.
-// xAI answered the silence within ~0.5s when forceCommit() was verified; since 2026-09-19 it does
-// not always answer at all.
-const XAI_IDLE_TURN_END_GRACE_MS = 3000;
-
 // UAX #29 word boundaries: splits languages written without spaces (zh/ja/th) into words, where a
 // whitespace split would make each segment one token, and skips punctuation-only tokens ("—", "…").
 const wordSegmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 
+/**
+ * A word of xAI's `words` array. Loosely typed on purpose: xAI documents no shape for it, and every
+ * field has been seen absent (`speaker` on trailing words since 2026-09-19, `punctuated_word` on some
+ * streams), so each use handles a missing one.
+ */
+interface XAIWord {
+	text?: string;
+	punctuated_word?: string;
+	speaker?: number;
+	confidence?: number;
+}
+
 /** A word of xAI's `words` array as the text it renders to. */
-function wordText(word: any): string {
+function wordText(word: XAIWord | undefined): string {
 	return String(word?.punctuated_word ?? word?.text ?? '');
 }
 
 /** The speaker of the last labelled word, or undefined when none is labelled. */
-function lastSpeaker(words: any[]): number | undefined {
+function lastSpeaker(words: XAIWord[]): number | undefined {
 	for (let i = words.length - 1; i >= 0; i--) {
 		if (words[i]?.speaker !== undefined) return words[i].speaker as number;
 	}
@@ -213,6 +220,15 @@ function lastSpeaker(words: any[]): number | undefined {
  */
 function normalizeWord(word: string): string {
 	return word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/** How emitDiarized reports the words it is given. */
+interface DiarizedEmit {
+	language: string | undefined;
+	isInterim: boolean;
+	/** Speaker the words before this slice were emitted under: leading unlabelled words take it. */
+	priorSpeaker?: number;
+	midUtterance?: boolean;
 }
 
 /** A word for alignment: normalized, with where it starts — a string index for text, an entry index for `words`. */
@@ -242,7 +258,7 @@ function textAlignWords(text: string): AlignWord[] {
  * `at` is the index of the entry it came from and `offset` where it starts in that entry's text;
  * an entry with no letters or digits yields none.
  */
-function entryAlignWords(words: any[]): AlignWord[] {
+function entryAlignWords(words: XAIWord[]): AlignWord[] {
 	const out: AlignWord[] = [];
 	words.forEach((word, at) => {
 		for (const { norm, offset, len } of textAlignWords(wordText(word))) out.push({ norm, at, offset, len });
@@ -433,7 +449,7 @@ export class XAIBackend implements TranscriptionBackend {
 	// the rest (see alignTurnRest).
 	private turnStartedAt?: number;
 	private turnTimer?: ReturnType<typeof setTimeout>;
-	private pendingSegments: Array<{ text: string; words?: any[] }> = [];
+	private pendingSegments: Array<{ text: string; words?: XAIWord[] }> = [];
 	private emitted: EmittedTurn = emptyEmittedTurn();
 	// The whole of the last turn that ended, carried: a transcript.done arriving with no turn in
 	// progress is reconciled against it (see handleDone).
@@ -936,7 +952,7 @@ export class XAIBackend implements TranscriptionBackend {
 			logger.error(`Failed to inject idle silence for tag ${this.tag}`, error);
 			return;
 		}
-		this.armIdleTurnEnd(silenceMs + XAI_IDLE_TURN_END_GRACE_MS);
+		this.armIdleTurnEnd(silenceMs + config.xai.idleTurnEndGraceMs);
 	}
 
 	/** Whether a turn is in progress: the segmenter's on the granular path, the cap's otherwise. */
@@ -1144,7 +1160,7 @@ export class XAIBackend implements TranscriptionBackend {
 	 * past maxTurnMs, emit everything held as a final now instead of waiting for a speech_final
 	 * that may never come. Returns true when it emitted.
 	 */
-	private commitSegment(text: string, words: any[] | undefined, language: string | undefined): boolean {
+	private commitSegment(text: string, words: XAIWord[] | undefined, language: string | undefined): boolean {
 		// Cap off: nothing is held, so nothing but the speech_final ever emits (the old behaviour).
 		if (!this.capEnabled()) return false;
 
@@ -1184,7 +1200,10 @@ export class XAIBackend implements TranscriptionBackend {
 		const segmentText = joinText(segments.map((s) => s.text));
 		// A segment xAI sent without `words`, or with none of them labelled, still belongs to the turn's
 		// speaker: its text stands in as unlabelled words, which emitDiarized gives to the speaker before
-		// them (the speaker the turn was last emitted under, when no held word is labelled).
+		// them (the speaker the turn was last emitted under, when no held word is labelled). The
+		// stand-ins are whitespace tokens — one for a whole segment of a language written without
+		// spaces — which only carry the speaker and are joined straight back (joinText), so the text is
+		// unchanged; alignment re-splits each by word boundary (entryAlignWords).
 		const knownSpeaker = config.xai.diarize ? this.emitted.speaker : undefined;
 		const segmentWords =
 			segments.some((s) => s.words) || knownSpeaker !== undefined
@@ -1194,7 +1213,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Both branches record UAX #29 words (entryAlignWords splits entries the same way), so the
 		// speech_final aligns against the same units whichever branch it takes.
 		if (segmentWords && (this.isDiarizedWords(segmentWords) || knownSpeaker !== undefined)) {
-			this.emitDiarized(segmentWords, language, false, this.emitted.speaker, midUtterance);
+			this.emitDiarized(segmentWords, { language, isInterim: false, priorSpeaker: this.emitted.speaker, midUtterance });
 			recordEmitted(this.emitted, entryAlignWords(segmentWords), segmentText, lastSpeaker(segmentWords));
 		} else {
 			this.emitText(segmentText, segmentWords, language, false, midUtterance);
@@ -1207,7 +1226,7 @@ export class XAIBackend implements TranscriptionBackend {
 	 * exactly as before the long-turn cap existed, unless part of it already went out early — then
 	 * only the rest. The whole turn is then kept as `lastTurn` for a transcript.done that follows.
 	 */
-	private endTurn(text: string, words: any[] | undefined, language: string | undefined): void {
+	private endTurn(text: string, words: XAIWord[] | undefined, language: string | undefined): void {
 		if (language) this.lastLanguage = language;
 		if (!text.trim()) {
 			// xAI has nothing more for this turn, so what it committed is all there is.
@@ -1233,7 +1252,7 @@ export class XAIBackend implements TranscriptionBackend {
 	 * flushed first. (A held segment shorter than an anchor is always discarded: it cannot be told
 	 * from a re-rendering, and a repeat of it is worse than the loss the old behaviour had.)
 	 */
-	private flushHeldSegmentsNotIn(text: string, words: any[] | undefined, language: string | undefined): void {
+	private flushHeldSegmentsNotIn(text: string, words: XAIWord[] | undefined, language: string | undefined): void {
 		if (this.pendingSegments.length === 0 || this.emitted.count > 0) return;
 		const heldText = joinText(this.pendingSegments.map((s) => s.text));
 		const held = emptyEmittedTurn();
@@ -1256,7 +1275,7 @@ export class XAIBackend implements TranscriptionBackend {
 	 * Emit what `emitted` leaves of a whole-turn text, and record it there. The rest is aligned in
 	 * the same units it is cut in: the `words` entries when diarized, the text's words otherwise.
 	 */
-	private emitTurnRest(text: string, words: any[] | undefined, language: string | undefined, emitted: EmittedTurn): void {
+	private emitTurnRest(text: string, words: XAIWord[] | undefined, language: string | undefined, emitted: EmittedTurn): void {
 		if (emitted.count === 0) {
 			this.emitText(text, words, language, false);
 			const all = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
@@ -1275,7 +1294,7 @@ export class XAIBackend implements TranscriptionBackend {
 			}
 			// A rest that starts on an unlabelled word continues the speaker it was emitted under.
 			const priorSpeaker = lastSpeaker(words!.slice(0, restAt)) ?? emitted.speaker;
-			if (rest.length > 0) this.emitDiarized(rest, language ?? this.lastLanguage, false, priorSpeaker);
+			if (rest.length > 0) this.emitDiarized(rest, { language: language ?? this.lastLanguage, isInterim: false, priorSpeaker });
 			recordEmitted(emitted, entries.slice(start), text, lastSpeaker(rest));
 		} else {
 			const textWords = textAlignWords(text);
@@ -1349,7 +1368,7 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	/** Diarization re-splits per speaker, when the words carry speaker labels. */
-	private isDiarizedWords(words: any[] | undefined): boolean {
+	private isDiarizedWords(words: XAIWord[] | undefined): boolean {
 		return config.xai.diarize && Array.isArray(words) && words.some((w) => w?.speaker !== undefined);
 	}
 
@@ -1361,7 +1380,7 @@ export class XAIBackend implements TranscriptionBackend {
 		midUtterance = false,
 	): void {
 		if (this.isDiarizedWords(words)) {
-			this.emitDiarized(words!, language, isInterim, undefined, midUtterance);
+			this.emitDiarized(words!, { language, isInterim, midUtterance });
 			return;
 		}
 		const confidence = this.avgConfidence(words);
@@ -1501,16 +1520,14 @@ export class XAIBackend implements TranscriptionBackend {
 	 * (the speaker the words before this slice were emitted under), else the first label found.
 	 */
 	private emitDiarized(
-		words: any[],
-		language: string | undefined,
-		isInterim: boolean,
-		priorSpeaker?: number,
-		midUtterance = false,
+		words: XAIWord[],
+		{ language, isInterim, priorSpeaker, midUtterance = false }: DiarizedEmit,
 	): void {
-		const segments: Array<{ speaker: number; words: any[] }> = [];
+		// `speaker` is undefined only when no word here or before it was ever labelled.
+		const segments: Array<{ speaker: number | undefined; words: XAIWord[] }> = [];
 		let current: number | undefined = priorSpeaker ?? words.find((w) => w?.speaker !== undefined)?.speaker;
 		for (const word of words) {
-			const speaker: number = word.speaker ?? current;
+			const speaker = word.speaker ?? current;
 			current = speaker;
 			const last = segments[segments.length - 1];
 			if (last && last.speaker === speaker) {
@@ -1544,9 +1561,9 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 	}
 
-	private avgConfidence(words: any[] | undefined): number | undefined {
+	private avgConfidence(words: XAIWord[] | undefined): number | undefined {
 		if (!Array.isArray(words) || words.length === 0) return undefined;
-		const vals = words.map((w: any) => w.confidence).filter((c: any) => typeof c === 'number');
+		const vals = words.map((w) => w?.confidence).filter((c): c is number => typeof c === 'number');
 		if (vals.length === 0) return undefined;
 		return vals.reduce((a: number, b: number) => a + b, 0) / vals.length;
 	}

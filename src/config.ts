@@ -130,6 +130,10 @@ export const config = {
 		// by a per-turn timer when it reaches the cap, or by the next commit past it; the later
 		// speech_final then emits only the rest. 0 disables.
 		maxTurnMs: parseIntOrDefault(process.env.XAI_MAX_TURN_MS, 15000),
+		// How long after the idle silence forceCommit() injects to wait for xAI's speech_final before
+		// ending the turn without it (see the long-turn cap). xAI answered the silence within ~0.5s
+		// when forceCommit() was verified; since 2026-09-19 it does not always answer at all.
+		idleTurnEndGraceMs: parseIntOrDefault(process.env.XAI_IDLE_TURN_END_GRACE_MS, 3000),
 	},
 
 	// Deepgram configuration

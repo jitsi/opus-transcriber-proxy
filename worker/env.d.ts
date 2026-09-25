@@ -52,6 +52,7 @@ export interface Env {
 	XAI_CONNECT_ATTEMPTS?: string;
 	XAI_CONNECT_BACKOFF_MS?: string;
 	XAI_MAX_TURN_MS?: string;
+	XAI_IDLE_TURN_END_GRACE_MS?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;
