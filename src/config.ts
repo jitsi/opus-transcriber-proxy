@@ -121,6 +121,14 @@ export const config = {
 		granularStabilityMs: parseIntOrDefault(process.env.XAI_GRANULAR_STABILITY_MS, 1000),
 		granularGuardWords: parseIntOrDefault(process.env.XAI_GRANULAR_GUARD_WORDS, 3),
 		granularMinWords: parseIntOrDefault(process.env.XAI_GRANULAR_MIN_WORDS, 5),
+		// Upper bound on how long a turn can go without a final in the default (one final per
+		// turn) mode. xAI commits the segments of a turn with is_final=true as it goes, but only
+		// the end-of-turn speech_final produces a final. A speaker who talks without a pause long
+		// enough for xAI to call end-of-speech gets no final at all — since 2026-09-19 that is any
+		// continuous monologue, because xAI stopped sending speech_final at the short pauses it
+		// used to. Once a turn is older than this, its committed segments are emitted as a final
+		// when the next one commits; the later speech_final then emits only the rest. 0 disables.
+		maxTurnMs: parseIntOrDefault(process.env.XAI_MAX_TURN_MS, 15000),
 	},
 
 	// Deepgram configuration

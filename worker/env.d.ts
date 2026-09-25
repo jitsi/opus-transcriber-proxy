@@ -51,6 +51,7 @@ export interface Env {
 	XAI_GRANULAR_MIN_WORDS?: string;
 	XAI_CONNECT_ATTEMPTS?: string;
 	XAI_CONNECT_BACKOFF_MS?: string;
+	XAI_MAX_TURN_MS?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;

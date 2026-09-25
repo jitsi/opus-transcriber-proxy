@@ -131,6 +131,7 @@ vi.mock('../../../src/config', () => ({
 			granularStabilityMs: 1000,
 			granularGuardWords: 3,
 			granularMinWords: 5,
+			maxTurnMs: 15000,
 			// 1 attempt by default so the existing tests see the pre-retry behaviour;
 			// the retry tests raise it. Zero backoff keeps them fast.
 			connectAttempts: 1,
@@ -1158,6 +1159,199 @@ describe('XAIBackend', () => {
 				(config.xai as any).granularStabilityMs = 1000;
 				(config.xai as any).granularGuardWords = 3;
 			}
+		});
+	});
+
+	describe('long-turn cap (default mode)', () => {
+		let backend: XAIBackend;
+		let interimResults: TranscriptionMessage[];
+		let finalResults: TranscriptionMessage[];
+
+		async function connectDefault() {
+			backend = new XAIBackend('test-tag', { id: 'p1' });
+			interimResults = [];
+			finalResults = [];
+			backend.onInterimTranscription = (msg) => interimResults.push(msg);
+			backend.onCompleteTranscription = (msg) => finalResults.push(msg);
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+		}
+
+		const partial = (text: string, isFinal: boolean, speechFinal: boolean, words?: any[]) =>
+			getMockWs().simulateMessage(
+				JSON.stringify({ type: 'transcript.partial', is_final: isFinal, speech_final: speechFinal, text, ...(words && { words }) }),
+			);
+		const finalTexts = () => finalResults.map((m) => m.transcript[0].text);
+
+		beforeEach(async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(0);
+			await connectDefault();
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+			(config.xai as any).maxTurnMs = 15000;
+		});
+
+		it('keeps one final per turn when the turn ends inside the cap', () => {
+			partial('first part', false, false);
+			vi.setSystemTime(3000);
+			partial('first part.', true, false);
+			vi.setSystemTime(6000);
+			partial('second part.', true, false);
+			expect(finalResults).toHaveLength(0);
+
+			vi.setSystemTime(7000);
+			partial('first part. second part.', true, true);
+			expect(finalTexts()).toEqual(['first part. second part.']);
+		});
+
+		it('emits committed segments as a final once the turn outlives the cap, with no speech_final', () => {
+			partial('It is a colorless', false, false); // turn starts at t=0
+			vi.setSystemTime(6000);
+			partial('It is a colorless, odorless gas.', true, false);
+			vi.setSystemTime(12000);
+			partial('Its boiling point is the lowest.', true, false);
+			expect(finalResults).toHaveLength(0); // still inside the 15s cap
+
+			vi.setSystemTime(16000);
+			partial('An unknown yellow spectral line.', true, false);
+			expect(finalTexts()).toEqual([
+				'It is a colorless, odorless gas. Its boiling point is the lowest. An unknown yellow spectral line.',
+			]);
+			expect(finalResults[0].is_interim).toBe(false);
+			// The flushed segment is not re-sent as an interim after its final.
+			expect(interimResults.map((m) => m.transcript[0].text)).not.toContain('An unknown yellow spectral line.');
+
+			// Past the cap, each further segment goes out as soon as xAI commits it.
+			vi.setSystemTime(20000);
+			partial('Pierre Janssen.', true, false);
+			expect(finalTexts()[1]).toBe('Pierre Janssen.');
+		});
+
+		it('emits only the rest of the turn when speech_final follows an early final', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false); // flushes "alpha beta. gamma delta."
+			vi.setSystemTime(18000);
+			partial('epsilon', false, false);
+			partial('alpha beta. gamma delta. epsilon zeta.', true, true);
+
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon zeta.']);
+		});
+
+		it('falls back to dropping the emitted word count when xAI revises the turn text', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			// End-of-turn text differs from what was committed (re-punctuated), so it is no prefix.
+			partial('Alpha, beta, gamma, delta, epsilon.', true, true);
+
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
+		});
+
+		it('emits nothing more when speech_final repeats only what already went out', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			partial('alpha beta. gamma delta.', true, true);
+
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.']);
+		});
+
+		it('flushes only the rest of the turn on a transcript.done at stream end', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			getMockWs().simulateMessage(
+				JSON.stringify({ type: 'transcript.done', text: 'alpha beta. gamma delta. epsilon.', words: [] }),
+			);
+
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
+		});
+
+		it('starts the next turn fresh after a speech_final', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			partial('alpha beta. gamma delta.', true, true);
+
+			vi.setSystemTime(20000);
+			partial('new turn.', true, false); // turn age 0 again, so held rather than emitted
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.']);
+			partial('new turn.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'new turn.']);
+		});
+
+		it('is disabled by XAI_MAX_TURN_MS=0', () => {
+			(config.xai as any).maxTurnMs = 0;
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(60000);
+			partial('gamma delta.', true, false);
+			expect(finalResults).toHaveLength(0);
+		});
+
+		it('splits the early final and the rest by speaker when diarized', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('hello there.', true, false, [w('hello', 0), w('there.', 0)]);
+				vi.setSystemTime(16000);
+				partial('how are you.', true, false, [w('how', 1), w('are', 1), w('you.', 1)]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+					[0, 'hello there.'],
+					[1, 'how are you.'],
+				]);
+
+				partial('hello there. how are you. fine.', true, true, [
+					w('hello', 0), w('there.', 0), w('how', 1), w('are', 1), w('you.', 1), w('fine.', 0),
+				]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text]).slice(2)).toEqual([[0, 'fine.']]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		describe('replaying a live xAI turn', () => {
+			// test/fixtures/xai-live-turn.json: a real paused monologue. xAI commits each segment
+			// with is_final=true and ends the turn with one speech_final carrying the whole turn.
+			const fixture = require('../../fixtures/xai-live-turn.json');
+			const replay = (events: any[]) => {
+				for (const e of events) {
+					vi.setSystemTime(e.t);
+					partial(e.text, e.is_final, e.speech_final);
+				}
+			};
+			const endOfTurn = fixture.events[fixture.events.length - 1];
+
+			it('reproduces the turn exactly once when the cap splits it', () => {
+				(config.xai as any).maxTurnMs = 10000;
+				replay(fixture.events);
+
+				// xAI re-punctuates the whole-turn text (segments end "that." / "person."; the turn
+				// joins them with commas), so the emitted text is not a literal prefix and the rest is
+				// found by word count. Compare words: every word once, in order, none dropped.
+				const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9' ]/g, ' ').split(/\s+/).filter(Boolean);
+				expect(finalResults.length).toBeGreaterThan(1);
+				expect(words(finalTexts().join(' '))).toEqual(words(endOfTurn.text));
+			});
+
+			it('still produces finals when xAI never sends speech_final', () => {
+				(config.xai as any).maxTurnMs = 10000;
+				replay(fixture.events.slice(0, -1));
+
+				expect(finalResults.length).toBeGreaterThan(0);
+				expect(finalTexts()[0].startsWith("But it's such a painful process")).toBe(true);
+			});
+
+			it('matches the old behaviour (one whole-turn final) with the cap off', () => {
+				(config.xai as any).maxTurnMs = 0;
+				replay(fixture.events);
+
+				expect(finalTexts()).toEqual([endOfTurn.text]);
+			});
 		});
 	});
 
