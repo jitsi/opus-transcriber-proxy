@@ -25,7 +25,7 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 
 	// Callbacks
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
-	onCompleteTranscription?: (message: TranscriptionMessage) => void;
+	onCompleteTranscription?: (message: TranscriptionMessage, midUtterance?: boolean) => void;
 	onError?: (errorType: string, errorMessage: string, recoverable?: boolean) => void;
 	onClosed?: () => void;
 
@@ -116,9 +116,9 @@ export class MockTranscriptionBackend implements TranscriptionBackend {
 	/**
 	 * Simulate receiving a complete transcription
 	 */
-	simulateCompleteTranscription(message: TranscriptionMessage): void {
+	simulateCompleteTranscription(message: TranscriptionMessage, midUtterance?: boolean): void {
 		if (this.onCompleteTranscription) {
-			this.onCompleteTranscription(message);
+			this.onCompleteTranscription(message, midUtterance);
 		}
 	}
 

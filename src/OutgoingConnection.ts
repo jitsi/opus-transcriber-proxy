@@ -220,10 +220,13 @@ export class OutgoingConnection {
 			this.onInterimTranscription?.(message);
 		};
 
-		backend.onCompleteTranscription = (message) => {
+		backend.onCompleteTranscription = (message, midUtterance) => {
 			getInstruments().transcriptionsReceivedTotal.add(1, { provider: this.options.provider || 'unknown', is_interim: 'false' });
 			this.logTranscriptionSummary(message, false);
-			this.clearIdleCommitTimeout();
+			// A final normally means the provider finalized the pending audio, so no force-commit
+			// is needed. A mid-utterance final (xAI's long-turn cap, granular finals) does not: if
+			// the speaker stops right after it, the idle force-commit is what finalizes the rest.
+			if (!midUtterance) this.clearIdleCommitTimeout();
 			this.onCompleteTranscription?.(message);
 		};
 

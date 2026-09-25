@@ -61,7 +61,7 @@ export interface GranularSegmenterOptions {
 
 const SENTENCE_END = /[.?!]$/;
 
-function splitWords(s: string): string[] {
+export function splitWords(s: string): string[] {
 	return s.trim().split(/\s+/).filter(Boolean);
 }
 

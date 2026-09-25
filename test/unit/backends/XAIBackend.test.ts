@@ -1090,6 +1090,21 @@ describe('XAIBackend', () => {
 			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe('hello world foo bar baz qux');
 		});
 
+		it('marks commits before the end of the turn as mid-utterance, and the end-of-turn commit not', async () => {
+			await connectGranular();
+			const flags: Array<[string, boolean | undefined]> = [];
+			backend.onCompleteTranscription = (msg, midUtterance) => flags.push([msg.transcript[0].text, midUtterance]);
+			partial('hello world foo bar', false, false);
+			vi.setSystemTime(700);
+			partial('hello world foo bar baz', false, false);
+			vi.setSystemTime(800);
+			partial('hello world foo bar baz qux', true, true);
+			expect(flags).toEqual([
+				['hello world foo', true],
+				['bar baz qux', false],
+			]);
+		});
+
 		it('emits the in-progress remainder as an interim (Deepgram-like)', async () => {
 			await connectGranular();
 			partial('one two three four five', false, false);
@@ -1476,6 +1491,92 @@ describe('XAIBackend', () => {
 			partial('alpha beta.', true, false);
 			getMockWs().simulateClose(1006, '', false);
 			expect(finalTexts()).toEqual(['alpha beta.']);
+		});
+
+		it('marks an early final as mid-utterance, and the speech_final rest as not', () => {
+			const flags: Array<[string, boolean | undefined]> = [];
+			backend.onCompleteTranscription = (msg, midUtterance) => flags.push([msg.transcript[0].text, midUtterance]);
+			partial('alpha beta.', true, false);
+			vi.advanceTimersByTime(15000); // cap timer
+			vi.setSystemTime(20000);
+			partial('gamma delta.', true, false); // commit past the cap
+			partial('alpha beta. gamma delta. epsilon.', true, true);
+			expect(flags).toEqual([
+				['alpha beta.', true],
+				['gamma delta.', true],
+				['epsilon.', false],
+			]);
+		});
+
+		it('marks what an empty speech_final flushes as the end of the utterance', () => {
+			const flags: Array<boolean | undefined> = [];
+			backend.onCompleteTranscription = (_msg, midUtterance) => flags.push(midUtterance);
+			partial('alpha beta.', true, false);
+			partial('', true, true);
+			expect(flags).toEqual([false]);
+		});
+
+		it('emits a speech_final that carries only the turn\'s tail whole, rather than slicing it by count', () => {
+			partial('alpha beta.', true, false);
+			vi.setSystemTime(16000);
+			partial('gamma delta.', true, false);
+			// Neither the last emitted words nor the turn's first words: this is not the whole turn.
+			partial('epsilon zeta.', true, true);
+			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon zeta.']);
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('emitting it whole as the rest of the turn'))).toBe(true);
+		});
+
+		it('emits a diarized speech_final that carries only the turn\'s tail whole, rather than slicing it by count', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('hello there.', true, false, [w('hello', 1), w('there.', 1)]);
+				vi.advanceTimersByTime(15000);
+				// One word against two emitted: slicing by count would have dropped it.
+				partial('fine.', true, true, [w('fine.', 0)]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([
+					[1, 'hello there.'],
+					[0, 'fine.'],
+				]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('keeps the speaker on a diarized segment that arrived without words', () => {
+			(config.xai as any).diarize = true;
+			try {
+				const w = (text: string, speaker: number) => ({ text, speaker, confidence: 0.9 });
+				partial('hello there.', true, false, [w('hello', 1), w('there.', 1)]);
+				partial('how are you.', true, false); // no words array
+				vi.advanceTimersByTime(15000);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text])).toEqual([[1, 'hello there. how are you.']]);
+
+				partial('hello there. how are you. fine.', true, true, [
+					w('hello', 1), w('there.', 1), w('how', 1), w('are', 1), w('you.', 1), w('fine.', 1),
+				]);
+				expect(finalResults.map((m) => [m.speaker, m.transcript[0].text]).slice(1)).toEqual([[1, 'fine.']]);
+			} finally {
+				(config.xai as any).diarize = false;
+			}
+		});
+
+		it('flushes a held segment before reporting a live WebSocket error', () => {
+			const order: string[] = [];
+			backend.onCompleteTranscription = (msg) => order.push(`final:${msg.transcript[0].text}`);
+			backend.onError = (type) => order.push(`error:${type}`);
+			partial('alpha beta.', true, false);
+			getMockWs().simulateError('ECONNRESET');
+			expect(order).toEqual(['final:alpha beta.', 'error:websocket_error']);
+		});
+
+		it('ends the turn on an empty transcript.done, flushing what xAI committed', () => {
+			partial('alpha beta.', true, false);
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: '' }));
+			expect(finalTexts()).toEqual(['alpha beta.']);
+			// The turn is over: the cap timer no longer fires for it.
+			vi.advanceTimersByTime(15000);
+			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('reached 15000ms'))).toBe(false);
 		});
 
 		it('sends nothing on an owner-driven close', () => {

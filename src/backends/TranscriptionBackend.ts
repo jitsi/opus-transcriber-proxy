@@ -97,7 +97,15 @@ export interface TranscriptionBackend {
 
 	// Event callbacks - set by OutgoingConnection
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
-	onCompleteTranscription?: (message: TranscriptionMessage) => void;
+	/**
+	 * Reports a final transcription.
+	 * @param midUtterance - When true, the final commits only part of an utterance
+	 *   the provider is still transcribing (xAI's long-turn cap and granular
+	 *   finals): the provider has not finalized the pending audio, so the owner
+	 *   keeps its idle force-commit armed instead of treating the final as the end
+	 *   of it. Defaults to false.
+	 */
+	onCompleteTranscription?: (message: TranscriptionMessage, midUtterance?: boolean) => void;
 	/**
 	 * Reports a backend error.
 	 * @param recoverable - When true, the error is a transient stream-level
