@@ -2042,6 +2042,25 @@ describe('XAIBackend', () => {
 			expect(warnLogs().filter((l) => l.includes('speech_final'))).toEqual([]);
 		});
 
+		it('keeps a symbol that prefixes the first word of the rest, and a minus sign, but not a spaced dash', () => {
+			partial('It cost.', true, false);
+			vi.setSystemTime(16000);
+			partial('The temperature was.', true, false);
+			partial('It cost — the temperature was -5 degrees, $100 more.', true, true);
+			expect(finalTexts()).toEqual(['It cost. The temperature was.', '-5 degrees, $100 more.']);
+		});
+
+		it('does not repeat a transcript.done that repeats the turn after an idle-ended one', async () => {
+			partial('alpha beta gamma delta.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000); // A idle-ends, carried
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('one two three four five.', true, true); // B, a fresh turn
+			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'one two three four five.' }));
+			expect(finalTexts()).toEqual(['alpha beta gamma delta.', 'one two three four five.']);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;

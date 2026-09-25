@@ -174,6 +174,9 @@ function readUpgradeResponseBody(res: IncomingMessage): Promise<string> {
 /** How many leading/trailing emitted words to look for in the whole-turn text when aligning the rest. */
 const TURN_ALIGN_ANCHOR_WORDS = 3;
 
+/** The most an anchor may be found from where the count puts it, however long the turn. */
+const TURN_ALIGN_MAX_SLACK = 8;
+
 /** How many idle-ended turns' boundaries a carried record keeps (each a place the next text may start). */
 const TURN_CARRIED_BOUNDARIES = 4;
 
@@ -247,11 +250,11 @@ function entryAlignWords(words: any[]): AlignWord[] {
 	return out;
 }
 
-// Between the last emitted word and the first word of the rest: what closes the emitted part
-// (whitespace, sentence punctuation, closing brackets and quotes, a dash xAI put between segments)
-// is dropped, and what is left belongs to the rest only if all of it opens it ("¿", "(", a quote).
-const CLOSING_PUNCTUATION_RE = /^[\s\p{Pe}\p{Pf}\p{Pd}.,;:!?…。！？、，；：]+/u;
-const OPENING_ONLY_RE = /^[\s\p{Ps}\p{Pi}¿¡"'«]*$/u;
+// Between the last emitted word and the first word of the rest, what closes the emitted part is
+// dropped: whitespace, sentence punctuation, closing brackets and quotes, and a dash xAI put
+// between segments (one followed by space; "-5" keeps its sign). Whatever is left prefixes the
+// rest ("¿", "(", a quote, "$100", "#1", "@name") and stays with it.
+const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；：]|\p{Pd}(?=\s))+/u;
 
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
 const NO_SPACE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\u3000-\u303f\uff00-\uffef]/u;
@@ -315,12 +318,18 @@ function emptyEmittedTurn(): EmittedTurn {
 /**
  * How far from where the count puts it the anchor may be found. Re-punctuation moves nothing;
  * a revision adds or drops a few words ("1250" spelled out is five), more in a long turn — so
- * half the count, and at least four. A three-word phrase can recur
+ * half the count, at least four and at most TURN_ALIGN_MAX_SLACK. A three-word phrase can recur
  * anywhere in a turn ("I think that"), so an occurrence far from the expected place is a recurrence,
  * not the emitted tail — accepting it would cut the rest in the wrong place without a warning.
  */
 function anchorSlack(expectedEnd: number): number {
-	return Math.max(TURN_ALIGN_ANCHOR_WORDS + 1, Math.ceil(expectedEnd / 2));
+	return Math.min(TURN_ALIGN_MAX_SLACK, Math.max(TURN_ALIGN_ANCHOR_WORDS + 1, Math.ceil(expectedEnd / 2)));
+}
+
+/** The record's boundaries with the current count added (once), keeping the last few. */
+function carriedBoundaries(emitted: EmittedTurn): number[] {
+	if (emitted.carriedAt[emitted.carriedAt.length - 1] === emitted.count) return emitted.carriedAt;
+	return [...emitted.carriedAt, emitted.count].slice(-TURN_CARRIED_BOUNDARIES);
 }
 
 /** Add words that went out to the turn's record. */
@@ -954,9 +963,7 @@ export class XAIBackend implements TranscriptionBackend {
 			this.stopTurnClock();
 			if (this.emitted.count > 0) {
 				this.emitted.carried = true;
-				if (this.emitted.carriedAt[this.emitted.carriedAt.length - 1] !== this.emitted.count) {
-					this.emitted.carriedAt = [...this.emitted.carriedAt, this.emitted.count].slice(-TURN_CARRIED_BOUNDARIES);
-				}
+				this.emitted.carriedAt = carriedBoundaries(this.emitted);
 			}
 		}, delayMs);
 		unrefTimer(this.idleTurnEndTimer);
@@ -1207,7 +1214,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// Only the cap needs to know a turn ended: with it off, forceCommit() and transcript.done
 		// behave as they did before it existed.
 		if (this.capEnabled()) {
-			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true, carriedAt: [this.emitted.count] } : undefined;
+			this.lastTurn = this.emitted.count > 0 ? { ...this.emitted, carried: true, carriedAt: carriedBoundaries(this.emitted) } : undefined;
 			this.turnEndedSinceAudio = true;
 		}
 		this.resetTurn();
@@ -1271,14 +1278,14 @@ export class XAIBackend implements TranscriptionBackend {
 			this.warnUnalignedRest(match, textWords.length, text, emitted);
 			if (start < textWords.length) {
 				// Cut the original text rather than re-joining words, which would put spaces into a
-				// language written without them. Punctuation that opens the rest ("¿", a quote) stays
-				// with it; anything else between the last emitted word and the rest is dropped.
+				// language written without them. What closes the emitted part is dropped; what prefixes
+				// the rest ("¿", a quote, "$") stays with it.
 				// `words` only supplies confidence here, and lines up with the text only when the
 				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
 				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
 				const between = text.slice(cutAt, textWords[start].at).replace(CLOSING_PUNCTUATION_RE, '');
-				const rest = (OPENING_ONLY_RE.test(between) ? between : '') + text.slice(textWords[start].at);
+				const rest = between + text.slice(textWords[start].at);
 				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
 			}
 			recordEmitted(emitted, textWords.slice(start), text);
