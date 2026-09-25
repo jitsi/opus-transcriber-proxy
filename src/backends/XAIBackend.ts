@@ -347,6 +347,11 @@ function anchorSlack(expectedEnd: number): number {
 	return Math.min(TURN_ALIGN_MAX_SLACK, Math.max(TURN_ALIGN_ANCHOR_WORDS + 1, Math.ceil(expectedEnd / 2)));
 }
 
+/** Whether the record holds nothing but words carried from turns that already ended. */
+function carriedOnly(emitted: EmittedTurn): boolean {
+	return emitted.carried === true && emitted.carriedAt[emitted.carriedAt.length - 1] === emitted.count;
+}
+
 /** The record's boundaries with the current count added (once), keeping the last few. */
 function carriedBoundaries(emitted: EmittedTurn): number[] {
 	if (emitted.carriedAt[emitted.carriedAt.length - 1] === emitted.count) return emitted.carriedAt;
@@ -398,23 +403,25 @@ function alignTurnRest(full: string[], emitted: EmittedTurn): { start: number; m
 	// turn's words recorded on top of a carried record, the anchor is that turn's, and is in the text
 	// whether xAI folded the ended turn(s) into it (the anchor ends at the whole count) or started
 	// afresh at one of the boundaries (it ends at the words recorded since that boundary).
-	const carriedOnly = emitted.carried === true && emitted.carriedAt[emitted.carriedAt.length - 1] === emitted.count;
+	const strict = carriedOnly(emitted);
 	const expectedEnds = [emitted.count, ...emitted.carriedAt.map((b) => emitted.count - b).filter((e) => e > 0)];
-	const slackFor = (expectedEnd: number) => (carriedOnly ? TURN_ALIGN_ANCHOR_WORDS : anchorSlack(expectedEnd));
-	const distance = (end: number) => Math.min(...expectedEnds.map((e) => Math.abs(end - e)));
-	const anchorUsable = !carriedOnly || anchor.length >= TURN_ALIGN_ANCHOR_WORDS;
+	const slackFor = (expectedEnd: number) => (strict ? TURN_ALIGN_ANCHOR_WORDS : anchorSlack(expectedEnd));
+	// How far outside its slack an occurrence ending here is, from the expected end it fits best
+	// (each end has its own slack, so nearest-by-distance could prefer an occurrence that no end accepts).
+	const excess = (end: number) => Math.min(...expectedEnds.map((e) => Math.abs(end - e) - slackFor(e)));
+	const anchorUsable = !strict || anchor.length >= TURN_ALIGN_ANCHOR_WORDS;
 	let bestEnd = -1;
 	for (let i = 0; anchorUsable && i + anchor.length <= full.length; i++) {
 		if (!anchor.every((w, j) => full[i + j] === w)) continue;
 		const end = i + anchor.length;
-		if (bestEnd < 0 || distance(end) < distance(bestEnd)) bestEnd = end;
+		if (bestEnd < 0 || excess(end) < excess(bestEnd)) bestEnd = end;
 	}
-	if (bestEnd >= 0 && expectedEnds.some((e) => Math.abs(bestEnd - e) <= slackFor(e))) {
+	if (bestEnd >= 0 && excess(bestEnd) <= 0) {
 		return { start: bestEnd, match: 'anchor' };
 	}
 
 	const head = emitted.head;
-	if (carriedOnly) {
+	if (strict) {
 		const exactRepeat = full.length === emitted.count && head.length === full.length && head.every((w, i) => full[i] === w);
 		return exactRepeat ? { start: full.length, match: 'anchor' } : { start: 0, match: 'tail' };
 	}
@@ -1253,7 +1260,9 @@ export class XAIBackend implements TranscriptionBackend {
 	 * from a re-rendering, and a repeat of it is worse than the loss the old behaviour had.)
 	 */
 	private flushHeldSegmentsNotIn(text: string, words: XAIWord[] | undefined, language: string | undefined): void {
-		if (this.pendingSegments.length === 0 || this.emitted.count > 0) return;
+		// Only when nothing of *this* turn went out early; a record carried from an ended turn does
+		// not count, and is put back after the flush so the speech_final is still aligned against it.
+		if (this.pendingSegments.length === 0 || (this.emitted.count > 0 && !carriedOnly(this.emitted))) return;
 		const heldText = joinText(this.pendingSegments.map((s) => s.text));
 		const held = emptyEmittedTurn();
 		recordEmitted(held, textAlignWords(heldText), heldText);
@@ -1266,9 +1275,10 @@ export class XAIBackend implements TranscriptionBackend {
 		logger.warn(
 			`xAI speech_final for ${this.tag} (${full.length} words) does not carry the ${held.count} words it committed for the turn; emitting them first`,
 		);
+		const before = { ...this.emitted, head: [...this.emitted.head], tail: [...this.emitted.tail], carriedAt: [...this.emitted.carriedAt] };
 		this.flushHeldSegments(language ?? this.lastLanguage, 'is not carried by its speech_final', false);
 		// The flush recorded the held words as emitted; the speech_final does not contain them.
-		this.emitted = emptyEmittedTurn();
+		this.emitted = before;
 	}
 
 	/**
@@ -1330,8 +1340,9 @@ export class XAIBackend implements TranscriptionBackend {
 	 */
 	private warnUnalignedRest(match: 'anchor' | 'count' | 'tail', fullWords: number, text: string, emitted: EmittedTurn): void {
 		if (match === 'anchor') return;
-		if (match === 'tail' && emitted.carried) {
-			// The expected outcome after a turn ended: a fresh one.
+		if (match === 'tail' && carriedOnly(emitted)) {
+			// The expected outcome after a turn ended: a fresh one. (With words of a new turn recorded
+			// since, a `tail` repeats them, so it warns like any other.)
 			logger.debug(`xAI turn text for ${this.tag} does not continue the turn that ended before it; emitting it whole`);
 			return;
 		}

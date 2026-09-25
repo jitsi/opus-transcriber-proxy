@@ -2107,6 +2107,31 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['he said "yes". it cost 20€.', '"Then" the dogs\' bowls.']);
 		});
 
+		it('warns, not debugs, when a capped turn after an idle-ended one is emitted whole', async () => {
+			partial('alpha beta gamma delta epsilon.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000); // A idle-ends, carried
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('one two three.', true, false);
+			vi.advanceTimersByTime(15000); // cap emits "one two three."
+			partial('one two tree. four.', true, true); // B's tail revised: neither anchor nor A's head
+			expect(finalTexts()).toEqual(['alpha beta gamma delta epsilon.', 'one two three.', 'one two tree. four.']);
+			expect(warnLogs().some((l) => l.includes('emitting it whole'))).toBe(true);
+		});
+
+		it('still flushes held segments a speech_final lacks when a carried record precedes them', async () => {
+			partial('alpha beta gamma delta epsilon.', true, false);
+			vi.advanceTimersByTime(15000);
+			backend.forceCommit();
+			vi.advanceTimersByTime(850 + 300 + 3000);
+			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
+			partial('one two three.', true, false); // held, inside the cap
+			partial('four five six.', true, false);
+			partial('seven eight nine.', true, true); // xAI reset: only what followed
+			expect(finalTexts()).toEqual(['alpha beta gamma delta epsilon.', 'one two three. four five six.', 'seven eight nine.']);
+		});
+
 		it('sends nothing on an owner-driven close', () => {
 			partial('alpha beta.', true, false);
 			backend.onCompleteTranscription = undefined;
