@@ -332,8 +332,10 @@ interface EmittedTurn {
 	 */
 	carried?: boolean;
 	/**
-	 * The counts at which a turn ended and its record was carried (oldest first, bounded): each is a
-	 * boundary the next text may start after — its late speech_final, or a fresh turn since.
+	 * The counts at which a turn ended and its record was carried: each is a boundary the next text
+	 * may start after — its late speech_final, or a fresh turn since. Ascending (count only grows,
+	 * and carriedBoundaries appends), and bounded by keeping the last TURN_CARRIED_BOUNDARIES, so
+	 * the last entry is the most recent boundary and equals `count` when nothing was recorded since.
 	 */
 	carriedAt: number[];
 }
@@ -1296,7 +1298,7 @@ export class XAIBackend implements TranscriptionBackend {
 		// for an early final the speech_final will carry — but this speech_final does not contain
 		// these words, so emitTurnRest must align it against the record as it was before the flush
 		// (empty, or carried from an ended turn). Hence the deep copy and restore around the flush.
-		const before = { ...this.emitted, head: [...this.emitted.head], tail: [...this.emitted.tail], carriedAt: [...this.emitted.carriedAt] };
+		const before = structuredClone(this.emitted);
 		this.flushHeldSegments(language ?? this.lastLanguage, 'is not carried by its speech_final', false);
 		this.emitted = before;
 	}
