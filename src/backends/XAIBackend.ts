@@ -185,6 +185,9 @@ const TURN_LOG_TAIL_CHARS = 120;
 
 // UAX #29 word boundaries: splits languages written without spaces (zh/ja/th) into words, where a
 // whitespace split would make each segment one token, and skips punctuation-only tokens ("—", "…").
+// Constructed at module scope on purpose: Intl.Segmenter has been in Node since 16 (V8 9.2) and in
+// every workerd, and the container runs Node 22 with full ICU (Han splits into dictionary words), so
+// a missing implementation would be a broken runtime, better found at import than mid-session.
 const wordSegmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 
 /**
@@ -280,7 +283,10 @@ const CLOSING_PUNCTUATION_RE = /^(?:[\s\p{Pe}\p{Pf}.,;:!?…。！？、，；�
 // Scripts written without spaces between words, and the CJK / fullwidth punctuation they end with.
 const NO_SPACE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\u3000-\u303f\uff00-\uffef]/u;
 
-/** The last code point of a string (a surrogate pair is one character, not two). */
+/**
+ * The last code point of a string (a surrogate pair is one character, not two): the last two UTF-16
+ * units hold at most two code points, and Array.from iterates by code point.
+ */
 function lastCodePoint(s: string): string {
 	const chars = Array.from(s.slice(-2));
 	return chars[chars.length - 1] ?? '';
@@ -455,6 +461,8 @@ export class XAIBackend implements TranscriptionBackend {
 	// `emitted` records what went out so the speech_final (which carries the whole turn) emits only
 	// the rest (see alignTurnRest).
 	private turnStartedAt?: number;
+	// The cap the turn opened under; the timer and the commit-time age check must agree on it.
+	private turnMaxMs = 0;
 	private turnTimer?: ReturnType<typeof setTimeout>;
 	private pendingSegments: Array<{ text: string; words?: XAIWord[] }> = [];
 	private emitted: EmittedTurn = emptyEmittedTurn();
@@ -986,7 +994,9 @@ export class XAIBackend implements TranscriptionBackend {
 		this.idleTurnEndTimer = setTimeout(() => {
 			this.idleTurnEndTimer = undefined;
 			if (this.status !== 'connected' || this.turnStartedAt === undefined) return;
-			logger.info(`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle silence; ending the turn`);
+			logger.info(
+				`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle silence being sent (its length plus XAI_IDLE_TURN_END_GRACE_MS); ending the turn`,
+			);
 			this.flushHeldSegments(this.lastLanguage, 'ended on idle without speech_final', false);
 			this.stopTurnClock();
 			if (this.emitted.count > 0) {
@@ -1147,6 +1157,7 @@ export class XAIBackend implements TranscriptionBackend {
 		if (!this.capEnabled() || this.turnStartedAt !== undefined) return;
 		this.turnStartedAt = Date.now();
 		const maxTurnMs = config.xai.maxTurnMs;
+		this.turnMaxMs = maxTurnMs;
 		this.turnTimer = setTimeout(() => {
 			this.turnTimer = undefined;
 			if (this.status !== 'connected') return;
@@ -1177,8 +1188,8 @@ export class XAIBackend implements TranscriptionBackend {
 		// much." is a speaker repeating themselves, and dropping the first would lose real text.
 		this.pendingSegments.push({ text, words: Array.isArray(words) && words.length > 0 ? words : undefined });
 
-		const maxTurnMs = config.xai.maxTurnMs;
 		// startTurn() ran before any commit reaches here (with the cap on, which the guard above ensures).
+		const maxTurnMs = this.turnMaxMs;
 		const turnAgeMs = Date.now() - this.turnStartedAt!;
 		logger.debug(
 			`xAI committed a segment for ${this.tag} (turn age ${turnAgeMs}ms, ${this.pendingSegments.length} held)`,
@@ -1281,9 +1292,12 @@ export class XAIBackend implements TranscriptionBackend {
 		logger.warn(
 			`xAI speech_final for ${this.tag} (${full.length} words) does not carry the ${held.count} words it committed for the turn; emitting them first`,
 		);
+		// flushHeldSegments records what it emits onto `emitted` (via recordEmitted), which is right
+		// for an early final the speech_final will carry — but this speech_final does not contain
+		// these words, so emitTurnRest must align it against the record as it was before the flush
+		// (empty, or carried from an ended turn). Hence the deep copy and restore around the flush.
 		const before = { ...this.emitted, head: [...this.emitted.head], tail: [...this.emitted.tail], carriedAt: [...this.emitted.carriedAt] };
 		this.flushHeldSegments(language ?? this.lastLanguage, 'is not carried by its speech_final', false);
-		// The flush recorded the held words as emitted; the speech_final does not contain them.
 		this.emitted = before;
 	}
 
