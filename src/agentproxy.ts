@@ -15,6 +15,10 @@ const SAMPLES_PER_FRAME = (RTP_CLOCK_RATE * FRAME_DURATION_MS) / 1000;
 export const AGENT_PCM_SAMPLE_RATE = 24000;
 const AGENT_MEDIA_FORMAT = { encoding: 'audio/l16', sampleRate: AGENT_PCM_SAMPLE_RATE, channels: 1 };
 
+// Wire-protocol identity in `info`; bump major only on a breaking change (see AGENT_PROTOCOL.md).
+export const AGENT_PROTOCOL = 'jitsi-agent-media';
+export const AGENT_PROTOCOL_VERSION = '1.0';
+
 // Bounds on buffering while the codecs / customer socket initialise (mirrors TranslatorConnection).
 const MAX_PENDING_OPUS_FRAMES = 500; // ~10 s of 20 ms frames per source
 const MAX_PENDING_PCM_BYTES = AGENT_PCM_SAMPLE_RATE * 2 * 10; // 10 s of return PCM
@@ -349,6 +353,8 @@ export class AgentProxy extends Emitter {
 
 			this.sendToEndpoint({
 				event: 'info',
+				protocol: AGENT_PROTOCOL,
+				version: AGENT_PROTOCOL_VERSION,
 				application: 'opus-transcriber-proxy',
 				mediaFormat: { ...AGENT_MEDIA_FORMAT },
 				...(this.options.customParameters !== undefined ? { customParameters: this.options.customParameters } : {}),

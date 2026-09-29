@@ -180,6 +180,11 @@ the proxy has no client playout feedback). A customer-leg failure closes the bri
 bridge's Exporter reconnect re-dials the endpoint (session-level retry). The pacer is pure and
 clock/timer-injectable (`test/unit/AgentPacer.test.ts`).
 
+The customer-leg wire contract is **frozen at v1.0** (`jitsi-agent-media`): the gateway advertises
+`protocol` + `version` in the `info` message, additive changes stay within the major and both sides
+ignore unknown events/fields, and the agent may send `end` to request teardown. Full schema and the
+locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PROTOCOL.md`.
+
 ### Key Components
 
 **TranscriberProxy** (`src/transcriberproxy.ts`)
