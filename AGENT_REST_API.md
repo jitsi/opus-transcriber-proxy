@@ -143,6 +143,12 @@ is torn down. Because jicofo cannot mint ASAP tokens, the status route also acce
 secret as the bearer (`voice_agent_status_secret` on the component / `jicofo.agent.status.token` on
 jicofo); ASAP remains accepted, and the secret never authorizes the provisioning routes.
 
+`failed` is terminal for that provisioning attempt: jicofo does not retry on its own, because every status
+report is rebroadcast as room metadata and an automatic retry would loop. To retry, `invite` again with the
+same `agentId`: a failed agent is replaced rather than treated as a duplicate, and a fresh `connecting` →
+`active` sequence follows. Status reports are forward-only: a duplicate or a stale earlier state is
+acknowledged with `200` and ignored, so each lifecycle webhook fires once.
+
 ## Webhooks *(v1 addition)*
 
 When `callbackUrl` is set on `invite` (or a tenant/operator default is configured), the control
@@ -153,7 +159,7 @@ Twilio's status callbacks.
 { "event": "agent.connected", "agentId": "agent-support", "conference": "room1@...",
   "sourceName": "agent-support-a0", "state": "active", "timestamp": "2026-09-25T14:00:00Z" }
 ```
-Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with `reason`). `agent.ended`
+Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with a short, stable `reason` such as `no bridge available`; bridge error detail stays in operator logs). `agent.ended`
 fires for **both** a REST `dismiss` and the media-protocol `end` event, so teardown is observable
 regardless of who initiated it.
 
