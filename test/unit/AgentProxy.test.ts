@@ -13,18 +13,22 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentProxy } from '../../src/agentproxy';
+import { AgentProxy, CLOSE_CODE_AGENT_ENDED } from '../../src/agentproxy';
 
 class MockWebSocket {
 	sent: string[] = [];
 	closed = false;
+	closeCode?: number;
+	closeReason?: string;
 	listeners = new Map<string, Array<(event: any) => void>>();
 
 	send(data: string) {
 		this.sent.push(data);
 	}
-	close() {
+	close(code?: number, reason?: string) {
 		this.closed = true;
+		this.closeCode = code;
+		this.closeReason = reason;
 		this.fire('close', {});
 	}
 	addEventListener(type: string, listener: (event: any) => void) {
@@ -125,6 +129,22 @@ describe('AgentProxy', () => {
 		await Promise.resolve();
 	}
 
+	it('end from the agent closes both legs, the bridge leg with the agent-ended code', async () => {
+		const proxy = createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		const closed = vi.fn();
+		proxy.on('closed', closed);
+
+		endpointWs.receive({ event: 'end' });
+
+		expect(endpointWs.closed).toBe(true);
+		expect(bridgeWs.closed).toBe(true);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_AGENT_ENDED);
+		expect(closed).toHaveBeenCalledTimes(1);
+	});
+
 	it('dials the endpoint and flushes queued messages once it opens', async () => {
 		createProxy();
 		await settle();
@@ -176,6 +196,24 @@ describe('AgentProxy', () => {
 		// The pipe works (info arrived) but the agent's own audio was not looped back.
 		expect(events).toContain('info');
 		expect(events).not.toContain('media');
+	});
+
+	it('carries the encoder audio level and vad on voice frames', async () => {
+		const proxy = createProxy();
+		const frames: any[] = [];
+		proxy.on('audioFrame', (data: any) => frames.push(data));
+		encoder.encodeFrame.mockImplementation(() => [{ data: new Uint8Array([9, 9]), inDtx: false, audioLevel: 42 }]);
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		endpointWs.fire('open', {});
+		await settle();
+
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		await settle();
+
+		expect(frames.length).toBe(1);
+		expect(frames[0].audioLevel).toBe(42);
+		expect(frames[0].vad).toBe(true);
 	});
 
 	it('encodes customer audio and emits it with talk boundaries on the agent tag', async () => {

@@ -21,33 +21,60 @@ import { isIP } from 'node:net';
  * @returns {boolean}
  */
 export function isPrivateAddress(ip: string): boolean {
-    const family = isIP(ip);
+	const family = isIP(ip);
 
-    if (family === 4) {
-        return isPrivateV4(ip);
-    }
-    if (family === 6) {
-        const lower = ip.toLowerCase();
+	if (family === 4) {
+		return isPrivateV4(ip);
+	}
+	if (family === 6) {
+		const lower = canonicalIPv6(ip);
 
-        // Unique-local (fc00::/7 → fc/fd) and link-local + deprecated site-local (fe80::/9 → fe8..fef).
-        const isUniqueLocal = lower.startsWith('fc') || lower.startsWith('fd');
-        const isLinkOrSiteLocal = lower.startsWith('fe') && '89abcdef'.includes(lower[2]);
+		// Unique-local (fc00::/7 → fc/fd) and link-local + deprecated site-local (fe80::/9 → fe8..fef).
+		const isUniqueLocal = lower.startsWith('fc') || lower.startsWith('fd');
+		const isLinkOrSiteLocal = lower.startsWith('fe') && '89abcdef'.includes(lower[2]);
 
-        if (lower === '::1' || lower === '::' || isUniqueLocal || isLinkOrSiteLocal) {
-            return true;
-        }
+		if (lower === '::1' || lower === '::' || isUniqueLocal || isLinkOrSiteLocal) {
+			return true;
+		}
 
-        const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+		// IPv4-mapped: the canonical form is two hex groups; the dotted form is kept for callers that skip
+		// canonicalisation. Either way the embedded IPv4 address decides.
+		const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
 
-        if (mapped) {
-            return isPrivateV4(mapped[1]);
-        }
+		if (mappedHex) {
+			const hi = parseInt(mappedHex[1], 16);
+			const lo = parseInt(mappedHex[2], 16);
 
-        return false;
-    }
+			return isPrivateV4(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+		}
+		const mappedDotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
 
-    // Not a valid IP literal — treat as unsafe (callers resolve hostnames before calling this).
-    return true;
+		if (mappedDotted) {
+			return isPrivateV4(mappedDotted[1]);
+		}
+
+		return false;
+	}
+
+	// Not a valid IP literal — treat as unsafe (callers resolve hostnames before calling this).
+	return true;
+}
+
+/**
+ * The WHATWG-canonical spelling of an IPv6 literal (lowercase, compressed, mapped addresses as hex groups), so
+ * every spelling of the same address classifies the same way.
+ *
+ * @param {string} ip - The IPv6 literal.
+ * @returns {string}
+ */
+function canonicalIPv6(ip: string): string {
+	try {
+		const host = new URL(`http://[${ip}]`).hostname;
+
+		return host.startsWith('[') ? host.slice(1, -1) : host;
+	} catch {
+		return ip.toLowerCase();
+	}
 }
 
 /**
@@ -57,19 +84,19 @@ export function isPrivateAddress(ip: string): boolean {
  * @returns {boolean}
  */
 function isPrivateV4(ip: string): boolean {
-    const parts = ip.split('.').map(Number);
+	const parts = ip.split('.').map(Number);
 
-    if (parts.length !== 4 || parts.some(p => !Number.isInteger(p) || p < 0 || p > 255)) {
-        return true;
-    }
-    const [ a, b ] = parts;
+	if (parts.length !== 4 || parts.some(p => !Number.isInteger(p) || p < 0 || p > 255)) {
+		return true;
+	}
+	const [ a, b ] = parts;
 
-    return a === 10 || a === 127 || a === 0
-        || (a === 169 && b === 254)
-        || (a === 172 && b >= 16 && b <= 31)
-        || (a === 192 && b === 168)
-        || (a === 100 && b >= 64 && b <= 127)
-        || a >= 224;
+	return a === 10 || a === 127 || a === 0
+		|| (a === 169 && b === 254)
+		|| (a === 172 && b >= 16 && b <= 31)
+		|| (a === 192 && b === 168)
+		|| (a === 100 && b >= 64 && b <= 127)
+		|| a >= 224;
 }
 
 /**
@@ -82,15 +109,15 @@ function isPrivateV4(ip: string): boolean {
  * @returns {boolean}
  */
 export function hostAllowed(host: string, allowedHosts: string[]): boolean {
-    if (allowedHosts.length === 0) {
-        return true;
-    }
+	if (allowedHosts.length === 0) {
+		return true;
+	}
 
-    return allowedHosts.some(entry => {
-        const bare = entry.startsWith('.') ? entry.slice(1) : entry;
+	return allowedHosts.some(entry => {
+		const bare = entry.startsWith('.') ? entry.slice(1) : entry;
 
-        return host === bare || host.endsWith(`.${bare}`);
-    });
+		return host === bare || host.endsWith(`.${bare}`);
+	});
 }
 
 /**
@@ -106,34 +133,34 @@ export function hostAllowed(host: string, allowedHosts: string[]): boolean {
  * @returns {Promise<string | null>}
  */
 export async function assertPublicEndpointHost(
-        host: string,
-        allowedHosts: string[],
-        allowPrivate = false): Promise<string | null> {
-    const lower = host.toLowerCase();
+		host: string,
+		allowedHosts: string[],
+		allowPrivate = false): Promise<string | null> {
+	const lower = host.toLowerCase();
 
-    if (!hostAllowed(lower, allowedHosts)) {
-        return 'Agent endpoint host is not in the configured allowlist';
-    }
+	if (!hostAllowed(lower, allowedHosts)) {
+		return 'Agent endpoint host is not in the configured allowlist';
+	}
 
-    if (allowPrivate) {
-        return null;
-    }
+	if (allowPrivate) {
+		return null;
+	}
 
-    if (isIP(lower)) {
-        return isPrivateAddress(lower) ? 'Agent endpoint resolves to a non-public address' : null;
-    }
+	if (isIP(lower)) {
+		return isPrivateAddress(lower) ? 'Agent endpoint resolves to a non-public address' : null;
+	}
 
-    let addresses: Array<{ address: string; }>;
+	let addresses: Array<{ address: string; }>;
 
-    try {
-        addresses = await lookup(host, { all: true });
-    } catch {
-        return 'Agent endpoint host could not be resolved';
-    }
+	try {
+		addresses = await lookup(host, { all: true });
+	} catch {
+		return 'Agent endpoint host could not be resolved';
+	}
 
-    if (addresses.length === 0 || addresses.some(a => isPrivateAddress(a.address))) {
-        return 'Agent endpoint resolves to a non-public address';
-    }
+	if (addresses.length === 0 || addresses.some(a => isPrivateAddress(a.address))) {
+		return 'Agent endpoint resolves to a non-public address';
+	}
 
-    return null;
+	return null;
 }

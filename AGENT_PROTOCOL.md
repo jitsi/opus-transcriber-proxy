@@ -45,7 +45,7 @@ so it must not change in a breaking way once published — see **Versioning** be
 | `version` | string | yes | `MAJOR.MINOR` of this contract. |
 | `application` | string | yes | Gateway build identifier (informational). |
 | `mediaFormat` | object | yes | Default audio format for the connection (per-stream `start` may restate it). |
-| `customParameters` | object | no | Opaque provisioning metadata from the invite (string→string). |
+| `customParameters` | object | no | Opaque provisioning metadata from the invite (string→string). The gateway's own query parameters are never echoed. |
 
 ### `start` (one per participant source, before its first `media`)
 ```json
@@ -108,9 +108,9 @@ Queued in order with `media`; echoed back (gateway→agent `mark`) when the pace
 ```json
 { "event": "end" }
 ```
-The agent signals its session is complete and the gateway should tear the agent down. Defined in
-v1 so a serializer emits it from day one; gateway-side teardown wiring (endpoint expiry vs. the
-current reconnect-on-close) may land incrementally without a protocol change.
+The agent signals its session is complete. The gateway sends nothing further, closes the agent's
+socket normally (1000) and ends the bridge leg with application close code 4001 (`agent ended`), so
+the leg can be treated as terminal rather than redialed.
 
 ### `ping` / `pong` (keepalive, either direction)
 ```json

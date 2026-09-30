@@ -19,6 +19,9 @@ const AGENT_MEDIA_FORMAT = { encoding: 'audio/l16', sampleRate: AGENT_PCM_SAMPLE
 export const AGENT_PROTOCOL = 'jitsi-agent-media';
 export const AGENT_PROTOCOL_VERSION = '1.0';
 
+/** Application close code on the bridge leg after the agent's `end`: the session is over, not to be redialed. */
+export const CLOSE_CODE_AGENT_ENDED = 4001;
+
 // Bounds on buffering while the codecs / customer socket initialise (mirrors TranslatorConnection).
 const MAX_PENDING_OPUS_FRAMES = 500; // ~10 s of 20 ms frames per source
 const MAX_PENDING_PCM_BYTES = AGENT_PCM_SAMPLE_RATE * 2 * 10; // 10 s of return PCM
@@ -109,7 +112,7 @@ export class AgentProxy extends Emitter {
 		this.runtime = runtime;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
 		this.pacer = new AgentPacer({ leadMs: options.paceLeadMs });
-		this.pacer.onFrame = (payload) => this.sendAgentFrame(payload);
+		this.pacer.onFrame = (payload, audioLevel) => this.sendAgentFrame(payload, audioLevel);
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
 
 		this.ws.addEventListener('close', () => this.close());
@@ -135,7 +138,7 @@ export class AgentProxy extends Emitter {
 	}
 
 	/** Tear down both legs and all codec/pacer state. Idempotent. */
-	close(): void {
+	close(code?: number, reason?: string): void {
 		if (this.isClosed) {
 			return;
 		}
@@ -157,7 +160,7 @@ export class AgentProxy extends Emitter {
 			// already closing/closed
 		}
 		try {
-			this.ws.close();
+			this.ws.close(code, reason);
 		} catch {
 			// already closing/closed
 		}
@@ -207,6 +210,8 @@ export class AgentProxy extends Emitter {
 
 	private handleSources(requests: unknown): void {
 		const requestList: string[] = Array.isArray(requests) ? requests.filter((s): s is string => typeof s === 'string') : [];
+		// A sources update carries new exports (consent changes); jicofo never empties requests without expiring
+		// the connect, so an empty list is a malformed update, not a request to drop the agent's tag.
 		if (requestList.length === 0) {
 			this.runtime.logger.warn('agent: sources event with no requests; keeping previous agent tag');
 			return;
@@ -416,6 +421,10 @@ export class AgentProxy extends Emitter {
 				this.sendToEndpoint(pong);
 				break;
 			}
+			case 'end':
+				this.runtime.logger.info('agent: end (agent-initiated teardown)');
+				this.close(CLOSE_CODE_AGENT_ENDED, 'agent ended');
+				break;
 			case 'pong':
 			case 'info':
 				break;
@@ -503,7 +512,7 @@ export class AgentProxy extends Emitter {
 				// DTX frame: silence, not voice. Don't queue it — the pacer gap plus the RtpTimestamper's
 				// gap insertion produce true silence downstream, and the talk timer ends the talk.
 				if (!frame.inDtx) {
-					this.pacer.push(frame.data);
+					this.pacer.push(frame.data, frame.audioLevel);
 				}
 			}
 		} catch (error) {
@@ -512,7 +521,7 @@ export class AgentProxy extends Emitter {
 	}
 
 	/** Called by the pacer as each frame becomes due: stamp RTP timing and emit toward the bridge. */
-	private sendAgentFrame(payload: Uint8Array): void {
+	private sendAgentFrame(payload: Uint8Array, audioLevel?: number): void {
 		const tag = this.agentTag;
 		if (tag === undefined) {
 			return;
@@ -534,6 +543,9 @@ export class AgentProxy extends Emitter {
 			chunk: rtpSequenceNumber,
 			timestamp,
 			payload: bytesToBase64(payload),
+			audioLevel,
+			// Every queued frame passed the encoder's DTX check, so it is voice.
+			vad: true,
 			sequenceNumber: this.envelopeSequenceNumber++,
 		});
 	}

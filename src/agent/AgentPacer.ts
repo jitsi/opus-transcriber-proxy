@@ -29,7 +29,7 @@ export interface AgentPacerOptions {
 	clearTimer?: (handle: unknown) => void;
 }
 
-type QueueItem = { kind: 'frame'; payload: Uint8Array } | { kind: 'mark'; name: string };
+type QueueItem = { kind: 'frame'; payload: Uint8Array; audioLevel?: number } | { kind: 'mark'; name: string };
 
 export class AgentPacer {
 	private readonly leadMs: number;
@@ -45,7 +45,7 @@ export class AgentPacer {
 	private closed = false;
 
 	/** A frame is due to be sent to the bridge. */
-	onFrame?: (payload: Uint8Array) => void;
+	onFrame?: (payload: Uint8Array, audioLevel?: number) => void;
 	/** The queue drained past a mark (or a clear() flushed it). */
 	onMark?: (name: string) => void;
 
@@ -58,9 +58,9 @@ export class AgentPacer {
 	}
 
 	/** Enqueue one encoded 20 ms frame. */
-	push(payload: Uint8Array): void {
+	push(payload: Uint8Array, audioLevel?: number): void {
 		if (this.closed) return;
-		this.queue.push({ kind: 'frame', payload });
+		this.queue.push({ kind: 'frame', payload, audioLevel });
 		this.drain();
 	}
 
@@ -140,7 +140,7 @@ export class AgentPacer {
 			}
 			this.queue.shift();
 			this.playoutEndWall += this.frameDurationMs;
-			this.onFrame?.(item.payload);
+			this.onFrame?.(item.payload, item.audioLevel);
 		}
 	}
 }

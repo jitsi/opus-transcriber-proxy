@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
@@ -81,6 +82,14 @@ interface AgentEndpoint {
  * header (forwarded by the bridge from the jicofo connect config) or, for dev, an `?endpoint=`
  * query param. Returns an error string (for the 400 response) when missing or invalid.
  */
+/** Query parameters the gateway consumes itself (see utils.ts), never echoed to the customer. */
+const GATEWAY_QUERY_PARAMS = new Set([ 'connect', 'deepgram_mip_opt_out', 'encoding', 'endpoint', 'endpointing', 'lang', 'openaiCustomUrl', 'provider', 'sendBack', 'sendBackInterim', 'sessionId', 'smart_turn', 'smart_turn_timeout', 'tag', 'text_translation_provider', 'useDispatcher', 'xai_granular_finals', 'xai_granular_guard_words', 'xai_granular_stability_ms' ]);
+
+/** Constant-time secret comparison; hashing first hides the length difference too. */
+function secretsEqual(a: string, b: string): boolean {
+	return timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
+}
+
 function resolveAgentEndpoint(url: URL, headers: http.IncomingHttpHeaders): AgentEndpoint | string {
 	const rawHeader = headers['x-agent-endpoint'];
 
@@ -103,9 +112,10 @@ function resolveAgentEndpoint(url: URL, headers: http.IncomingHttpHeaders): Agen
 	const rawAuth = headers['x-agent-authorization'];
 	const authorization = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
 
+	// Only jicofo's urlParams are the customer's; the gateway's own knobs never leave the proxy.
 	const customParameters: Record<string, unknown> = {};
 	url.searchParams.forEach((value, key) => {
-		if (key !== 'endpoint') {
+		if (!GATEWAY_QUERY_PARAMS.has(key)) {
 			customParameters[key] = value;
 		}
 	});
@@ -146,7 +156,7 @@ async function handleAgentUpgrade(
 		const rawToken = request.headers['x-agent-token'];
 		const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
 
-		if (token !== config.agent.sharedSecret) {
+		if (token === undefined || !secretsEqual(token, config.agent.sharedSecret)) {
 			reject('401 Unauthorized', 'Invalid or missing agent token', 'invalid or missing X-Agent-Token');
 
 			return;
@@ -166,10 +176,10 @@ async function handleAgentUpgrade(
 
 	// SSRF guard: reject endpoints that resolve to private/internal addresses (and enforce the optional host
 	// allowlist) before dialing out.
-	const ssrcError = await assertPublicEndpointHost(new URL(endpoint.url).hostname, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
+	const ssrfError = await assertPublicEndpointHost(new URL(endpoint.url).hostname, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
 
-	if (ssrcError) {
-		reject('400 Bad Request', ssrcError, `${ssrcError} (host=${new URL(endpoint.url).hostname})`);
+	if (ssrfError) {
+		reject('400 Bad Request', ssrfError, `${ssrfError} (host=${new URL(endpoint.url).hostname})`);
 
 		return;
 	}
@@ -210,7 +220,15 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 	// The agent's audio and talk boundaries reuse the mediajson builders shared with /translate.
 	agentSession.on(
 		'audioFrame',
-		(data: { tag: string; chunk: number; timestamp: number; payload: string; sequenceNumber: number }) => {
+		(data: {
+			tag: string;
+			chunk: number;
+			timestamp: number;
+			payload: string;
+			audioLevel?: number;
+			vad?: boolean;
+			sequenceNumber: number;
+		}) => {
 			try {
 				ws.send(JSON.stringify(buildTranslationMediaMessage(data)));
 			} catch {
