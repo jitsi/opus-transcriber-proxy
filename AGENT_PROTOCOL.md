@@ -109,8 +109,19 @@ Queued in order with `media`; echoed back (gateway→agent `mark`) when the pace
 { "event": "end" }
 ```
 The agent signals its session is complete. The gateway sends nothing further, closes the agent's
-socket normally (1000) and ends the bridge leg with application close code 4001 (`agent ended`), so
-the leg can be treated as terminal rather than redialed.
+socket normally (1000) and ends the bridge leg with application close code 4001 (`agent ended`),
+which the bridge treats as terminal: no redial.
+
+### Bridge-leg close codes (gateway internal)
+
+| Code | Meaning | Bridge behaviour |
+| --- | --- | --- |
+| 4001 | `agent ended`: the agent sent `end` | terminal, no redial |
+| 4002 | `endpoint unreachable` / `endpoint refused: HTTP <status>`: the dial to the agent endpoint failed | terminal, no redial |
+| other | transport loss mid-session | the bridge redials; the agent sees a fresh `info`/`start` |
+
+The gateway also reports these transitions to the provisioning API (see `AGENT_REST_API.md`): `active` when
+the agent socket opens, `failed` with the reason above when the dial fails, `ended` on `end`.
 
 ### `ping` / `pong` (keepalive, either direction)
 ```json

@@ -175,6 +175,13 @@ export const config = {
 		allowPrivateEndpoints: process.env.AGENT_ALLOW_PRIVATE_ENDPOINTS === 'true',
 		// Honor the dev-only ?endpoint= query param (otherwise the endpoint must come from X-Agent-Endpoint).
 		allowEndpointParam: process.env.AGENT_ALLOW_ENDPOINT_PARAM === 'true',
+		// Provisioning API status route the gateway reports the media leg to (prosody's /voice-agent/status or the
+		// JaaS gateway): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
+		// Unset disables reporting, and the agent then never advances past jicofo's `connecting`.
+		statusUrl: process.env.AGENT_STATUS_URL || '',
+		statusToken: process.env.AGENT_STATUS_TOKEN || '',
+		// Host header override for a prosody that routes HTTP by virtual host.
+		statusHost: process.env.AGENT_STATUS_HOST || '',
 	},
 
 	// Text translation: translate each final transcript into the target languages the bridge

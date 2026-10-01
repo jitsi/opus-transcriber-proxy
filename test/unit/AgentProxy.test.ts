@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentProxy, CLOSE_CODE_AGENT_ENDED } from '../../src/agentproxy';
+import { AgentProxy, CLOSE_CODE_AGENT_ENDED, CLOSE_CODE_ENDPOINT_UNREACHABLE } from '../../src/agentproxy';
 
 class MockWebSocket {
 	sent: string[] = [];
@@ -129,8 +129,63 @@ describe('AgentProxy', () => {
 		await Promise.resolve();
 	}
 
+	it('reports active once the customer socket opens', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		await settle();
+		endpointWs.fire('open', {});
+
+		expect(lifecycle).toEqual([ { state: 'active' } ]);
+	});
+
+	it('a refused dial reports failed and closes the bridge leg with the unreachable code', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+
+		endpointWs.fire('error', { message: 'Unexpected server response: 401' });
+		endpointWs.fire('close', {});
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint refused: HTTP 401' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		expect(bridgeWs.closeReason).toBe('endpoint refused: HTTP 401');
+	});
+
+	it('an unreachable endpoint reports failed with the error text', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+
+		endpointWs.fire('error', { message: 'connect ECONNREFUSED 127.0.0.1:9094' });
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: connect ECONNREFUSED 127.0.0.1:9094' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+	});
+
+	it('a mid-session endpoint loss closes normally so the bridge may redial', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+		endpointWs.fire('open', {});
+
+		endpointWs.fire('error', { message: 'read ECONNRESET' });
+
+		expect(lifecycle).toEqual([ { state: 'active' } ]);
+		expect(bridgeWs.closed).toBe(true);
+		expect(bridgeWs.closeCode).toBeUndefined();
+	});
+
 	it('end from the agent closes both legs, the bridge leg with the agent-ended code', async () => {
 		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
 		await settle();
 		endpointWs.fire('open', {});
 		await settle();
@@ -138,6 +193,8 @@ describe('AgentProxy', () => {
 		proxy.on('closed', closed);
 
 		endpointWs.receive({ event: 'end' });
+
+		expect(lifecycle).toEqual([ { state: 'active' }, { state: 'ended', reason: 'agent ended' } ]);
 
 		expect(endpointWs.closed).toBe(true);
 		expect(bridgeWs.closed).toBe(true);

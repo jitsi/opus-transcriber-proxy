@@ -21,6 +21,14 @@ export const AGENT_PROTOCOL_VERSION = '1.0';
 
 /** Application close code on the bridge leg after the agent's `end`: the session is over, not to be redialed. */
 export const CLOSE_CODE_AGENT_ENDED = 4001;
+/** Application close code on the bridge leg when the dial to the customer endpoint failed: redialing would loop. */
+export const CLOSE_CODE_ENDPOINT_UNREACHABLE = 4002;
+
+/** A short, stable reason for a failed dial; the WebSocket close reason is capped at 123 bytes. */
+export function dialFailureReason(message: string): string {
+	const refused = /Unexpected server response: (\d+)/.exec(message);
+	return (refused ? `endpoint refused: HTTP ${refused[1]}` : `endpoint unreachable: ${message}`).slice(0, 120);
+}
 
 // Bounds on buffering while the codecs / customer socket initialise (mirrors TranslatorConnection).
 const MAX_PENDING_OPUS_FRAMES = 500; // ~10 s of 20 ms frames per source
@@ -339,17 +347,26 @@ export class AgentProxy extends Emitter {
 				for (const message of queued) {
 					endpointWs.send(message);
 				}
+				this.emit('lifecycle', { state: 'active' });
 			});
 			endpointWs.addEventListener('message', (event) => this.handleEndpointMessage(event.data));
 			endpointWs.addEventListener('error', (event) => {
 				const message = (event as { message?: string }).message ?? 'WebSocket error';
 				this.runtime.logger.error(`agent: endpoint WebSocket error: ${message}`);
+				if (this.endpointStatus === 'pending') {
+					this.failDial(message);
+					return;
+				}
 				this.endpointStatus = 'failed';
 				this.emit('error', message);
-				// Close the bridge leg: the Exporter's reconnect re-dials the endpoint (session retry).
+				// Mid-session loss: a normal close lets the bridge redial (session retry).
 				this.close();
 			});
 			endpointWs.addEventListener('close', () => {
+				if (this.endpointStatus === 'pending') {
+					this.failDial('endpoint closed before the handshake completed');
+					return;
+				}
 				if (this.endpointStatus !== 'failed') {
 					this.endpointStatus = 'closed';
 				}
@@ -367,10 +384,20 @@ export class AgentProxy extends Emitter {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.runtime.logger.error(`agent: failed to open endpoint WebSocket: ${message}`);
-			this.endpointStatus = 'failed';
-			this.emit('error', message);
-			this.close();
+			this.failDial(message);
 		}
+	}
+
+	/** The customer endpoint could not be reached: terminal for this leg, so the bridge does not redial into the same failure. */
+	private failDial(message: string): void {
+		if (this.endpointStatus === 'failed') {
+			return;
+		}
+		this.endpointStatus = 'failed';
+		const reason = dialFailureReason(message);
+		this.emit('error', message);
+		this.emit('lifecycle', { state: 'failed', reason });
+		this.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, reason);
 	}
 
 	private sendToEndpoint(message: Record<string, unknown>): void {
@@ -423,6 +450,7 @@ export class AgentProxy extends Emitter {
 			}
 			case 'end':
 				this.runtime.logger.info('agent: end (agent-initiated teardown)');
+				this.emit('lifecycle', { state: 'ended', reason: 'agent ended' });
 				this.close(CLOSE_CODE_AGENT_ENDED, 'agent ended');
 				break;
 			case 'pong':

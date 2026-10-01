@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { AgentLifecycleState, AgentStatusReporter } from './agent/AgentStatusReporter';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
@@ -73,8 +74,11 @@ const activeAgentSessions = new Set<AgentProxy>();
 interface AgentEndpoint {
 	url: string;
 	headers: Record<string, string>;
-	/** Query params other than `endpoint` (jicofo's urlParams), echoed to the customer as customParameters. */
+	/** Query params other than the gateway's own (jicofo's urlParams), echoed to the customer as customParameters. */
 	customParameters?: Record<string, unknown>;
+	/** The room JID and agent id jicofo puts on the dial URL, for lifecycle reports to the provisioning API. */
+	conference?: string;
+	agentId?: string;
 }
 
 /**
@@ -82,8 +86,18 @@ interface AgentEndpoint {
  * header (forwarded by the bridge from the jicofo connect config) or, for dev, an `?endpoint=`
  * query param. Returns an error string (for the 400 response) when missing or invalid.
  */
+const agentStatusReporter = new AgentStatusReporter({
+	url: config.agent.statusUrl,
+	token: config.agent.statusToken,
+	host: config.agent.statusHost,
+	logger,
+});
+if (config.enableAgent && !agentStatusReporter.enabled) {
+	logger.warn('AGENT_STATUS_URL is not set: agent lifecycle (active/failed/ended) is not reported to the provisioning API.');
+}
+
 /** Query parameters the gateway consumes itself (see utils.ts), never echoed to the customer. */
-const GATEWAY_QUERY_PARAMS = new Set([ 'connect', 'deepgram_mip_opt_out', 'encoding', 'endpoint', 'endpointing', 'lang', 'openaiCustomUrl', 'provider', 'sendBack', 'sendBackInterim', 'sessionId', 'smart_turn', 'smart_turn_timeout', 'tag', 'text_translation_provider', 'useDispatcher', 'xai_granular_finals', 'xai_granular_guard_words', 'xai_granular_stability_ms' ]);
+const GATEWAY_QUERY_PARAMS = new Set([ 'agentId', 'conference', 'connect', 'deepgram_mip_opt_out', 'encoding', 'endpoint', 'endpointing', 'lang', 'openaiCustomUrl', 'provider', 'sendBack', 'sendBackInterim', 'sessionId', 'smart_turn', 'smart_turn_timeout', 'tag', 'text_translation_provider', 'useDispatcher', 'xai_granular_finals', 'xai_granular_guard_words', 'xai_granular_stability_ms' ]);
 
 /** Constant-time secret comparison; hashing first hides the length difference too. */
 function secretsEqual(a: string, b: string): boolean {
@@ -120,10 +134,15 @@ function resolveAgentEndpoint(url: URL, headers: http.IncomingHttpHeaders): Agen
 		}
 	});
 
+	const conference = url.searchParams.get('conference') ?? undefined;
+	const agentId = url.searchParams.get('agentId') ?? undefined;
+
 	return {
 		url: parsed.toString(),
 		headers: authorization !== undefined ? { Authorization: authorization } : {},
 		...(Object.keys(customParameters).length > 0 ? { customParameters } : {}),
+		...(conference !== undefined ? { conference } : {}),
+		...(agentId !== undefined ? { agentId } : {}),
 	};
 }
 
@@ -215,6 +234,15 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 
 	agentSession.on('error', (message: string) => {
 		logger.error(`Agent session error (endpoint host=${new URL(endpoint.url).hostname}): ${message}`);
+	});
+
+	// The gateway is the only component that sees the customer leg, so it reports its lifecycle itself.
+	agentSession.on('lifecycle', ({ state, reason }: { state: AgentLifecycleState; reason?: string }) => {
+		if (endpoint.conference && endpoint.agentId) {
+			void agentStatusReporter.report(endpoint.conference, endpoint.agentId, state, reason);
+		} else if (agentStatusReporter.enabled) {
+			logger.warn(`Agent lifecycle ${state} not reported: the dial URL carries no conference/agentId`);
+		}
 	});
 
 	// The agent's audio and talk boundaries reuse the mediajson builders shared with /translate.

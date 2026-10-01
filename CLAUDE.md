@@ -742,6 +742,7 @@ See README.md for complete list. Key ones:
 - `AGENT_ALLOWED_HOSTS` - Comma-separated allowlist of customer endpoint hosts (exact or `.suffix`). Empty = allow any public host (private ranges blocked)
 - `AGENT_ALLOW_PRIVATE_ENDPOINTS` - Dev/same-host opt-in that skips the private/internal-address SSRF denylist so the agent endpoint may be on localhost or an internal IP (default: false). Removes SSRF protection — never enable where untrusted callers can reach `/agent`
 - `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of requiring the `X-Agent-Endpoint` header (default: false)
+- `AGENT_STATUS_URL` / `AGENT_STATUS_TOKEN` / `AGENT_STATUS_HOST` - The provisioning API's status route the gateway reports the media leg to (`active` on socket open, `failed` on dial failure, `ended` on the agent's `end`), its bearer, and an optional Host header. Unset = not reported, and agents never advance past jicofo's `connecting`
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)

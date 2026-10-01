@@ -134,12 +134,14 @@ Single-agent status. Response `200` the agent object (as in `list`); `404` if un
 `state` progresses: `provisioning` → `connecting` → `active` → `ended`, with `failed` on error.
 Exposed by `list`/`get` and emitted as webhooks.
 
-The transitions are reported by jicofo through an **internal** route, `POST <base>/status`
+The transitions are reported through an **internal** route, `POST <base>/status`
 `{ conference, agentId, state, reason? }` (not part of the customer-facing surface; on JaaS the gateway
-never exposes it): `connecting` when the synthetic endpoint allocation is submitted, `active` when the
-bridge has accepted the endpoint and the `<connect>` is dispatched (the bridge's dial to the agent follows;
-there is no separate media-leg signal yet), `failed` when allocation errors, and `ended` when the media leg
-is torn down. Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
+never exposes it), by the two components that can see them. jicofo reports `connecting` when the synthetic
+endpoint allocation is submitted and `failed` when that allocation errors. The media relay (the opus proxy)
+reports the media leg: `active` when the agent's socket opens, `failed` when the dial to the agent endpoint
+fails (`endpoint refused: HTTP 401`, `endpoint unreachable: ...`), and `ended` when the agent sends `end`.
+It finds the agent through the `conference` and `agentId` query parameters jicofo puts on the dial URL and
+is configured with the route and bearer (`AGENT_STATUS_URL`, `AGENT_STATUS_TOKEN`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
 secret as the bearer (`voice_agent_status_secret` on the component / `jicofo.agent.status.token` on
 jicofo); ASAP remains accepted, and the secret never authorizes the provisioning routes.
 
