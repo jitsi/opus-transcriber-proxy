@@ -33,12 +33,15 @@ function parseFloatOrUndefined(value: string | undefined): number | undefined {
 
 function parseAndValidateTags(value: string | undefined): string[] {
 	if (!value) return [];
-	const tags = value.split(',').map((t) => t.trim()).filter((t) => t);
+	const tags = value
+		.split(',')
+		.map((t) => t.trim())
+		.filter((t) => t);
 	validateTags(tags);
 	return tags;
 }
 
-export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'dummy';
+export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'cloudtemple' | 'dummy';
 
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
@@ -134,6 +137,18 @@ export const config = {
 		// ending the turn without it (see the long-turn cap). xAI answered the silence within ~0.5s
 		// when forceCommit() was verified; since 2026-09-19 it does not always answer at all.
 		idleTurnEndGraceMs: parseIntOrDefault(process.env.XAI_IDLE_TURN_END_GRACE_MS, 3000),
+	},
+
+	// CloudTemple LLMaaS configuration (Voxtral realtime model, /v1/realtime WebSocket).
+	// Own wire protocol, not OpenAI-compatible — see CloudTempleBackend.ts for the specifics
+	// (header auth, flat session.update, transcription.delta/.done events, one-utterance-per-
+	// connection). Model id confirmed against CloudTemple's own reference client
+	// (github.com/Cloud-Temple/product-llmaas-how-to, simple_voxtral/) — note the "voxtral"
+	// alias documented there is currently rejected by the live API; use the full id.
+	cloudtemple: {
+		apiKey: process.env.CLOUDTEMPLE_API_KEY || '',
+		wsUrl: process.env.CLOUDTEMPLE_WS_URL || 'wss://api.ai.cloud-temple.com/v1/realtime',
+		model: process.env.CLOUDTEMPLE_MODEL || 'mistralai/Voxtral-Mini-4B-Realtime-2602',
 	},
 
 	// Deepgram configuration
@@ -241,8 +256,7 @@ export const config = {
 			// against the live API: v2 works with a service-account token where v3 needs an extra IAM
 			// permission. With neither this nor the API key set, the provider is unavailable and the
 			// priority list skips it.
-			credentialsJson:
-				process.env.TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON || process.env.GOOGLE_CREDENTIALS_JSON || '',
+			credentialsJson: process.env.TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON || process.env.GOOGLE_CREDENTIALS_JSON || '',
 			url: process.env.TEXT_TRANSLATION_GOOGLE_URL || 'https://translation.googleapis.com/language/translate/v2',
 		},
 	},
@@ -314,6 +328,8 @@ export function isProviderAvailable(provider: Provider): boolean {
 			return !!config.deepgram.apiKey;
 		case 'xai':
 			return !!config.xai.apiKey;
+		case 'cloudtemple':
+			return !!config.cloudtemple.apiKey;
 		case 'dummy':
 			return config.enableDummyProvider; // Dummy only available if explicitly enabled
 		default:
@@ -325,7 +341,7 @@ export function isProviderAvailable(provider: Provider): boolean {
  * Get all available providers
  */
 export function getAvailableProviders(): Provider[] {
-	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'xai', 'dummy'];
+	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'xai', 'cloudtemple', 'dummy'];
 	return allProviders.filter(isProviderAvailable);
 }
 
@@ -346,5 +362,13 @@ export function getDefaultProvider(): Provider | null {
  * Validate that a provider name is valid
  */
 export function isValidProvider(provider: string): provider is Provider {
-	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'xai' || provider === 'dummy';
+	return (
+		provider === 'openai' ||
+		provider === 'openai_custom' ||
+		provider === 'gemini' ||
+		provider === 'deepgram' ||
+		provider === 'xai' ||
+		provider === 'cloudtemple' ||
+		provider === 'dummy'
+	);
 }

@@ -219,6 +219,34 @@ PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
 - No model selection for the STT endpoint (model is inherent to the service), and no region is pinned
 - **Handshake failure handling:** a rejected upgrade (xAI answers the WS handshake with an HTTP response when its STT backend is unavailable — fleet-wide `503`s observed 2026-09-10) is caught via `ws`' `unexpected-response` event, which logs the `status`, `requestId` (`x-request-id`/`x-requestid`/`request-id`/`x-amzn-requestid`/`cf-ray`), `retryAfter`, the full response headers, the response body (bounded by a 1s read timeout so a hung read can't stall the retry) and the request URL. The request id of a *successful* handshake is also captured (`upgrade` event) and appended to every later failure log for that stream, so a mid-stream error can be traced in xAI's logs too. `connect()` then retries up to `XAI_CONNECT_ATTEMPTS` (4) times for **every** rejection except an auth failure (`XAI_FATAL_UPGRADE_STATUSES` = 401/403) and for pre-open transport errors; a malformed `XAI_STT_URL` still fails fast at construction. The retryable set is a denylist rather than an allowlist because the allowlist was twice too narrow — it needed the Cloudflare origin-failure codes 521-526/530 added (`api.x.ai` is behind Cloudflare, whose edge returns these when xAI's origin is down/timing out/failing TLS), and then on 2026-09-22 xAI answered **404** to every upgrade for 7 minutes fleet-wide while 404 was on the fail-fast list as a presumed misconfiguration. An xAI rejection carries no body and nothing that separates "your request is wrong" from "our backend is missing", so the status cannot decide it. The delay is `XAI_CONNECT_BACKOFF_MS` (250ms base, doubling, ±25% jitter, capped 4s), or the rejection's `Retry-After` when it sent one (delay-seconds or HTTP-date), capped at the same 4s — a participant's audio buffers behind `connect()`, so we never hold it longer however long xAI asks (not retrying at all would not honour the header either: the next media frame would open a fresh connection immediately). When the attempts are exhausted on a transient failure, the delay we would have waited is left as a **process-wide cooldown** that the next `connect()` in the process (the fresh backend the next media frame creates, or a recovery reconnect) waits out first, so an outage doesn't degrade into a per-participant hammer loop. Each attempt carries a 5s `handshakeTimeout` (`ws` has none by default) so a silent endpoint can't hang `connect()`, and `close()` interrupts any wait rather than letting it run out — a `close()` mid-handshake is logged at info as an abandonment, not as a provider failure. Attempts that will be retried log at `warn` (full headers/body only on the first and final attempt, to bound log volume during an outage); each failed attempt increments `otp_backend_handshake_failures_total{provider="xai", reason}`. Only after the last attempt does it report `onError('websocket_error', …)` (errorType unchanged; the status + request id are carried in the message) and close — previously the first rejection was fatal, so the participant was dropped and the next media event immediately reconnected with no backoff
 
+### CloudTemple
+Uses CloudTemple's LLMaaS `/v1/realtime` WebSocket (Voxtral model) for streaming transcription.
+
+**Not OpenAI-compatible, despite the shared "Realtime" naming.** Confirmed against CloudTemple's own public reference client (`github.com/Cloud-Temple/product-llmaas-how-to`, `simple_voxtral/`):
+
+| | OpenAI Realtime API | CloudTemple `/v1/realtime` |
+|---|---|---|
+| Auth | WS subprotocol (`openai-insecure-api-key.<key>`) | `Authorization: Bearer <key>` header |
+| `session.update` | Nested under `session.audio.input.transcription.model` | Flat: `{ type: 'session.update', model }` |
+| Streaming event | `conversation.item.input_audio_transcription.delta` | `transcription.delta` (`delta` field, often empty — a heartbeat, not an error) |
+| Finalization event | `conversation.item.input_audio_transcription.completed` (automatic, server-side VAD) | `transcription.done` (only after an explicit `input_audio_buffer.commit` with `final: true` — no server-side VAD/turn_detection at all) |
+| Finalization payload | Carries the full transcript | Only a `usage` object — the text must be reassembled client-side from the deltas |
+| Connection lifetime | One persistent connection per participant for the whole call | **One connection per utterance** — after `transcription.done`, the socket stops responding to further audio entirely (verified empirically) |
+
+**Configuration:**
+```bash
+CLOUDTEMPLE_API_KEY=...
+CLOUDTEMPLE_MODEL=mistralai/Voxtral-Mini-4B-Realtime-2602
+CLOUDTEMPLE_WS_URL=wss://api.ai.cloud-temple.com/v1/realtime  # optional override
+
+# Make CloudTemple the default provider
+PROVIDERS_PRIORITY=cloudtemple,openai,deepgram
+```
+
+**Known API/doc mismatch:** CloudTemple's README documents `voxtral` as a valid model alias (`-m voxtral`); the live API rejects it (`"The model `voxtral` does not exist."`). Use the full id above.
+
+**Architecture note — connection-per-utterance:** because a CloudTemple connection only finalizes once, `CloudTempleBackend` can't follow the one-persistent-connection pattern every other backend here uses. Instead: `forceCommit()` sends the `final: true` commit on the current socket and leaves it to finish on its own (its `transcription.done` still fires `onCompleteTranscription`), then retires it (`this.ws = undefined`); the next `sendAudio()` call lazily opens a fresh socket (session.update + the same initial empty commit CloudTemple's own reference client sends) before forwarding audio. This relies on `OutgoingConnection`'s existing `forceCommit()` idle trigger (`FORCE_COMMIT_TIMEOUT`, default 2s) as the *only* utterance-boundary signal, since CloudTemple has no server-side equivalent — confirmed in practice to line up with natural inter-utterance pauses, since audio keeps flowing (resetting the idle timer) for as long as a participant's mic stays live, muted or not speaking yet aside.
+
 ## Architecture
 
 ### Backend Interface
