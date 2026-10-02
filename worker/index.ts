@@ -23,6 +23,7 @@ import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
 import { startContainer, startResult } from './startRetry';
 import { containerFailureReason, containerStartPoints, containerUnreachablePoints, countLater, requestColo } from './metrics';
+import { applyProviderOverride, describeOverrideDecision, resolveProviderOverride, type OverridableProvider } from './providerOverride';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -62,6 +63,27 @@ export default {
 					routingMode: env.ROUTING_MODE || 'session',
 				});
 			}
+		}
+
+		// Apply the operator provider override, if one is armed in KV and this request did not name a
+		// provider itself. Done before the container is selected so it covers BOTH forwarding paths
+		// below (dispatcher and direct) — each of them forwards this request object as-is, and the
+		// container reads `provider` from the URL already, so nothing container-side changes.
+		//
+		// Every failure mode inside resolveProviderOverride degrades to "not applied", so a bad or
+		// unreachable override can only leave the configured default in place.
+		const overrideDecision = await resolveProviderOverride(request, env);
+		let providerOverride: OverridableProvider | undefined;
+		if (overrideDecision.applied) {
+			providerOverride = overrideDecision.provider;
+			request = applyProviderOverride(request, overrideDecision.provider);
+			url.searchParams.set('provider', overrideDecision.provider);
+			console.log(describeOverrideDecision(overrideDecision));
+		} else if (overrideDecision.level === 'error') {
+			// A malformed or unusable override is an operator mistake that is silently doing nothing.
+			console.error(describeOverrideDecision(overrideDecision));
+		} else if (overrideDecision.level === 'info') {
+			console.log(describeOverrideDecision(overrideDecision));
 		}
 
 		// Check query param first, fall back to env var
@@ -154,7 +176,7 @@ export default {
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
 		if (useDispatcher && isWebSocketUpgrade && env.DISPATCHER_DO) {
-			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, providerOverride);
 		}
 
 		// Forward request directly to container (pass-through mode)
