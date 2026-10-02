@@ -36,6 +36,8 @@ so it must not change in a breaking way once published — see **Versioning** be
 { "event": "info", "protocol": "jitsi-agent-media", "version": "1.0",
   "application": "opus-transcriber-proxy",
   "mediaFormat": { "encoding": "audio/l16", "sampleRate": 24000, "channels": 1 },
+  "sessionId": "5f1c7e0a-…", "agentId": "agent-support",
+  "conference": "room1@conference.example.com", "meetingId": "9b3d2c41-…",
   "customParameters": { "...": "..." },
   "sequenceNumber": 0 }
 ```
@@ -45,6 +47,10 @@ so it must not change in a breaking way once published — see **Versioning** be
 | `version` | string | yes | `MAJOR.MINOR` of this contract. |
 | `application` | string | yes | Gateway build identifier (informational). |
 | `mediaFormat` | object | yes | Default audio format for the connection (per-stream `start` may restate it). |
+| `sessionId` | string | yes | Unique per dial, so a redial after a bridge reconnect is distinguishable from a new session. |
+| `agentId` | string | no | The agent being dialed, as provisioned. Lets one server host many bots. Absent only on the dev `?endpoint=` path. |
+| `conference` | string | no | The room the agent was invited to. |
+| `meetingId` | string | no | The meeting id of that conference. |
 | `customParameters` | object | no | Opaque provisioning metadata from the invite (string→string). The gateway's own query parameters are never echoed. |
 
 ### `start` (one per participant source, before its first `media`)

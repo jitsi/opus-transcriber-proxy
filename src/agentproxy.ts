@@ -38,6 +38,10 @@ const MAX_PENDING_ENDPOINT_MESSAGES = 1000; // JSON messages queued before the c
 export interface AgentProxyOptions {
 	/** The customer's WebSocket endpoint to dial out to. */
 	endpointUrl: string;
+	/** Identify the dial to a customer server hosting many bots; carried in `info`. */
+	agentId?: string;
+	conference?: string;
+	meetingId?: string;
 	/**
 	 * Opens the outbound WebSocket to the customer endpoint. Injected by the host (server.ts uses
 	 * `ws` with forwarded auth headers); NOT the runtime's OpenAI-shaped factory, whose bearer-token
@@ -81,6 +85,9 @@ interface SourceState {
 export class AgentProxy extends Emitter {
 	private readonly ws: IWebSocket;
 	private readonly options: AgentProxyOptions;
+
+	/** Per-dial id, so the customer can tell a redial from a new session. */
+	private readonly sessionId = globalThis.crypto.randomUUID();
 	private readonly runtime: TranslationRuntime;
 
 	private readonly sources = new Map<string, SourceState>();
@@ -379,6 +386,10 @@ export class AgentProxy extends Emitter {
 				version: AGENT_PROTOCOL_VERSION,
 				application: 'opus-transcriber-proxy',
 				mediaFormat: { ...AGENT_MEDIA_FORMAT },
+				sessionId: this.sessionId,
+				...(this.options.agentId !== undefined ? { agentId: this.options.agentId } : {}),
+				...(this.options.conference !== undefined ? { conference: this.options.conference } : {}),
+				...(this.options.meetingId !== undefined ? { meetingId: this.options.meetingId } : {}),
 				...(this.options.customParameters !== undefined ? { customParameters: this.options.customParameters } : {}),
 			});
 		} catch (error) {

@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { AgentLifecycleState, AgentStatusReporter } from './agent/AgentStatusReporter';
+import { AgentDialConfig, AgentLifecycleState, ProvisioningClient } from './agent/ProvisioningClient';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
@@ -79,70 +79,68 @@ interface AgentEndpoint {
 	/** The room JID and agent id jicofo puts on the dial URL, for lifecycle reports to the provisioning API. */
 	conference?: string;
 	agentId?: string;
+	meetingId?: string;
 }
 
-/**
- * Resolve and validate the customer endpoint for an /agent connection: the `X-Agent-Endpoint`
- * header (forwarded by the bridge from the jicofo connect config) or, for dev, an `?endpoint=`
- * query param. Returns an error string (for the 400 response) when missing or invalid.
- */
-const agentStatusReporter = new AgentStatusReporter({
-	url: config.agent.statusUrl,
-	token: config.agent.statusToken,
-	host: config.agent.statusHost,
+const provisioning = new ProvisioningClient({
+	url: config.agent.provisioningUrl,
+	token: config.agent.provisioningToken,
+	host: config.agent.provisioningHost,
 	logger,
 });
-if (config.enableAgent && !agentStatusReporter.enabled) {
-	logger.warn('AGENT_STATUS_URL is not set: agent lifecycle (active/failed/ended) is not reported to the provisioning API.');
+if (config.enableAgent && !provisioning.enabled) {
+	logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');
 }
-
-/** Query parameters the gateway consumes itself (see utils.ts), never echoed to the customer. */
-const GATEWAY_QUERY_PARAMS = new Set([ 'agentId', 'conference', 'connect', 'deepgram_mip_opt_out', 'encoding', 'endpoint', 'endpointing', 'lang', 'openaiCustomUrl', 'provider', 'sendBack', 'sendBackInterim', 'sessionId', 'smart_turn', 'smart_turn_timeout', 'tag', 'text_translation_provider', 'useDispatcher', 'xai_granular_finals', 'xai_granular_guard_words', 'xai_granular_stability_ms' ]);
 
 /** Constant-time secret comparison; hashing first hides the length difference too. */
 function secretsEqual(a: string, b: string): boolean {
 	return timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
 }
 
-function resolveAgentEndpoint(url: URL, headers: http.IncomingHttpHeaders): AgentEndpoint | string {
-	const rawHeader = headers['x-agent-endpoint'];
+/**
+ * Resolves the customer endpoint for an /agent connection. The bridge's dial URL only identifies the agent
+ * (`conference`, `agentId`); the dial config is fetched from the provisioning API, so the customer's endpoint
+ * and secret never travel through room metadata, jicofo or the bridge. Returns an error string (for the 400
+ * response) when missing or invalid.
+ */
+async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
+	const conference = url.searchParams.get('conference') ?? undefined;
+	const agentId = url.searchParams.get('agentId') ?? undefined;
+	const meetingId = url.searchParams.get('meeting') ?? undefined;
 
 	// The ?endpoint= query param is a dev convenience only: it would let anyone reaching the proxy pick the
 	// dial-out target, so it is honored solely when explicitly enabled (AGENT_ALLOW_ENDPOINT_PARAM=true).
-	const rawParam = config.agent.allowEndpointParam ? url.searchParams.get('endpoint') : null;
-	const raw = (Array.isArray(rawHeader) ? rawHeader[0] : rawHeader) ?? rawParam ?? '';
-	if (raw === '') {
-		return 'Missing agent endpoint (X-Agent-Endpoint header)';
+	const devEndpoint = config.agent.allowEndpointParam ? url.searchParams.get('endpoint') : null;
+	let dial: AgentDialConfig | undefined;
+	if (devEndpoint) {
+		dial = { endpoint: { url: devEndpoint } };
+	} else if (conference !== undefined && agentId !== undefined && provisioning.enabled) {
+		dial = await provisioning.dialConfig(conference, agentId);
+		if (dial === undefined) {
+			return `No dial config for agent ${agentId}`;
+		}
+	} else {
+		return provisioning.enabled
+			? 'Missing conference and agentId query parameters'
+			: 'No provisioning API configured (AGENT_PROVISIONING_URL)';
 	}
 	let parsed: URL;
 	try {
-		parsed = new URL(raw);
+		parsed = new URL(dial.endpoint.url);
 	} catch {
 		return 'Invalid agent endpoint URL';
 	}
 	if (parsed.protocol !== 'wss:' && !(parsed.protocol === 'ws:' && !config.agent.requireWss)) {
 		return 'Agent endpoint must be wss:// (set AGENT_REQUIRE_WSS=false to allow ws:// in dev)';
 	}
-	const rawAuth = headers['x-agent-authorization'];
-	const authorization = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
-
-	// Only jicofo's urlParams are the customer's; the gateway's own knobs never leave the proxy.
-	const customParameters: Record<string, unknown> = {};
-	url.searchParams.forEach((value, key) => {
-		if (!GATEWAY_QUERY_PARAMS.has(key)) {
-			customParameters[key] = value;
-		}
-	});
-
-	const conference = url.searchParams.get('conference') ?? undefined;
-	const agentId = url.searchParams.get('agentId') ?? undefined;
 
 	return {
 		url: parsed.toString(),
-		headers: authorization !== undefined ? { Authorization: authorization } : {},
-		...(Object.keys(customParameters).length > 0 ? { customParameters } : {}),
+		headers: dial.endpoint.authorization !== undefined ? { Authorization: dial.endpoint.authorization } : {},
+		...(dial.customParameters !== undefined ? { customParameters: dial.customParameters } : {}),
 		...(conference !== undefined ? { conference } : {}),
 		...(agentId !== undefined ? { agentId } : {}),
+		...(meetingId !== undefined ? { meetingId } : {}),
 	};
 }
 
@@ -185,7 +183,7 @@ async function handleAgentUpgrade(
 			+ 'reachable only from the bridge.');
 	}
 
-	const endpoint = resolveAgentEndpoint(parameters.url, request.headers);
+	const endpoint = await resolveAgentEndpoint(parameters.url);
 
 	if (typeof endpoint === 'string') {
 		reject('400 Bad Request', endpoint, endpoint);
@@ -219,6 +217,9 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 			// Authorization header reaches the customer endpoint on the handshake.
 			createEndpointWebSocket: (url) => new WebSocket(url, { headers: endpoint.headers }) as unknown as IWebSocket,
 			customParameters: endpoint.customParameters,
+			agentId: endpoint.agentId,
+			conference: endpoint.conference,
+			meetingId: endpoint.meetingId,
 			paceLeadMs: config.agent.paceLeadMs,
 		},
 		createNodeTranslationRuntime(),
@@ -239,8 +240,8 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 	// The gateway is the only component that sees the customer leg, so it reports its lifecycle itself.
 	agentSession.on('lifecycle', ({ state, reason }: { state: AgentLifecycleState; reason?: string }) => {
 		if (endpoint.conference && endpoint.agentId) {
-			void agentStatusReporter.report(endpoint.conference, endpoint.agentId, state, reason);
-		} else if (agentStatusReporter.enabled) {
+			void provisioning.report(endpoint.conference, endpoint.agentId, state, reason);
+		} else if (provisioning.enabled) {
 			logger.warn(`Agent lifecycle ${state} not reported: the dial URL carries no conference/agentId`);
 		}
 	});

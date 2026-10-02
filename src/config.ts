@@ -173,15 +173,16 @@ export const config = {
 		// localhost or an internal IP. Removes SSRF protection - never enable where untrusted callers can reach
 		// the /agent endpoint.
 		allowPrivateEndpoints: process.env.AGENT_ALLOW_PRIVATE_ENDPOINTS === 'true',
-		// Honor the dev-only ?endpoint= query param (otherwise the endpoint must come from X-Agent-Endpoint).
+		// Honor the dev-only ?endpoint= query param (otherwise the endpoint comes from the provisioning API).
 		allowEndpointParam: process.env.AGENT_ALLOW_ENDPOINT_PARAM === 'true',
-		// Provisioning API status route the gateway reports the media leg to (prosody's /voice-agent/status or the
-		// JaaS gateway): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
-		// Unset disables reporting, and the agent then never advances past jicofo's `connecting`.
-		statusUrl: process.env.AGENT_STATUS_URL || '',
-		statusToken: process.env.AGENT_STATUS_TOKEN || '',
+		// Base URL of the provisioning API's internal routes (prosody's /voice-agent or the JaaS gateway). The
+		// gateway fetches each agent's dial config from it by id (GET dial) and reports the media leg to it (POST
+		// status): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
+		// Unset, only the dev ?endpoint= path can dial and the agent never advances past jicofo's `connecting`.
+		provisioningUrl: process.env.AGENT_PROVISIONING_URL || '',
+		provisioningToken: process.env.AGENT_PROVISIONING_TOKEN || '',
 		// Host header override for a prosody that routes HTTP by virtual host.
-		statusHost: process.env.AGENT_STATUS_HOST || '',
+		provisioningHost: process.env.AGENT_PROVISIONING_HOST || '',
 	},
 
 	// Text translation: translate each final transcript into the target languages the bridge

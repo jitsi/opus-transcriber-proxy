@@ -164,8 +164,9 @@ customer's voice-agent WebSocket server and returns the agent's audio to the bri
 Bridge WebSocket (/agent)
     ↓
 AgentProxy (agentproxy.ts) - one per connection
-    ├─ Dials OUT to the customer endpoint (X-Agent-Endpoint header, or ?endpoint= in dev;
-    │  wss:// enforced unless AGENT_REQUIRE_WSS=false; X-Agent-Authorization forwarded)
+    ├─ Dials OUT to the customer endpoint named by the dial config it fetches by conference + agentId
+    │  from the provisioning API (agent/ProvisioningClient.ts; ?endpoint= in dev). wss:// enforced
+    │  unless AGENT_REQUIRE_WSS=false; endpoint.authorization sent as the Authorization header.
     ├─ Per participant source: OpusDecoder → PCM16 mono 24 kHz → mediajson `start`/`media`
     │  to the customer (start carries mediaFormat + customParameters from the query params)
     └─ Return path: customer `media` (base64 PCM16 24 kHz) → OpusEncoder (DTX) →
@@ -741,8 +742,8 @@ See README.md for complete list. Key ones:
 - `AGENT_SHARED_SECRET` - Shared secret gating the /agent WS upgrade; when set the caller (the bridge) must send a matching `X-Agent-Token`. Unset = unauthenticated upgrade (keep the proxy bridge-only)
 - `AGENT_ALLOWED_HOSTS` - Comma-separated allowlist of customer endpoint hosts (exact or `.suffix`). Empty = allow any public host (private ranges blocked)
 - `AGENT_ALLOW_PRIVATE_ENDPOINTS` - Dev/same-host opt-in that skips the private/internal-address SSRF denylist so the agent endpoint may be on localhost or an internal IP (default: false). Removes SSRF protection — never enable where untrusted callers can reach `/agent`
-- `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of requiring the `X-Agent-Endpoint` header (default: false)
-- `AGENT_STATUS_URL` / `AGENT_STATUS_TOKEN` / `AGENT_STATUS_HOST` - The provisioning API's status route the gateway reports the media leg to (`active` on socket open, `failed` on dial failure, `ended` on the agent's `end`), its bearer, and an optional Host header. Unset = not reported, and agents never advance past jicofo's `connecting`
+- `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of fetching the dial config from the provisioning API (default: false)
+- `AGENT_PROVISIONING_URL` / `AGENT_PROVISIONING_TOKEN` / `AGENT_PROVISIONING_HOST` - Base URL of the provisioning API's internal routes (prosody's `/voice-agent`, or the JaaS gateway), its bearer, and an optional Host header. The gateway fetches each agent's dial config from `GET dial` by `conference` + `agentId` and reports the media leg to `POST status` (`active` on socket open, `failed` on dial failure, `ended` on the agent's `end`). Unset = only the dev `?endpoint=` path can dial, and agents never advance past jicofo's `connecting`
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)

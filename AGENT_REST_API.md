@@ -75,8 +75,6 @@ Request:
   "displayName": "Support Bot",
   "agentId": "support",
   "endpoint": { "url": "wss://bot.example.com/ws", "authorization": "Bearer <secret>" },
-  "urlParams": { "region": "us" },
-  "httpHeaders": { "X-Trace-Id": "abc" },
   "customParameters": { "campaign": "42" },
   "callbackUrl": "https://app.example.com/jaas/agent-events"
 }
@@ -87,22 +85,17 @@ Request:
 | `conference` | string | yes | Room JID (OSS) or JaaS room name the tenant owns. |
 | `displayName` | string | yes | Roster name; length-bounded. |
 | `agentId` | string | no | Suffix or full `agent-` id; charset/length-bounded; normalized to the namespace. **Idempotency key** (see below). Auto-generated if omitted. |
-| `endpoint.url` | string | no* | Agent media WS; **`wss://` required** (prod). Mapped to the jicofo-only `X-Agent-Endpoint` connect header. |
-| `endpoint.authorization` | string | no | Sent as `X-Agent-Authorization` on the media dial. Never exposed to room occupants. |
-| `urlParams` | object(string→string) | no | Templated into the media dial URL by jicofo; bounded, CRLF/control-char rejected. |
-| `httpHeaders` | object(string→string) | no | Extra headers on the media dial; `X-Agent-*` names are **reserved/rejected** here (must go via `endpoint`). |
-| `customParameters` | object(string→string) | no | Opaque; echoed to the agent in the media `info`/`start` (`customParameters`). |
+| `endpoint.url` | string | yes | Agent media WS; **`wss://` required** (prod). Stays in the control plane; the media relay fetches it at dial time. |
+| `endpoint.authorization` | string | no | Sent as the `Authorization` header on the media dial. Leaves the control plane only for that dial; never in room metadata, jicofo or the bridge. |
+| `customParameters` | object(string→string) | no | Opaque; bounded, control chars rejected; echoed to the agent in the media `info`/`start` (`customParameters`). |
 | `callbackUrl` | string | no | HTTPS webhook for this agent's lifecycle events (see **Webhooks**). |
-
-\* Either `endpoint.url` or an operator/tenant-default endpoint must resolve, or the agent has
-nowhere to dial.
 
 Response `200`:
 ```json
 { "agentId": "agent-support", "sourceName": "agent-support-a0" }
 ```
 
-Errors: `400` (invalid displayName / agentId / string-map / non-`wss` endpoint / reserved header),
+Errors: `400` (invalid displayName / agentId / customParameters / missing or non-`wss` endpoint),
 `401`/`403`, `404` (room not found), `409` (per-room agent cap reached, or `agentId` conflict).
 
 **Idempotency:** a repeated `invite` with the same `agentId` in the same conference and identical
@@ -141,7 +134,7 @@ endpoint allocation is submitted and `failed` when that allocation errors. The m
 reports the media leg: `active` when the agent's socket opens, `failed` when the dial to the agent endpoint
 fails (`endpoint refused: HTTP 401`, `endpoint unreachable: ...`), and `ended` when the agent sends `end`.
 It finds the agent through the `conference` and `agentId` query parameters jicofo puts on the dial URL and
-is configured with the route and bearer (`AGENT_STATUS_URL`, `AGENT_STATUS_TOKEN`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
+is configured with the API's base URL and bearer (`AGENT_PROVISIONING_URL`, `AGENT_PROVISIONING_TOKEN`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
 secret as the bearer (`voice_agent_status_secret` on the component / `jicofo.agent.status.token` on
 jicofo); ASAP remains accepted, and the secret never authorizes the provisioning routes.
 
@@ -150,6 +143,11 @@ report is rebroadcast as room metadata and an automatic retry would loop. To ret
 same `agentId`: a failed agent is replaced rather than treated as a duplicate, and a fresh `connecting` →
 `active` sequence follows. Status reports are forward-only: a duplicate or a stale earlier state is
 acknowledged with `200` and ignored, so each lifecycle webhook fires once.
+
+The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
+`conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, endpoint, customParameters }`
+(`404` once the agent is gone), authenticated like `status`. On JaaS the gateway serves it from its own store.
 
 ## Webhooks *(v1 addition)*
 
@@ -178,10 +176,11 @@ webhook MUST be ignored by clients.
 ## How a request flows through the system
 
 ```
-invite  → control plane records the agent in room metadata (client-facing) + jicofo-only connect
-          config (endpoint/urlParams/httpHeaders)
-        → jicofo allocates a transport-less synthetic colibri2 endpoint + sends <connect>
-        → JVB dials endpoint.url speaking jitsi-agent-media v1 → opus proxy → the agent
+invite  → control plane records the agent in room metadata (client-facing) and keeps the dial config
+          (endpoint, customParameters) to itself
+        → jicofo allocates a transport-less synthetic colibri2 endpoint + sends <connect conference, agentId>
+        → JVB dials the opus proxy → the proxy fetches the dial config by id (GET dial) and dials
+          endpoint.url speaking jitsi-agent-media v1 → the agent
 dismiss / media `end`
         → jicofo expires the connect → JVB expires the endpoint → agent leg closes
         → webhook agent.ended
