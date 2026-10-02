@@ -82,14 +82,17 @@ interface AgentEndpoint {
 	meetingId?: string;
 }
 
-const provisioning = new ProvisioningClient({
-	url: config.agent.provisioningUrl,
-	token: config.agent.provisioningToken,
-	host: config.agent.provisioningHost,
-	logger,
-});
-if (config.enableAgent && !provisioning.enabled) {
-	logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');
+/** Built on first use, so importing this module needs no agent config (tests mock a partial config). */
+let provisioningClient: ProvisioningClient | undefined;
+function provisioning(): ProvisioningClient {
+	provisioningClient ??= new ProvisioningClient({
+		url: config.agent.provisioningUrl,
+		token: config.agent.provisioningToken,
+		host: config.agent.provisioningHost,
+		logger,
+	});
+
+	return provisioningClient;
 }
 
 /** Constant-time secret comparison; hashing first hides the length difference too. */
@@ -114,13 +117,13 @@ async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
 	let dial: AgentDialConfig | undefined;
 	if (devEndpoint) {
 		dial = { endpoint: { url: devEndpoint } };
-	} else if (conference !== undefined && agentId !== undefined && provisioning.enabled) {
-		dial = await provisioning.dialConfig(conference, agentId);
+	} else if (conference !== undefined && agentId !== undefined && provisioning().enabled) {
+		dial = await provisioning().dialConfig(conference, agentId);
 		if (dial === undefined) {
 			return `No dial config for agent ${agentId}`;
 		}
 	} else {
-		return provisioning.enabled
+		return provisioning().enabled
 			? 'Missing conference and agentId query parameters'
 			: 'No provisioning API configured (AGENT_PROVISIONING_URL)';
 	}
@@ -240,8 +243,8 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 	// The gateway is the only component that sees the customer leg, so it reports its lifecycle itself.
 	agentSession.on('lifecycle', ({ state, reason }: { state: AgentLifecycleState; reason?: string }) => {
 		if (endpoint.conference && endpoint.agentId) {
-			void provisioning.report(endpoint.conference, endpoint.agentId, state, reason);
-		} else if (provisioning.enabled) {
+			void provisioning().report(endpoint.conference, endpoint.agentId, state, reason);
+		} else if (provisioning().enabled) {
 			logger.warn(`Agent lifecycle ${state} not reported: the dial URL carries no conference/agentId`);
 		}
 	});
@@ -786,6 +789,9 @@ const PORT = config.server.port;
 const HOST = config.server.host;
 
 server.listen(PORT, HOST, () => {
+	if (config.enableAgent && !provisioning().enabled) {
+		logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');
+	}
 	logger.info('='.repeat(60));
 	logger.info('opus-transcriber-proxy started');
 	logger.info('='.repeat(60));
