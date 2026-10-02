@@ -910,6 +910,91 @@ describe('XAIBackend', () => {
 			// The dead WS is still closed; recovery happens on the OutgoingConnection side.
 			expect(backend.getStatus()).toBe('closed');
 		});
+
+		describe('failed utterance ("will retry if the session continues")', () => {
+			// Observed on wss://api.x.ai/v1/stt (2026-09-30, ~300 in 14 minutes fleet-wide).
+			const UTTERANCE_FAILED = 'Transcription failed on the current utterance; will retry if the session continues';
+			const failUtterance = () =>
+				getMockWs().simulateMessage(JSON.stringify({ type: 'error', message: UTTERANCE_FAILED }));
+
+			it('keeps the stream open and keeps transcribing', () => {
+				const errorSpy = vi.fn();
+				const closedSpy = vi.fn();
+				backend.onError = errorSpy;
+				backend.onClosed = closedSpy;
+
+				failUtterance();
+
+				expect(errorSpy).not.toHaveBeenCalled();
+				expect(closedSpy).not.toHaveBeenCalled();
+				expect(backend.getStatus()).toBe('connected');
+
+				getMockWs().simulateMessage(JSON.stringify({
+					type: 'transcript.partial',
+					is_final: true,
+					speech_final: true,
+					text: 'still here',
+				}));
+				expect(finalResults.map((m) => m.transcript[0].text)).toEqual(['still here']);
+			});
+
+			it('reconnects in place (recoverable) on the third failure in a row with no transcript between', () => {
+				const errorSpy = vi.fn();
+				backend.onError = errorSpy;
+
+				failUtterance();
+				failUtterance();
+				expect(errorSpy).not.toHaveBeenCalled();
+				expect(backend.getStatus()).toBe('connected');
+
+				failUtterance();
+				expect(errorSpy).toHaveBeenCalledTimes(1);
+				expect(errorSpy).toHaveBeenCalledWith('api_error', UTTERANCE_FAILED, true);
+				expect(backend.getStatus()).toBe('closed');
+			});
+
+			it('resets the count on a non-empty transcript', () => {
+				const errorSpy = vi.fn();
+				backend.onError = errorSpy;
+
+				failUtterance();
+				failUtterance();
+				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: false, text: 'hello' }));
+				failUtterance();
+				failUtterance();
+
+				expect(errorSpy).not.toHaveBeenCalled();
+				expect(backend.getStatus()).toBe('connected');
+			});
+
+			it('does not reset the count on an empty transcript', () => {
+				const errorSpy = vi.fn();
+				backend.onError = errorSpy;
+
+				failUtterance();
+				failUtterance();
+				// xAI sends empty is_final partials about every 2s of silence; they say nothing about
+				// whether the stream still transcribes.
+				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: true, text: '' }));
+				failUtterance();
+
+				expect(errorSpy).toHaveBeenCalledWith('api_error', UTTERANCE_FAILED, true);
+			});
+
+			it('treats xAI closing the socket after the message as a remote close, not an error', () => {
+				const errorSpy = vi.fn();
+				const closedSpy = vi.fn();
+				backend.onError = errorSpy;
+				backend.onClosed = closedSpy;
+
+				failUtterance();
+				getMockWs().simulateClose(1011, '', false);
+
+				expect(errorSpy).not.toHaveBeenCalled();
+				expect(closedSpy).toHaveBeenCalledTimes(1);
+				expect(backend.getStatus()).toBe('closed');
+			});
+		});
 	});
 
 	describe('diarization', () => {

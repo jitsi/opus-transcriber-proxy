@@ -30,6 +30,19 @@ const XAI_SAMPLE_RATE = 16000;
 // sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
 const XAI_IDLE_SILENCE_MARGIN_MS = 300;
 
+// xAI reports a failed utterance on a stream it keeps open. The exact message observed on
+// wss://api.x.ai/v1/stt (2026-09-30, ~300 in 14 minutes from 48 participants fleet-wide, and a
+// handful most days) is:
+//   {type:"error", message:"Transcription failed on the current utterance; will retry if the session continues"}
+// It is matched on the clause that makes the claim, so a rewording that drops it falls back to
+// the old fatal path rather than keeping a dead stream.
+const XAI_UTTERANCE_FAILED_RE = /will retry if the session continues/i;
+
+// Failed utterances tolerated in a row, with no transcript in between, before the stream is
+// treated as broken and reopened in place. Guards against xAI keeping the socket open while
+// failing everything sent on it.
+const XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES = 3;
+
 // --- Handshake failure handling -----------------------------------------------------
 //
 // xAI rejects the WS upgrade with an HTTP response when its STT backend is unavailable.
@@ -475,6 +488,8 @@ export class XAIBackend implements TranscriptionBackend {
 	private idleTurnEndTimer?: ReturnType<typeof setTimeout>;
 	// A turn ended after the last audio was sent, so there is nothing for an idle silence to finalize.
 	private turnEndedSinceAudio = false;
+	// Failed-utterance errors since the last non-empty transcript (see XAI_UTTERANCE_FAILED_RE).
+	private consecutiveUtteranceFailures = 0;
 
 	/**
 	 * xAI's request id for the current stream, from the handshake response headers.
@@ -1082,13 +1097,34 @@ export class XAIBackend implements TranscriptionBackend {
 		}
 
 		const type = parsedMessage?.type;
+		if ((type === 'transcript.partial' || type === 'transcript.done') && parsedMessage.text?.trim()) {
+			// The stream is producing text again, so earlier failed utterances were transient.
+			this.consecutiveUtteranceFailures = 0;
+		}
 		if (type === 'transcript.partial') {
 			this.handlePartial(parsedMessage);
 		} else if (type === 'transcript.done') {
 			this.handleDone(parsedMessage);
 		} else if (type === 'error') {
-			logger.error(`xAI API error for ${this.tag} (requestId=${this.requestId ?? 'none'}): ${JSON.stringify(parsedMessage)}`);
 			const message: string = parsedMessage.message || JSON.stringify(parsedMessage);
+			const utteranceFailed = XAI_UTTERANCE_FAILED_RE.test(message);
+			if (utteranceFailed && ++this.consecutiveUtteranceFailures < XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES) {
+				// xAI says the session continues, so keep it: closing it ourselves throws away the
+				// decoder and the turn in progress, and drops the participant's audio until it reopens. Held
+				// segments stay held — the next speech_final, or the idle turn end, reconciles them
+				// the same way as after any turn xAI drops. If xAI closes the socket after all, the
+				// 'close' listener reports it as a remote close and the next media frame reopens it.
+				logger.warn(
+					`xAI failed an utterance for ${this.tag} (requestId=${this.requestId ?? 'none'}, ${this.consecutiveUtteranceFailures}/${XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES} in a row); keeping the stream open: ${message}`,
+				);
+				writeMetric(undefined, {
+					name: 'xai_api_error',
+					worker: 'opus-transcriber-proxy',
+					errorType: 'utterance_failed',
+				});
+				return;
+			}
+			logger.error(`xAI API error for ${this.tag} (requestId=${this.requestId ?? 'none'}): ${JSON.stringify(parsedMessage)}`);
 			// xAI closes the ASR stream after a stretch of silence/inactivity. The exact
 			// message observed on wss://api.x.ai/v1/stt (2026-06-16) is:
 			//   {type:"error", message:"ASR stream timed out"}
@@ -1099,14 +1135,17 @@ export class XAIBackend implements TranscriptionBackend {
 			// silently reverts to the fatal path. The full parsedMessage is logged at
 			// error level just above, so if the "ASR stream timed out" error rate climbs
 			// after an xAI API change, audit that log and update this matcher.
-			const recoverable = /timed out/i.test(message);
+			//
+			// A failed utterance gets here only after XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES in a row
+			// with no transcript between; the stream may be open but broken, so reopen it in place.
+			const recoverable = utteranceFailed || /timed out/i.test(message);
 			// Before onError: the owner detaches our callbacks inside it, so a segment still held
 			// (committed by xAI, never speech_final'd) would otherwise be lost with the stream.
 			this.flushHeldSegments(this.lastLanguage, 'errored while a segment was held', false);
 			writeMetric(undefined, {
 				name: 'xai_api_error',
 				worker: 'opus-transcriber-proxy',
-				errorType: recoverable ? 'stream_timeout' : 'api_error',
+				errorType: utteranceFailed ? 'utterance_failed' : recoverable ? 'stream_timeout' : 'api_error',
 			});
 			this.onError?.('api_error', message, recoverable);
 			this.close();
