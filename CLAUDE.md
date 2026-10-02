@@ -157,6 +157,35 @@ TranslatorConnection (TranslatorConnection.ts) - One per (source, language)
     └─ OpusEncoder - Re-encodes the translated PCM to Opus for the return path
 ```
 
+The `/agent` endpoint (Node-only, `ENABLE_AGENT=true` to enable) relays a conference's audio to a
+customer's voice-agent WebSocket server and returns the agent's audio to the bridge:
+
+```
+Bridge WebSocket (/agent)
+    ↓
+AgentProxy (agentproxy.ts) - one per connection
+    ├─ Dials OUT to the customer endpoint named by the dial config it fetches by conference + agentId
+    │  from the provisioning API (agent/ProvisioningClient.ts; ?endpoint= in dev). wss:// enforced
+    │  unless AGENT_REQUIRE_WSS=false; endpoint.authorization sent as the Authorization header.
+    ├─ Per participant source: OpusDecoder → PCM16 mono 24 kHz → mediajson `start`/`media`
+    │  to the customer (start carries mediaFormat + customParameters from the query params)
+    └─ Return path: customer `media` (base64 PCM16 24 kHz) → OpusEncoder (DTX) →
+       AgentPacer (agent/AgentPacer.ts) → RtpTimestamper → tagged `media` + talk boundaries
+       to the bridge (the tag is the agent's synthetic source from `sources.requests`)
+```
+
+Agent-specific control events on the customer leg: `clear` (barge-in — drops the pacer's queued,
+not-yet-released audio; only the ≤ AGENT_PACE_LEAD_MS already released can still play out) and
+`mark` (playback checkpoint, echoed back when the pacer releases past it — approximates "played",
+the proxy has no client playout feedback). A customer-leg failure closes the bridge socket so the
+bridge's Exporter reconnect re-dials the endpoint (session-level retry). The pacer is pure and
+clock/timer-injectable (`test/unit/AgentPacer.test.ts`).
+
+The customer-leg wire contract is **frozen at v1.0** (`jitsi-agent-media`): the gateway advertises
+`protocol` + `version` in the `info` message, additive changes stay within the major and both sides
+ignore unknown events/fields, and the agent may send `end` to request teardown. Full schema and the
+locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PROTOCOL.md`.
+
 ### Key Components
 
 **TranscriberProxy** (`src/transcriberproxy.ts`)
@@ -707,6 +736,14 @@ See README.md for complete list. Key ones:
 - `TEXT_TRANSLATION_GOOGLE_API_KEY` - API key for `google` (Cloud Translation v2). **No fallback to `GEMINI_API_KEY`** — a Gemini/AI Studio key is not valid for `translation.googleapis.com`, so falling back would make the provider look configured and fail every request
 - `TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON` - Service-account JSON for `google`, falling back to the deployment's existing `GOOGLE_CREDENTIALS_JSON`; v2 takes an OAuth2 bearer token, so no new credential is needed. The API key wins when both are set. Neither set → the provider is unavailable
 - `TEXT_TRANSLATION_{OPENAI,XAI,GEMINI}_MODEL`, `TEXT_TRANSLATION_{OPENAI,XAI,GOOGLE}_URL`, `TEXT_TRANSLATION_GEMINI_BASE_URL`, `TEXT_TRANSLATION_GEMINI_THINKING_BUDGET`, `TEXT_TRANSLATION_GEMINI_THINKING_LEVEL` - Per-provider model/endpoint overrides (defaults: `gpt-4o-mini`, `grok-4.20-0309-non-reasoning`, `gemini-3.5-flash-lite`, no thinking config sent)
+- `ENABLE_AGENT` - Enable the /agent voice-agent endpoint (default: **false** — it dials out to arbitrary customer WebSocket endpoints, so enabling is an explicit deployment decision)
+- `AGENT_REQUIRE_WSS` - Require wss:// for the customer agent endpoint (default: true; false allows ws:// for dev)
+- `AGENT_PACE_LEAD_MS` - How much agent audio (ms) may be released ahead of real time by the pacer (default: 200); bounds how much audio can still play out after a barge-in `clear`
+- `AGENT_SHARED_SECRET` - Shared secret gating the /agent WS upgrade; when set the caller (the bridge) must send a matching `X-Agent-Token`. Unset = unauthenticated upgrade (keep the proxy bridge-only)
+- `AGENT_ALLOWED_HOSTS` - Comma-separated allowlist of customer endpoint hosts (exact or `.suffix`). Empty = allow any public host (private ranges blocked)
+- `AGENT_ALLOW_PRIVATE_ENDPOINTS` - Dev/same-host opt-in that skips the private/internal-address SSRF denylist so the agent endpoint may be on localhost or an internal IP (default: false). Removes SSRF protection — never enable where untrusted callers can reach `/agent`
+- `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of fetching the dial config from the provisioning API (default: false)
+- `AGENT_PROVISIONING_URL` / `AGENT_PROVISIONING_TOKEN` / `AGENT_PROVISIONING_HOST` - Base URL of the provisioning API's internal routes (prosody's `/voice-agent`, or the JaaS gateway), its bearer, and an optional Host header. The gateway fetches each agent's dial config from `GET dial` by `conference` + `agentId` and reports the media leg to `POST status` (`active` on socket open, `failed` on dial failure, `ended` on the agent's `end`). Unset = only the dev `?endpoint=` path can dial, and agents never advance past jicofo's `connecting`
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
