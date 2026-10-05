@@ -2468,6 +2468,19 @@ describe('XAIBackend', () => {
 					expect(finalTexts()).toHaveLength(2);
 				});
 
+				it('is cut into three or more pieces when it is long enough, each by its own best rule', () => {
+					const words = timed([
+						...run(1, 22, {}, { text: 'w22.', gapAfter: 400 }), // pause + sentence end
+						...run(23, 30, {}, { gapAfter: 350 }), // pause only (w52)
+						...run(53, 28, {}, { text: 'w80.' }), // 28 left: under the ceiling, closes the list
+					]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([22, 30, 28]);
+					expect(finalTexts()[0].endsWith('w22.')).toBe(true);
+					expect(finalTexts()[1].endsWith('w52')).toBe(true);
+					expect(flags.every((f) => f[1] === true)).toBe(true);
+				});
+
 				it('is still cut into pieces when it arrives after the time cap has passed', () => {
 					partial('alpha beta.', true, false);
 					vi.setSystemTime(16000);
