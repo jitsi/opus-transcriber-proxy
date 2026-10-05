@@ -103,6 +103,11 @@ const XAI_RETRY_AFTER_MAX_MS = XAI_CONNECT_BACKOFF_MAX_MS;
 let connectCooldownUntil = 0;
 
 /** Clears the process-wide connect cooldown. Test hook only. */
+/** Test hook: let the budget-order warning fire again. */
+export function resetXAIBudgetWarning(): void {
+	warnedBudgetOrder = false;
+}
+
 export function resetXAIConnectCooldown(): void {
 	connectCooldownUntil = 0;
 }
@@ -350,6 +355,18 @@ function heldSegment(text: string, words: XAIWord[] | undefined): HeldSegment {
 	return { text, words: entries, wordCount: textAlignWords(text).length };
 }
 
+// Said once per process: the budgets are deployment-wide, so saying it per connection would be noise.
+let warnedBudgetOrder = false;
+
+/** Warn, once, when the soft budget cannot fire because the hard ceiling is below it. */
+function checkBudgetOrder(softMaxWords: number, hardMaxWords: number): void {
+	if (warnedBudgetOrder || hardMaxWords <= 0 || softMaxWords <= hardMaxWords) return;
+	warnedBudgetOrder = true;
+	logger.warn(
+		`XAI_TURN_SOFT_MAX_WORDS (${softMaxWords}) is above XAI_TURN_HARD_MAX_WORDS (${hardMaxWords}); the held segments will only ever be released at the hard ceiling or the time cap`,
+	);
+}
+
 // An inter-word gap at least this long counts as a pause a long segment can be cut at. Normal
 // speech has 100-200 ms between words; a clause boundary is typically 300 ms or more.
 const SPLIT_MIN_PAUSE_MS = 250;
@@ -375,6 +392,10 @@ function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWor
 	if (hardMaxWords <= 0) return [segment];
 	const minLen = softMaxWords > 0 ? Math.min(softMaxWords, hardMaxWords) : 1;
 	if (segment.words) {
+		// Measured in `words` entries here, since that is where the cuts can go, while the budget in
+		// commitSegment counts UAX #29 words of the text. The two agree for a language written with
+		// spaces; for one written without (where an entry may hold several words, or one word
+		// several entries) a piece can land a few words either side of the budget, which is fine.
 		const words = segment.words;
 		if (words.length <= hardMaxWords) return [segment];
 		const pieces: HeldSegment[] = [];
@@ -417,6 +438,8 @@ function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWor
 		alignWords = textAlignWords(text);
 	}
 	if (pieces.length === 0) return [segment];
+	// What is left after the last cut goes out whole even when it is still over the ceiling: with
+	// no timestamps there is nowhere better to cut it, and a long block beats a block cut mid-phrase.
 	pieces.push(heldSegment(text, undefined));
 	return pieces;
 }
@@ -1328,6 +1351,7 @@ export class XAIBackend implements TranscriptionBackend {
 		const lang = language ?? this.lastLanguage;
 		const softMax = config.xai.turnSoftMaxWords;
 		const hardMax = config.xai.turnHardMaxWords;
+		checkBudgetOrder(softMax, hardMax);
 
 		// Every is_final is its own segment (the live capture, and every staging turn read on
 		// 2026-09-23), so each is held as it comes. A segment that starts with the previous one's
@@ -1340,11 +1364,14 @@ export class XAIBackend implements TranscriptionBackend {
 		// order is kept, and a block never spans the cut.
 		const pieces = splitLongSegment(segment, softMax, hardMax);
 		if (pieces.length > 1) {
+			logger.debug(
+				`xAI committed a ${segment.wordCount}-word segment for ${this.tag}; cutting it into ${pieces.length} (${pieces.map((p) => p.wordCount).join('+')} words)`,
+			);
 			this.flushHeldSegments(lang, `holds segments before a ${segment.wordCount}-word one`);
-			for (const piece of pieces) {
+			pieces.forEach((piece, i) => {
 				this.pendingSegments.push(piece);
-				this.flushHeldSegments(lang, `split a ${segment.wordCount}-word segment into ${pieces.length}`);
-			}
+				this.flushHeldSegments(lang, `is piece ${i + 1}/${pieces.length} of a cut segment`);
+			});
 			return true;
 		}
 

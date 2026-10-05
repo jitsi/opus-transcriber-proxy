@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { XAIBackend, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
+import { XAIBackend, resetXAIBudgetWarning, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
 import type { MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -2326,6 +2326,16 @@ describe('XAIBackend', () => {
 				expect(countWords(finalTexts()[1])).toBe(12);
 			});
 
+			it('warns once when the soft budget is above the hard ceiling, and still releases at the ceiling', () => {
+				resetXAIBudgetWarning();
+				(config.xai as any).turnSoftMaxWords = 40;
+				(config.xai as any).turnHardMaxWords = 20;
+				for (let i = 0; i < 3; i++) partial(seg(1 + i * 7, 7), true, false); // 14 held, then a third would pass 20
+				expect(finalResults).toHaveLength(1);
+				expect(countWords(finalTexts()[0])).toBe(14); // released before the segment that would pass the ceiling
+				expect(warnLogs().filter((m) => m.includes('XAI_TURN_SOFT_MAX_WORDS'))).toHaveLength(1);
+			});
+
 			it('leaves only the time cap when both budgets are 0', () => {
 				(config.xai as any).turnSoftMaxWords = 0;
 				(config.xai as any).turnHardMaxWords = 0;
@@ -2407,6 +2417,13 @@ describe('XAIBackend', () => {
 					} finally {
 						(config.xai as any).diarize = false;
 					}
+				});
+
+				it('ignores gaps where either word lacks a timestamp, cutting at the longest pause that has both', () => {
+					const words: any[] = timed([...run(1, 24, {}, { gapAfter: 300 }), ...run(25, 4, {}, { gapAfter: 900 }), ...run(29, 12, {}, { text: 'w40.' })]);
+					delete words[28].start; // the 900 ms pause before w29 cannot be measured
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([24, 16]);
 				});
 
 				it('is cut only at a sentence end when the words carry no timestamps, and left whole when they have none', () => {
