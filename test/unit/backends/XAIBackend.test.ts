@@ -2377,6 +2377,31 @@ describe('XAIBackend', () => {
 				expect(warnLogs()).toEqual([]);
 			});
 
+			it('threads the speaker through the pieces of a diarized turn end that follows an early final', () => {
+				(config.xai as any).diarize = true;
+				try {
+					const label = (text: string, speaker: number) => text.split(' ').map((t) => ({ text: t, speaker }));
+					const first = seg(1, 20);
+					partial(first, true, false, label(first, 0)); // released by the soft budget under speaker 0
+					expect(finalResults.map((m) => m.speaker)).toEqual([0]);
+					// The speech_final carries 40 more words: 22 unlabelled (so they take the prior speaker, 0),
+					// then 18 labelled speaker 1, with a sentence end at the boundary.
+					const restA = seg(21, 22);
+					const restB = seg(43, 18);
+					const words = [...label(first, 0), ...restA.split(' ').map((t) => ({ text: t })), ...label(restB, 1)];
+					partial(`${first} ${restA} ${restB}`, true, true, words);
+					expect(finalResults.map((m) => [countWords(m.transcript[0].text), m.speaker])).toEqual([
+						[20, 0],
+						[22, 0],
+						[18, 1],
+					]);
+					expect(flags.map((f) => f[1])).toEqual([true, true, false]);
+					expect(warnLogs()).toEqual([]);
+				} finally {
+					(config.xai as any).diarize = false;
+				}
+			});
+
 			it('still flushes held segments a speech_final does not carry after a budget release', () => {
 				partial(seg(1, 20), true, false); // released by the soft budget
 				partial(seg(21, 8), true, false); // held

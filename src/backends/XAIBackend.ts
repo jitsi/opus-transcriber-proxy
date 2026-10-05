@@ -1593,7 +1593,9 @@ export class XAIBackend implements TranscriptionBackend {
 	 * Emit a final (the rest of a turn at its end) shaped like the early finals: cut into
 	 * caption-sized pieces by splitLongSegment when it is over the hard ceiling, each piece a final
 	 * of its own, all but the last `midUtterance`. A diarized piece continues the speaker the piece
-	 * before it ended under, as the rest continues the speaker it was emitted under.
+	 * before it ended under, as the rest continues the speaker it was emitted under. Emits only:
+	 * the caller records what went out onto `emitted` as one whole, which is what the next
+	 * speech_final is aligned against, so nothing here may record or re-order.
 	 */
 	private emitShaped(text: string, words: XAIWord[] | undefined, language: string | undefined, priorSpeaker?: number): void {
 		const pieces = splitLongSegment(heldSegment(text, words), {
