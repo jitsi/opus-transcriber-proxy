@@ -349,6 +349,8 @@ interface HeldSegment {
 	words?: XAIWord[];
 	/** UAX #29 word count of `text` (what the word budget counts). */
 	wordCount: number;
+	/** For a piece of a cut segment: the rule that placed the cut ending it (the last piece has none). */
+	cutBy?: 'pause+sentence' | 'pause' | 'sentence' | 'ceiling';
 }
 
 function heldSegment(text: string, words: XAIWord[] | undefined): HeldSegment {
@@ -418,7 +420,9 @@ function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWor
 				if (sentence && pause > bestAtSentencePause) [bestAtSentence, bestAtSentencePause] = [k, pause];
 			}
 			const cut = bestAtSentence ?? best ?? lastSentenceEnd ?? start + hardMaxWords;
-			pieces.push(pieceOf(words.slice(start, cut)));
+			const cutBy =
+				bestAtSentence !== undefined ? 'pause+sentence' : best !== undefined ? 'pause' : lastSentenceEnd !== undefined ? 'sentence' : 'ceiling';
+			pieces.push({ ...pieceOf(words.slice(start, cut)), cutBy });
 			start = cut;
 		}
 		pieces.push(pieceOf(words.slice(start)));
@@ -432,11 +436,13 @@ function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWor
 	while (alignWords.length > hardMaxWords) {
 		let cut: AlignWord | undefined;
 		for (let k = minLen; k <= hardMaxWords && k < alignWords.length; k++) {
+			// `at` is where a word starts in `text`, so this slice is word k-1 plus whatever follows it
+			// up to word k: the place a sentence terminator would be.
 			const prev = alignWords[k - 1];
 			if (endsSentence(text.slice(prev.at, alignWords[k].at))) cut = alignWords[k];
 		}
 		if (!cut) break; // no sentence end in range: nothing to cut at without timestamps
-		pieces.push(heldSegment(text.slice(0, cut.at).trimEnd(), undefined));
+		pieces.push({ ...heldSegment(text.slice(0, cut.at).trimEnd(), undefined), cutBy: 'sentence' });
 		text = text.slice(cut.at);
 		alignWords = textAlignWords(text);
 	}
@@ -1381,7 +1387,9 @@ export class XAIBackend implements TranscriptionBackend {
 		const pieces = splitLongSegment(segment, softMax, hardMax);
 		if (pieces.length > 1) {
 			logger.debug(
-				`xAI committed a ${segment.wordCount}-word segment for ${this.tag}; cutting it into ${pieces.length} (${pieces.map((p) => p.wordCount).join('+')} words)`,
+				`xAI committed a ${segment.wordCount}-word segment for ${this.tag}; cutting it into ${pieces.length} (${pieces
+					.map((p) => `${p.wordCount}${p.cutBy ? ` by ${p.cutBy}` : ''}`)
+					.join(', ')})`,
 			);
 			this.flushHeldSegments(lang, `holds segments before a ${segment.wordCount}-word one`);
 			pieces.forEach((piece, i) => {
