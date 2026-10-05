@@ -213,7 +213,7 @@ interface XAIWord {
 	punctuated_word?: string;
 	speaker?: number;
 	confidence?: number;
-	/** Word timing in seconds from stream start (on interims and finals since 2026-10-05). */
+	/** Word timing in seconds from stream start, on interims and finals alike. */
 	start?: number;
 	end?: number;
 	speaker_confidence?: number;

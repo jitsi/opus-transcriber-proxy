@@ -2429,9 +2429,9 @@ describe('XAIBackend', () => {
 			});
 		});
 
-		describe('replaying a diarized two-speaker stream (fixtures captured 2026-10-05)', () => {
-			// Two TTS voices on one stream, xAI diarize=true, after xAI fixed its is_final labels:
-			// every is_final word carries speaker/start/end and the labels agree with the speech_final's.
+		describe('replaying a diarized two-speaker stream', () => {
+			// Two TTS voices on one stream, xAI diarize=true: every is_final word carries
+			// speaker/start/end and the labels agree with the speech_final's.
 			const norm = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 			const labelled = (words: any[]) =>
 				words.map((w) => [norm(w.text), w.speaker] as [string, number]).filter((p) => p[0]);
