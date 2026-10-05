@@ -41,6 +41,8 @@
  * so it is unit-testable without real timers.
  */
 
+import { endsSentence } from './sentenceEnd';
+
 export interface GranularResult {
 	/** Committed segment texts to emit as FINALS (is_interim=false), in order. */
 	commits: string[];
@@ -58,8 +60,6 @@ export interface GranularSegmenterOptions {
 	/** Frozen words are batched into a segment once it reaches this many words (or a sentence end). */
 	minWords: number;
 }
-
-const SENTENCE_END = /[.?!]$/;
 
 /** Also used by XAIBackend's long-turn cap for the stand-in words of a diarized segment that has none. */
 export function splitWords(s: string): string[] {
@@ -189,7 +189,7 @@ export class XAIGranularSegmenter {
 		let buf: string[] = [];
 		for (const word of this.pending) {
 			buf.push(word);
-			if (buf.length >= this.minWords || SENTENCE_END.test(word)) {
+			if (buf.length >= this.minWords || endsSentence(word)) {
 				out.push(buf.join(' '));
 				this.emittedWordCount += buf.length;
 				buf = [];

@@ -1522,7 +1522,7 @@ describe('XAIBackend', () => {
 			partial('still talking', false, false); // interims only, no is_final
 			vi.advanceTimersByTime(15000);
 			expect(finalResults).toHaveLength(0);
-			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('reached 15000ms with no committed segment'))).toBe(true);
+			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('reached 15000ms with nothing committed'))).toBe(true);
 		});
 
 		it('flushes a held segment when the turn reaches the cap with no further commit', () => {
@@ -2357,6 +2357,40 @@ describe('XAIBackend', () => {
 				expect(warnLogs()).toEqual([]);
 			});
 
+			it('shapes the speech_final rest too: a turn end over the ceiling is cut like an early final', () => {
+				// Nothing committed early; the speech_final carries 40 words with a pause + sentence end at 25.
+				const specs = [...Array.from({ length: 25 }, (_, i) => ({ text: `w${i + 1}${i === 24 ? '.' : ''}`, gapAfter: i === 24 ? 400 : 100 })), ...Array.from({ length: 15 }, (_, i) => ({ text: `w${i + 26}${i === 14 ? '.' : ''}` }))];
+				let t = 0;
+				const words = specs.map((w) => { const start = t; const end = start + 0.2; t = end + (w.gapAfter ?? 100) / 1000; return { text: w.text, start, end }; });
+				partial('w1 w2', false, false);
+				partial(words.map((w) => w.text).join(' '), true, true);
+				expect(finalTexts().map(countWords)).toEqual([25, 15]);
+				expect(flags.map((f) => f[1])).toEqual([true, false]); // only the last piece ends the utterance
+			});
+
+			it('shapes the rest after an early final when the speech_final carries more than the ceiling beyond it', () => {
+				partial(seg(1, 20), true, false); // 20 words ending a sentence: released by the soft budget
+				expect(finalResults).toHaveLength(1);
+				const rest = `${seg(21, 22)} ${seg(43, 18)}`; // 40 more words with a sentence end at 22
+				partial(`${seg(1, 20)} ${rest}`, true, true);
+				expect(finalTexts().map(countWords)).toEqual([20, 22, 18]);
+				expect(warnLogs()).toEqual([]);
+			});
+
+			it('still flushes held segments a speech_final does not carry after a budget release', () => {
+				partial(seg(1, 20), true, false); // released by the soft budget
+				partial(seg(21, 8), true, false); // held
+				expect(finalResults).toHaveLength(1);
+				partial(seg(29, 4), true, true); // xAI reset: a speech_final carrying none of the above
+				expect(finalTexts().map(countWords)).toEqual([20, 8, 4]);
+			});
+
+			it('does not log "nothing committed" when the budget released everything before the cap timer fired', () => {
+				partial(seg(1, 20), true, false); // released at 20 words on a sentence end
+				vi.advanceTimersByTime(15000); // the cap timer finds nothing held
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('nothing committed'))).toBe(false);
+			});
+
 			describe('a single segment longer than the hard ceiling', () => {
 				// xAI word entries with timestamps: `gapAfter` ms of silence before the next word.
 				type Spec = { text: string; speaker?: number; gapAfter?: number };
@@ -2450,8 +2484,10 @@ describe('XAIBackend', () => {
 				});
 
 				it('rebuilds a piece of a language written without spaces with no spaces', () => {
-					// Forty distinct two-character Han "words" (no digits: a digit would end a word in a spaced script).
-					const cjk = Array.from({ length: 40 }, (_, i) => String.fromCharCode(0x4e00 + i, 0x5200 + i));
+					// Forty distinct single Han characters as entries (no digits: a digit would end a word in a
+					// spaced script; and one character per entry, since how ICU groups an unspaced run of
+					// arbitrary characters into words is not something a test should depend on).
+					const cjk = Array.from({ length: 40 }, (_, i) => String.fromCharCode(0x4e00 + i));
 					cjk[24] += '。';
 					const words = timed(cjk.map((text, i) => ({ text, gapAfter: i === 24 ? 400 : 100 })));
 					partial(cjk.join(''), true, false, words);
@@ -2479,6 +2515,58 @@ describe('XAIBackend', () => {
 					expect(finalTexts()[0].endsWith('w22.')).toBe(true);
 					expect(finalTexts()[1].endsWith('w52')).toBe(true);
 					expect(flags.every((f) => f[1] === true)).toBe(true);
+				});
+
+				it('goes out whole when the words carry no timestamps and no sentence end is in range', () => {
+					const words = run(1, 40, {}, { text: 'w40.' }).map((w) => ({ text: w.text })); // no start/end
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([40]);
+				});
+
+				it('decides on UAX #29 words, not entries: compound entries can put a 33-entry segment over the ceiling', () => {
+					// 33 entries, 7 of them hyphenated compounds counting as two words each: 40 words.
+					const specs = run(1, 33, {}, { text: 'w33.' });
+					for (let i = 0; i < 7; i++) specs[i * 4 + 1] = { ...specs[i * 4 + 1], text: `${specs[i * 4 + 1].text}-x` };
+					specs[19] = { ...specs[19], text: `${specs[19].text}.`, gapAfter: 400 };
+					const words = timed(specs);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts()).toHaveLength(2);
+					expect(finalTexts().map(countWords).map((n) => n <= 35).every(Boolean)).toBe(true);
+				});
+
+				it('cuts the text xAI sent rather than rejoining bare word texts, so punctuation and casing survive', () => {
+					// Entries carry bare lower-case `text` only; xAI's `text` has the casing and punctuation.
+					const words = timed([...run(1, 25, {}, { gapAfter: 400 }), ...run(26, 15)]).map((w) => ({ ...w, text: w.text.toLowerCase() }));
+					const text = words.map((w, i) => (i === 0 ? 'W1' : i === 24 ? 'w25.' : i === 39 ? 'w40.' : w.text)).join(' ');
+					partial(text, true, false, words);
+					expect(finalTexts()[0]).toBe(text.split(' ').slice(0, 25).join(' ')); // "W1 … w25."
+					expect(finalTexts()[1]).toBe(text.split(' ').slice(25).join(' '));
+				});
+
+				it('keeps an opener that starts the next sentence with the next piece (text-only, Spanish)', () => {
+					const head = `${seg(1, 21, false)} mañana?`; // 22 words ending a question
+					const tail = `¿${seg(23, 18, false).replace('w23', 'Sí')}.`; // 18 words, opened by ¿
+					partial(`${head} ${tail}`, true, false);
+					expect(finalTexts()).toEqual([head, tail]);
+				});
+
+				it('gives leading unlabelled words the prior speaker, not the segment\'s first label, when one exists', () => {
+					(config.xai as any).diarize = true;
+					try {
+						partial('alpha beta gamma.', true, false, [{ text: 'alpha', speaker: 0 }, { text: 'beta', speaker: 0 }, { text: 'gamma.', speaker: 0 }]);
+						vi.setSystemTime(16000);
+						partial('delta.', true, false, [{ text: 'delta.', speaker: 0 }]); // past the cap: both flushed under speaker 0
+						finalResults.length = 0;
+						const words = timed([...run(1, 24, {}, { text: 'w24.', gapAfter: 400 }), ...run(25, 16, { speaker: 1 }, { text: 'w40.' })]);
+						partial(words.map((w) => w.text).join(' '), true, false, words);
+						// Unsplit, emitDiarized would give the unlabelled leading words the prior speaker (0).
+						expect(finalResults.map((m) => [countWords(m.transcript[0].text), m.speaker])).toEqual([
+							[24, 0],
+							[16, 1],
+						]);
+					} finally {
+						(config.xai as any).diarize = false;
+					}
 				});
 
 				it('is still cut into pieces when it arrives after the time cap has passed', () => {

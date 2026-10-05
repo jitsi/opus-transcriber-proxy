@@ -15,6 +15,7 @@ import type { TranscriptionBackend, BackendConfig, AudioFormat } from './Transcr
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
 import { getInstruments } from '../telemetry/instruments';
+import { endsSentence } from './sentenceEnd';
 import { XAIGranularSegmenter, splitWords, type GranularResult } from './XAIGranularSegmenter';
 import { unrefTimer } from '../translate/timers';
 
@@ -332,17 +333,6 @@ function joinText(parts: string[]): string {
 	return out;
 }
 
-// A sentence terminator (Unicode Sentence_Terminal: ., ?, !, 。, ।, ۔, ։, ።, ။, ។ …) possibly followed
-// by closing quotes/brackets, at the end of a piece of text. Greek's `;` question mark is not in
-// the property and Thai/Lao have no terminator, so the budget rules that use this only ever delay a
-// flush up to the hard ceiling for them; they never force a bad cut. An abbreviation ("Dr.", "etc.")
-// passes as a sentence end, which can move a release by a few words; harmless.
-const SENTENCE_END_RE = /\p{Sentence_Terminal}[\p{Pe}\p{Pf}"'”’)\]]*$/u;
-
-function endsSentence(text: string): boolean {
-	return SENTENCE_END_RE.test(text.trimEnd());
-}
-
 /** A segment xAI committed (is_final), held by the long-turn cap until it is flushed. */
 interface HeldSegment {
 	text: string;
@@ -382,75 +372,24 @@ function pauseBefore(words: XAIWord[], k: number): number | undefined {
 }
 
 /**
- * Cut a committed segment longer than the hard word ceiling into pieces no longer than it. Each
- * piece is between the soft budget and the ceiling long (a shorter remainder closes the list), so
- * every piece is a caption-sized block and the cut lands, in order of preference, at a pause of
- * at least SPLIT_MIN_PAUSE_MS that also ends a sentence, at the longest such pause, at the last
- * sentence end in range, or at the ceiling. A segment with `words` is cut between entries, so each
- * piece keeps its own words (speaker labels and timestamps) and its text is rebuilt from them; a
- * segment with no `words` has no timestamps, so it is cut only at a sentence end, and left whole
- * when it has none in range. Returns [segment] when there is nothing to do.
+ * Cut `text` right before its UAX #29 word `start` (indices into `textWords`, its words). The head
+ * keeps what is attached to its last word ("20%.", "fell—", a closing quote); the rest drops the
+ * whitespace, sentence punctuation and closers between the two words and keeps what opens the rest
+ * ("¿", "(", a quote, "$100") — see ATTACHED_TO_WORD_RE / CLOSING_PUNCTUATION_RE. Used by the
+ * speech_final reconciliation to emit the rest of a turn, and by splitLongSegment to cut a piece,
+ * so the two cut text the same way.
  */
-function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWords: number): HeldSegment[] {
-	if (hardMaxWords <= 0) return [segment];
-	// The shortest piece worth making: the soft budget, or half the ceiling when the soft budget is
-	// off (it means "no early release on a sentence end", not "a one-word caption is fine").
-	const minLen = Math.min(softMaxWords > 0 ? softMaxWords : Math.ceil(hardMaxWords / 2), hardMaxWords);
-	if (segment.words) {
-		if (segment.words.length <= hardMaxWords) return [segment];
-		const words = seedLeadingSpeaker(segment.words);
-		// Measured in `words` entries here, since that is where the cuts can go, while the budget in
-		// commitSegment counts UAX #29 words of the text. The two agree for a language written with
-		// spaces; for one written without (where an entry may hold several words, or one word
-		// several entries) a piece can land a few words either side of the budget, which is fine.
-		const pieces: HeldSegment[] = [];
-		let start = 0;
-		while (words.length - start > hardMaxWords) {
-			let best: number | undefined;
-			let bestPause = -1;
-			let bestAtSentence: number | undefined;
-			let bestAtSentencePause = -1;
-			let lastSentenceEnd: number | undefined;
-			for (let k = start + minLen; k <= start + hardMaxWords && k < words.length; k++) {
-				const sentence = endsSentence(wordText(words[k - 1]));
-				if (sentence) lastSentenceEnd = k;
-				const pause = pauseBefore(words, k);
-				if (pause === undefined || pause < SPLIT_MIN_PAUSE_MS) continue;
-				if (pause > bestPause) [best, bestPause] = [k, pause];
-				if (sentence && pause > bestAtSentencePause) [bestAtSentence, bestAtSentencePause] = [k, pause];
-			}
-			const cut = bestAtSentence ?? best ?? lastSentenceEnd ?? start + hardMaxWords;
-			const cutBy =
-				bestAtSentence !== undefined ? 'pause+sentence' : best !== undefined ? 'pause' : lastSentenceEnd !== undefined ? 'sentence' : 'ceiling';
-			pieces.push({ ...pieceOf(words.slice(start, cut)), cutBy });
-			start = cut;
-		}
-		pieces.push(pieceOf(words.slice(start)));
-		return pieces;
-	}
-	if (segment.wordCount <= hardMaxWords) return [segment];
-	// Text only: cut right before the first word that follows a sentence end, as late as the ceiling allows.
-	const pieces: HeldSegment[] = [];
-	let text = segment.text;
-	let alignWords = textAlignWords(text);
-	while (alignWords.length > hardMaxWords) {
-		let cut: AlignWord | undefined;
-		for (let k = minLen; k <= hardMaxWords && k < alignWords.length; k++) {
-			// `at` is where a word starts in `text`, so this slice is word k-1 plus whatever follows it
-			// up to word k: the place a sentence terminator would be.
-			const prev = alignWords[k - 1];
-			if (endsSentence(text.slice(prev.at, alignWords[k].at))) cut = alignWords[k];
-		}
-		if (!cut) break; // no sentence end in range: nothing to cut at without timestamps
-		pieces.push({ ...heldSegment(text.slice(0, cut.at).trimEnd(), undefined), cutBy: 'sentence' });
-		text = text.slice(cut.at);
-		alignWords = textAlignWords(text);
-	}
-	if (pieces.length === 0) return [segment];
-	// What is left after the last cut goes out whole even when it is still over the ceiling: with
-	// no timestamps there is nowhere better to cut it, and a long block beats a block cut mid-phrase.
-	pieces.push(heldSegment(text, undefined));
-	return pieces;
+function cutTextBeforeWord(text: string, textWords: AlignWord[], start: number): { head: string; rest: string } {
+	if (start <= 0) return { head: '', rest: text };
+	if (start >= textWords.length) return { head: text, rest: '' };
+	const prev = textWords[start - 1];
+	const cutAt = prev.at + prev.len;
+	const gapEnd = textWords[start].at;
+	// The attached run is matched on the text from the cut, not on the gap alone: whether an
+	// opener in the gap opens something is decided by the word after the gap.
+	const attached = Math.min(text.slice(cutAt).match(ATTACHED_TO_WORD_RE)![0].length, gapEnd - cutAt);
+	const between = text.slice(cutAt + attached, gapEnd).replace(CLOSING_PUNCTUATION_RE, '');
+	return { head: text.slice(0, cutAt + attached), rest: between + text.slice(gapEnd) };
 }
 
 /**
@@ -466,8 +405,112 @@ function seedLeadingSpeaker(words: XAIWord[]): XAIWord[] {
 	return words.map((w, i) => (i < first ? { ...w, speaker } : w));
 }
 
-function pieceOf(words: XAIWord[]): HeldSegment {
-	return heldSegment(joinText(words.map(wordText)), words);
+interface SplitOptions {
+	softMaxWords: number;
+	hardMaxWords: number;
+	/**
+	 * Give a segment's leading unlabelled words its first speaker label before cutting, so the first
+	 * piece goes out under the speaker the whole segment would have. Only when there is no prior
+	 * speaker: with one, emitDiarized gives leading unlabelled words the prior speaker, split or not.
+	 */
+	seedSpeaker?: boolean;
+}
+
+/** Where a long segment may be cut: before UAX #29 word `wordIdx` (entry `entryIdx` on the words path). */
+interface CutCandidate {
+	wordIdx: number;
+	entryIdx?: number;
+	pauseMs?: number;
+	endsSentence: boolean;
+}
+
+/**
+ * Cut a transcript longer than the hard word ceiling into pieces no longer than it, every piece
+ * at least the soft budget long (half the ceiling when the soft budget is off) except the
+ * remainder that closes the list. Counts are UAX #29 words, as the word budget's are. The cut
+ * lands, in order of preference, at a pause of at least SPLIT_MIN_PAUSE_MS that also ends a
+ * sentence, at the longest such pause, at the last sentence end in range, or — only when the
+ * words carry timestamps, so a pause could have been found — at the ceiling. With no timestamps
+ * and no sentence end in range what is left goes out whole, over the ceiling: a long block beats
+ * one cut mid-phrase. A transcript with `words` is cut only between entries, so each piece keeps
+ * its own words (speaker labels, timestamps); its text is cut from xAI's own `text` when the
+ * two agree on the words, else rebuilt from the entries. Returns [segment] when there is nothing
+ * to do.
+ */
+function splitLongSegment(segment: HeldSegment, opts: SplitOptions): HeldSegment[] {
+	const { softMaxWords, hardMaxWords } = opts;
+	if (!(hardMaxWords > 0) || segment.wordCount <= hardMaxWords) return [segment];
+	const minLen = Math.min(softMaxWords > 0 ? softMaxWords : Math.ceil(hardMaxWords / 2), hardMaxWords);
+	const pieces: HeldSegment[] = [];
+	let restText = segment.text;
+	let restEntries = segment.words && opts.seedSpeaker ? seedLeadingSpeaker(segment.words) : segment.words;
+	for (;;) {
+		const textWords = textAlignWords(restText);
+		const entryWords = restEntries ? entryAlignWords(restEntries) : undefined;
+		// The entries are authoritative for the count when present; the text can be cut only when
+		// it renders to the same words (xAI re-punctuates, but does not usually re-tokenise).
+		const textMatches = !entryWords || entryWords.length === textWords.length;
+		const total = entryWords ? entryWords.length : textWords.length;
+		if (total <= hardMaxWords) break;
+
+		const candidates: CutCandidate[] = [];
+		if (restEntries && entryWords) {
+			// wordsBefore[b]: how many words the entries before boundary b render to. Boundaries that sit
+			// before the same word (an entry rendering to no word, e.g. standalone punctuation) collapse
+			// into the last of them, so the punctuation stays with the piece before it.
+			const wordsBefore = new Array<number>(restEntries.length + 1).fill(0);
+			for (const w of entryWords) wordsBefore[w.at + 1]++;
+			for (let b = 1; b <= restEntries.length; b++) wordsBefore[b] += wordsBefore[b - 1];
+			for (let b = 1; b < restEntries.length; b++) {
+				const wordIdx = wordsBefore[b];
+				if (wordIdx < minLen || wordIdx > hardMaxWords || wordIdx >= total) continue;
+				if (wordsBefore[b + 1] === wordIdx) continue;
+				const head = textMatches ? cutTextBeforeWord(restText, textWords, wordIdx).head : wordText(restEntries[b - 1]);
+				candidates.push({ wordIdx, entryIdx: b, pauseMs: pauseBefore(restEntries, b), endsSentence: endsSentence(head) });
+			}
+		} else {
+			for (let wordIdx = minLen; wordIdx <= hardMaxWords && wordIdx < total; wordIdx++) {
+				candidates.push({ wordIdx, endsSentence: endsSentence(cutTextBeforeWord(restText, textWords, wordIdx).head) });
+			}
+		}
+
+		let best: CutCandidate | undefined;
+		let bestAtSentence: CutCandidate | undefined;
+		let lastSentenceEnd: CutCandidate | undefined;
+		let anyTimed = false;
+		for (const c of candidates) {
+			if (c.endsSentence) lastSentenceEnd = c;
+			if (c.pauseMs === undefined) continue;
+			anyTimed = true;
+			if (c.pauseMs < SPLIT_MIN_PAUSE_MS) continue;
+			if (!best || c.pauseMs > best.pauseMs!) best = c;
+			if (c.endsSentence && (!bestAtSentence || c.pauseMs > bestAtSentence.pauseMs!)) bestAtSentence = c;
+		}
+		const ceiling = anyTimed ? candidates[candidates.length - 1] : undefined;
+		const cut = bestAtSentence ?? best ?? lastSentenceEnd ?? ceiling;
+		if (!cut) break; // nothing to cut at: what is left goes out whole
+		const cutBy = bestAtSentence ? 'pause+sentence' : best ? 'pause' : lastSentenceEnd ? 'sentence' : 'ceiling';
+
+		if (restEntries && cut.entryIdx !== undefined) {
+			const pieceWords = restEntries.slice(0, cut.entryIdx);
+			restEntries = restEntries.slice(cut.entryIdx);
+			let pieceText: string;
+			if (textMatches) {
+				({ head: pieceText, rest: restText } = cutTextBeforeWord(restText, textWords, cut.wordIdx));
+			} else {
+				pieceText = joinText(pieceWords.map(wordText));
+				restText = joinText(restEntries.map(wordText));
+			}
+			pieces.push({ text: pieceText, words: pieceWords, wordCount: cut.wordIdx, cutBy });
+		} else {
+			const { head, rest } = cutTextBeforeWord(restText, textWords, cut.wordIdx);
+			pieces.push({ text: head, wordCount: cut.wordIdx, cutBy });
+			restText = rest;
+		}
+	}
+	if (pieces.length === 0) return [segment];
+	pieces.push(heldSegment(restText, restEntries));
+	return pieces;
 }
 
 /**
@@ -1350,10 +1393,13 @@ export class XAIBackend implements TranscriptionBackend {
 			this.turnTimer = undefined;
 			if (this.status !== 'connected') return;
 			if (this.pendingSegments.length === 0) {
-				// Nothing to emit: xAI committed no segment (is_final) in a whole cap's worth of
-				// turn. Said out loud so a run with no finals can be told apart from one where the
-				// cap never had anything to flush.
-				logger.info(`xAI turn for ${this.tag} reached ${maxTurnMs}ms with no committed segment and no speech_final`);
+				// Nothing to emit. When nothing went out early either, xAI committed no segment
+				// (is_final) in a whole cap's worth of turn: said out loud so a run with no finals can
+				// be told apart from one where the cap never had anything to flush. (The word budget
+				// may have released everything already; that is not worth a line.)
+				if (this.emitted.count === 0) {
+					logger.info(`xAI turn for ${this.tag} reached ${maxTurnMs}ms with nothing committed and no speech_final`);
+				}
 				return;
 			}
 			this.flushHeldSegments(this.lastLanguage, `reached ${maxTurnMs}ms without speech_final`);
@@ -1384,7 +1430,11 @@ export class XAIBackend implements TranscriptionBackend {
 		// A single segment past the hard ceiling (a speaker xAI heard no pause in) is cut into
 		// caption-sized pieces, each its own final: what was held before it goes out first so the
 		// order is kept, and a block never spans the cut.
-		const pieces = splitLongSegment(segment, softMax, hardMax);
+		const pieces = splitLongSegment(segment, {
+			softMaxWords: softMax,
+			hardMaxWords: hardMax,
+			seedSpeaker: config.xai.diarize && this.emitted.speaker === undefined,
+		});
 		if (pieces.length > 1) {
 			logger.debug(
 				`xAI committed a ${segment.wordCount}-word segment for ${this.tag}; cutting it into ${pieces.length} (${pieces
@@ -1506,25 +1556,29 @@ export class XAIBackend implements TranscriptionBackend {
 	 * from a re-rendering, and a repeat of it is worse than the loss the old behaviour had.)
 	 */
 	private flushHeldSegmentsNotIn(text: string, words: XAIWord[] | undefined, language: string | undefined): void {
-		// Only when nothing of *this* turn went out early; a record carried from an ended turn does
-		// not count, and is put back after the flush so the speech_final is still aligned against it.
-		if (this.pendingSegments.length === 0 || (this.emitted.count > 0 && !carriedOnly(this.emitted))) return;
+		if (this.pendingSegments.length === 0) return;
 		const heldText = joinText(this.pendingSegments.map((s) => s.text));
-		const held = emptyEmittedTurn();
-		recordEmitted(held, textAlignWords(heldText), heldText);
+		const heldWords = textAlignWords(heldText);
 		// Fewer words than an anchor ("OK.") cannot be told from a re-rendering ("Okay,"): repeating
 		// a one-word ack is worse than dropping it, which is what always happened before the cap.
-		if (held.count < TURN_ALIGN_ANCHOR_WORDS) {
+		if (heldWords.length < TURN_ALIGN_ANCHOR_WORDS) {
 			logger.debug(
-				`xAI turn for ${this.tag}: ${held.count} held word(s) cannot be told from a re-rendering; taking the speech_final as the whole turn`,
+				`xAI turn for ${this.tag}: ${heldWords.length} held word(s) cannot be told from a re-rendering; taking the speech_final as the whole turn`,
 			);
 			return;
 		}
+		// The held words are looked for where the turn puts them: after whatever of *this* turn went
+		// out early (the word budget can release some segments and hold the next), so the record they
+		// are aligned with is the emitted one with them appended. A record carried from an ended turn
+		// does not count — the held words would be the start of this speech_final — and is put back
+		// after the flush so the speech_final is still aligned against it.
+		const expected = carriedOnly(this.emitted) ? emptyEmittedTurn() : structuredClone(this.emitted);
+		recordEmitted(expected, heldWords, heldText);
 		const full = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
-		const { match } = alignTurnRest(full.map((w) => w.norm), held);
+		const { match } = alignTurnRest(full.map((w) => w.norm), expected);
 		if (match !== 'tail') return;
 		logger.warn(
-			`xAI speech_final for ${this.tag} (${full.length} words) does not carry the ${held.count} words it committed for the turn; emitting them first`,
+			`xAI speech_final for ${this.tag} (${full.length} words) does not carry the ${heldWords.length} words it committed for the turn; emitting them first`,
 		);
 		// flushHeldSegments records what it emits onto `emitted` (via recordEmitted), which is right
 		// for an early final the speech_final will carry — but this speech_final does not contain
@@ -1536,12 +1590,43 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	/**
+	 * Emit a final (the rest of a turn at its end) shaped like the early finals: cut into
+	 * caption-sized pieces by splitLongSegment when it is over the hard ceiling, each piece a final
+	 * of its own, all but the last `midUtterance`. A diarized piece continues the speaker the piece
+	 * before it ended under, as the rest continues the speaker it was emitted under.
+	 */
+	private emitShaped(text: string, words: XAIWord[] | undefined, language: string | undefined, priorSpeaker?: number): void {
+		const pieces = splitLongSegment(heldSegment(text, words), {
+			softMaxWords: config.xai.turnSoftMaxWords,
+			hardMaxWords: config.xai.turnHardMaxWords,
+			seedSpeaker: config.xai.diarize && priorSpeaker === undefined,
+		});
+		if (pieces.length > 1) {
+			logger.debug(
+				`xAI turn end for ${this.tag} carries ${pieces.reduce((n, p) => n + p.wordCount, 0)} words; cutting it into ${pieces.length} (${pieces
+					.map((p) => `${p.wordCount}${p.cutBy ? ` by ${p.cutBy}` : ''}`)
+					.join(', ')})`,
+			);
+		}
+		let prior = priorSpeaker;
+		pieces.forEach((piece, i) => {
+			const midUtterance = i < pieces.length - 1;
+			if (piece.words && (this.isDiarizedWords(piece.words) || prior !== undefined)) {
+				this.emitDiarized(piece.words, { language, isInterim: false, priorSpeaker: prior, midUtterance });
+				prior = lastSpeaker(piece.words) ?? prior;
+			} else {
+				this.emitText(piece.text, piece.words, language, false, midUtterance);
+			}
+		});
+	}
+
+	/**
 	 * Emit what `emitted` leaves of a whole-turn text, and record it there. The rest is aligned in
 	 * the same units it is cut in: the `words` entries when diarized, the text's words otherwise.
 	 */
 	private emitTurnRest(text: string, words: XAIWord[] | undefined, language: string | undefined, emitted: EmittedTurn): void {
 		if (emitted.count === 0) {
-			this.emitText(text, words, language, false);
+			this.emitShaped(text, words, language);
 			const all = this.isDiarizedWords(words) ? entryAlignWords(words!) : textAlignWords(text);
 			recordEmitted(emitted, all, text, this.isDiarizedWords(words) ? lastSpeaker(words!) : undefined);
 		} else if (this.isDiarizedWords(words)) {
@@ -1558,7 +1643,7 @@ export class XAIBackend implements TranscriptionBackend {
 			}
 			// A rest that starts on an unlabelled word continues the speaker it was emitted under.
 			const priorSpeaker = lastSpeaker(words!.slice(0, restAt)) ?? emitted.speaker;
-			if (rest.length > 0) this.emitDiarized(rest, { language: language ?? this.lastLanguage, isInterim: false, priorSpeaker });
+			if (rest.length > 0) this.emitShaped(joinText(rest.map(wordText)), rest, language ?? this.lastLanguage, priorSpeaker);
 			recordEmitted(emitted, entries.slice(start), text, lastSpeaker(rest));
 		} else {
 			const textWords = textAlignWords(text);
@@ -1571,18 +1656,9 @@ export class XAIBackend implements TranscriptionBackend {
 				// `words` only supplies confidence here, and lines up with the text only when the
 				// counts agree.
 				const restWords = Array.isArray(words) && words.length === textWords.length ? words.slice(start) : undefined;
-				const cutAt = start > 0 ? textWords[start - 1].at + textWords[start - 1].len : 0;
 				// With nothing emitted from this text (start 0) it is the rest in full, opener included.
-				// The attached run is matched on the text from the cut, not on the gap alone: whether an
-				// opener in the gap opens something is decided by the word after the gap.
-				const gapEnd = textWords[start].at;
-				let between = text.slice(0, gapEnd);
-				if (start > 0) {
-					const attached = Math.min(text.slice(cutAt).match(ATTACHED_TO_WORD_RE)![0].length, gapEnd - cutAt);
-					between = text.slice(cutAt + attached, gapEnd).replace(CLOSING_PUNCTUATION_RE, '');
-				}
-				const rest = between + text.slice(gapEnd);
-				this.emitText(rest, restWords, language ?? this.lastLanguage, false);
+				const { rest } = cutTextBeforeWord(text, textWords, start);
+				this.emitShaped(rest, restWords, language ?? this.lastLanguage);
 			}
 			recordEmitted(emitted, textWords.slice(start), text);
 		}

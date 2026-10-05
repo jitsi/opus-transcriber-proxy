@@ -31,6 +31,12 @@ function wordEditDistance(a: string[], b: string[]): number {
 
 describe('XAIGranularSegmenter', () => {
 	describe('stable-prefix freeze', () => {
+		it('closes a batch at a sentence end in any script, not only .?!', () => {
+			const seg = new XAIGranularSegmenter({ stabilityMs: 0, guardWords: 0, minWords: 50 });
+			const r = seg.pushPartial('一 二 三。 四 五', false, false, 0);
+			expect(r.commits).toEqual(['一 二 三。']);
+		});
+
 		it('freezes words once stable for stabilityMs, holding back guardWords', () => {
 			const seg = new XAIGranularSegmenter({ stabilityMs: 600, guardWords: 2, minWords: 3 });
 

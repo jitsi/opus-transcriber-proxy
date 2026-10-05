@@ -72,6 +72,8 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 			maxTurnMs: 15000,
+			turnSoftMaxWords: 20,
+			turnHardMaxWords: 35,
 			idleTurnEndGraceMs: 3000,
 			connectAttempts: 1,
 			connectBackoffMs: 0,
@@ -234,9 +236,20 @@ describe('XAIBackend long-turn cap: property test', () => {
 				const emitted = norm(finals.map((m) => m.transcript[0].text).join(' '));
 				expect(emitted, ctx).toEqual(norm(turn.sendSpeechFinal ? fullText : fullWords.map((w) => w.text).join(' ')));
 
-				if (turn.sendSpeechFinal && turnAgeAtEnd(turn) < 15000) {
-					// Inside the cap the turn is emitted exactly as before: one final per speaker run.
-					if (!diarize) expect(finals, ctx).toHaveLength(1);
+				if (turn.sendSpeechFinal && turnAgeAtEnd(turn) < 15000 && !diarize) {
+					// Inside the cap a turn under the soft word budget is emitted as before: one final. A
+					// longer one may be released early by the budget (segments end sentences here), and a
+					// turn end over the hard ceiling is cut like an early final; either way no block is
+					// longer than the ceiling.
+					const turnWords = norm(fullText).length;
+					if (turnWords < config.xai.turnSoftMaxWords) {
+						expect(finals, ctx).toHaveLength(1);
+					} else {
+						if (turnWords > config.xai.turnHardMaxWords) expect(finals.length, ctx).toBeGreaterThan(1);
+						for (const m of finals) {
+							expect(norm(m.transcript[0].text).length, ctx).toBeLessThanOrEqual(config.xai.turnHardMaxWords);
+						}
+					}
 				}
 
 				if (diarize) {
