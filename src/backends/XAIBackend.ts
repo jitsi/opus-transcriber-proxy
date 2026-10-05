@@ -213,6 +213,10 @@ interface XAIWord {
 	punctuated_word?: string;
 	speaker?: number;
 	confidence?: number;
+	/** Word timing in seconds from stream start (on interims and finals since 2026-10-05). */
+	start?: number;
+	end?: number;
+	speaker_confidence?: number;
 }
 
 /** A word of xAI's `words` array as the text it renders to. */
@@ -321,6 +325,104 @@ function joinText(parts: string[]): string {
 		out = NO_SPACE_CHAR.test(lastCodePoint(out)) && NO_SPACE_CHAR.test(first) ? out + piece : `${out} ${piece}`;
 	}
 	return out;
+}
+
+// A sentence terminator (Unicode Sentence_Terminal: ., ?, !, 。, ।, ۔, ։, ።, ။, ។ …) possibly followed
+// by closing quotes/brackets, at the end of a piece of text. Greek's `;` question mark is not in
+// the property and Thai/Lao have no terminator, so the budget rules that use this only ever delay a
+// flush up to the hard ceiling for them; they never force a bad cut.
+const SENTENCE_END_RE = /\p{Sentence_Terminal}[\p{Pe}\p{Pf}"'”’)\]]*$/u;
+
+function endsSentence(text: string): boolean {
+	return SENTENCE_END_RE.test(text.trimEnd());
+}
+
+/** A segment xAI committed (is_final), held by the long-turn cap until it is flushed. */
+interface HeldSegment {
+	text: string;
+	words?: XAIWord[];
+	/** UAX #29 word count of `text` (what the word budget counts). */
+	wordCount: number;
+}
+
+function heldSegment(text: string, words: XAIWord[] | undefined): HeldSegment {
+	const entries = Array.isArray(words) && words.length > 0 ? words : undefined;
+	return { text, words: entries, wordCount: textAlignWords(text).length };
+}
+
+// An inter-word gap at least this long counts as a pause a long segment can be cut at. Normal
+// speech has 100-200 ms between words; a clause boundary is typically 300 ms or more.
+const SPLIT_MIN_PAUSE_MS = 250;
+
+/** The pause before words[k], in ms, or undefined when either side lacks a timestamp. */
+function pauseBefore(words: XAIWord[], k: number): number | undefined {
+	const prev = words[k - 1]?.end;
+	const next = words[k]?.start;
+	return typeof prev === 'number' && typeof next === 'number' ? (next - prev) * 1000 : undefined;
+}
+
+/**
+ * Cut a committed segment longer than the hard word ceiling into pieces no longer than it. Each
+ * piece is between the soft budget and the ceiling long (a shorter remainder closes the list), so
+ * every piece is a caption-sized block and the cut lands, in order of preference, at a pause of
+ * at least SPLIT_MIN_PAUSE_MS that also ends a sentence, at the longest such pause, at the last
+ * sentence end in range, or at the ceiling. A segment with `words` is cut between entries, so each
+ * piece keeps its own words (speaker labels and timestamps) and its text is rebuilt from them; a
+ * segment with no `words` has no timestamps, so it is cut only at a sentence end, and left whole
+ * when it has none in range. Returns [segment] when there is nothing to do.
+ */
+function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWords: number): HeldSegment[] {
+	if (hardMaxWords <= 0) return [segment];
+	const minLen = softMaxWords > 0 ? Math.min(softMaxWords, hardMaxWords) : 1;
+	if (segment.words) {
+		const words = segment.words;
+		if (words.length <= hardMaxWords) return [segment];
+		const pieces: HeldSegment[] = [];
+		let start = 0;
+		while (words.length - start > hardMaxWords) {
+			let best: number | undefined;
+			let bestPause = -1;
+			let bestAtSentence: number | undefined;
+			let bestAtSentencePause = -1;
+			let lastSentenceEnd: number | undefined;
+			for (let k = start + minLen; k <= start + hardMaxWords && k < words.length; k++) {
+				const sentence = endsSentence(wordText(words[k - 1]));
+				if (sentence) lastSentenceEnd = k;
+				const pause = pauseBefore(words, k);
+				if (pause === undefined || pause < SPLIT_MIN_PAUSE_MS) continue;
+				if (pause > bestPause) [best, bestPause] = [k, pause];
+				if (sentence && pause > bestAtSentencePause) [bestAtSentence, bestAtSentencePause] = [k, pause];
+			}
+			const cut = bestAtSentence ?? best ?? lastSentenceEnd ?? start + hardMaxWords;
+			pieces.push(pieceOf(words.slice(start, cut)));
+			start = cut;
+		}
+		pieces.push(pieceOf(words.slice(start)));
+		return pieces;
+	}
+	if (segment.wordCount <= hardMaxWords) return [segment];
+	// Text only: cut right before the first word that follows a sentence end, as late as the ceiling allows.
+	const pieces: HeldSegment[] = [];
+	let text = segment.text;
+	let alignWords = textAlignWords(text);
+	while (alignWords.length > hardMaxWords) {
+		let cut: AlignWord | undefined;
+		for (let k = minLen; k <= hardMaxWords && k < alignWords.length; k++) {
+			const prev = alignWords[k - 1];
+			if (endsSentence(text.slice(prev.at, alignWords[k].at))) cut = alignWords[k];
+		}
+		if (!cut) break; // no sentence end in range: nothing to cut at without timestamps
+		pieces.push(heldSegment(text.slice(0, cut.at).trimEnd(), undefined));
+		text = text.slice(cut.at);
+		alignWords = textAlignWords(text);
+	}
+	if (pieces.length === 0) return [segment];
+	pieces.push(heldSegment(text, undefined));
+	return pieces;
+}
+
+function pieceOf(words: XAIWord[]): HeldSegment {
+	return heldSegment(joinText(words.map(wordText)), words);
 }
 
 /**
@@ -479,7 +581,7 @@ export class XAIBackend implements TranscriptionBackend {
 	// The cap the turn opened under; the timer and the commit-time age check must agree on it.
 	private turnMaxMs = 0;
 	private turnTimer?: ReturnType<typeof setTimeout>;
-	private pendingSegments: Array<{ text: string; words?: XAIWord[] }> = [];
+	private pendingSegments: HeldSegment[] = [];
 	private emitted: EmittedTurn = emptyEmittedTurn();
 	// The whole of the last turn that ended, carried: a transcript.done arriving with no turn in
 	// progress is reconciled against it (see handleDone).
@@ -1222,24 +1324,63 @@ export class XAIBackend implements TranscriptionBackend {
 	private commitSegment(text: string, words: XAIWord[] | undefined, language: string | undefined): boolean {
 		// Cap off: nothing is held, so nothing but the speech_final ever emits (the old behaviour).
 		if (!this.capEnabled()) return false;
+		// A partial need not carry `language`; an early final should still say what language it is.
+		const lang = language ?? this.lastLanguage;
+		const softMax = config.xai.turnSoftMaxWords;
+		const hardMax = config.xai.turnHardMaxWords;
 
 		// Every is_final is its own segment (the live capture, and every staging turn read on
 		// 2026-09-23), so each is held as it comes. A segment that starts with the previous one's
 		// words is not treated as that segment accumulating — "Thank you." then "Thank you very
 		// much." is a speaker repeating themselves, and dropping the first would lose real text.
-		this.pendingSegments.push({ text, words: Array.isArray(words) && words.length > 0 ? words : undefined });
+		const segment = heldSegment(text, words);
+
+		// A single segment past the hard ceiling (a speaker xAI heard no pause in) is cut into
+		// caption-sized pieces, each its own final: what was held before it goes out first so the
+		// order is kept, and a block never spans the cut.
+		const pieces = splitLongSegment(segment, softMax, hardMax);
+		if (pieces.length > 1) {
+			this.flushHeldSegments(lang, `holds segments before a ${segment.wordCount}-word one`);
+			for (const piece of pieces) {
+				this.pendingSegments.push(piece);
+				this.flushHeldSegments(lang, `split a ${segment.wordCount}-word segment into ${pieces.length}`);
+			}
+			return true;
+		}
+
+		// What is held plus this segment would pass the ceiling: release what is held as one block
+		// first, so no block is ever longer than the ceiling.
+		const heldBefore = this.heldWordCount();
+		if (hardMax > 0 && heldBefore > 0 && heldBefore + segment.wordCount > hardMax) {
+			this.flushHeldSegments(lang, `holds ${heldBefore} words and the next segment would pass ${hardMax}`);
+		}
+		this.pendingSegments.push(segment);
+		const held = this.heldWordCount();
 
 		// startTurn() ran before any commit reaches here (with the cap on, which the guard above ensures).
 		const maxTurnMs = this.turnMaxMs;
 		const turnAgeMs = Date.now() - this.turnStartedAt!;
 		logger.debug(
-			`xAI committed a segment for ${this.tag} (turn age ${turnAgeMs}ms, ${this.pendingSegments.length} held)`,
+			`xAI committed a segment for ${this.tag} (turn age ${turnAgeMs}ms, ${this.pendingSegments.length} held, ${held} words)`,
 		);
-		if (turnAgeMs < maxTurnMs) return false;
 
-		// A partial need not carry `language`; the early final should still say what language it is.
-		this.flushHeldSegments(language ?? this.lastLanguage, `is ${turnAgeMs}ms old without speech_final`);
+		// The word budget: a full block, a block that is full enough and ends a sentence, then the
+		// time cap as the backstop for a slow speaker who never fills either.
+		if (hardMax > 0 && held >= hardMax) {
+			this.flushHeldSegments(lang, `holds ${held} words`);
+			return true;
+		}
+		if (softMax > 0 && held >= softMax && endsSentence(segment.text)) {
+			this.flushHeldSegments(lang, `holds ${held} words ending a sentence`);
+			return true;
+		}
+		if (turnAgeMs < maxTurnMs) return false;
+		this.flushHeldSegments(lang, `is ${turnAgeMs}ms old without speech_final`);
 		return true;
+	}
+
+	private heldWordCount(): number {
+		return this.pendingSegments.reduce((n, s) => n + s.wordCount, 0);
 	}
 
 	private capEnabled(): boolean {

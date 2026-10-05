@@ -1,0 +1,6280 @@
+{
+ "note": "Real live xAI transcript.partial stream, diarize=true, endpointing=850, 16kHz, captured 2026-10-05 after xAI fixed its is_final speaker labels: two TTS voices on ONE stream (fluent clause gaps). Every is_final word carries speaker/start/end; interim words carry start/end but no speaker.",
+ "capturedFrom": "unreal-agents/experiments/xai-vs-deepgram-finalization capture-diarize.cjs",
+ "truth": [
+  {
+   "i": 0,
+   "who": "A",
+   "file": "seg_01",
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant",
+   "startMs": 0,
+   "endMs": 5063
+  },
+  {
+   "i": 1,
+   "who": "A",
+   "file": "seg_02",
+   "text": "and have to upload driver's licenses and things like that.",
+   "startMs": 5063,
+   "endMs": 8651
+  },
+  {
+   "i": 2,
+   "who": "B",
+   "file": "b_01",
+   "text": "Yeah, yeah.",
+   "startMs": 8651,
+   "endMs": 9201
+  },
+  {
+   "i": 3,
+   "who": "A",
+   "file": "seg_03",
+   "text": "That I thought I'd actually much rather talk to a person,",
+   "startMs": 9201,
+   "endMs": 12476
+  },
+  {
+   "i": 4,
+   "who": "A",
+   "file": "seg_04",
+   "text": "because this is just like their flows are broken in the middle",
+   "startMs": 12476,
+   "endMs": 15251
+  },
+  {
+   "i": 5,
+   "who": "B",
+   "file": "b_02",
+   "text": "Right.",
+   "startMs": 15251,
+   "endMs": 15651
+  },
+  {
+   "i": 6,
+   "who": "A",
+   "file": "seg_05",
+   "text": "and they're asking for things that don't exist,",
+   "startMs": 15651,
+   "endMs": 18476
+  },
+  {
+   "i": 7,
+   "who": "A",
+   "file": "seg_06",
+   "text": "and it's just like, no, I'd rather just talk to a person at this point.",
+   "startMs": 18476,
+   "endMs": 22726
+  },
+  {
+   "i": 8,
+   "who": "B",
+   "file": "b_03",
+   "text": "So what did you do in the end? Did you ever get through to anyone?",
+   "startMs": 22726,
+   "endMs": 25876
+  },
+  {
+   "i": 9,
+   "who": "A",
+   "file": "a_09",
+   "text": "I gave up and sent them an email,",
+   "startMs": 25876,
+   "endMs": 27914
+  },
+  {
+   "i": 10,
+   "who": "A",
+   "file": "a_10",
+   "text": "which they still haven't answered.",
+   "startMs": 27914,
+   "endMs": 29939
+  },
+  {
+   "i": 11,
+   "who": "B",
+   "file": "b_04",
+   "text": "Okay. Then I think we should just call them first thing tomorrow morning.",
+   "startMs": 29939,
+   "endMs": 34377
+  },
+  {
+   "i": 12,
+   "who": "A",
+   "file": "a_11",
+   "text": "Fine with me.",
+   "startMs": 34377,
+   "endMs": 35127
+  },
+  {
+   "i": 13,
+   "who": "B",
+   "file": "b_05",
+   "text": "Great, I'll set up the call.",
+   "startMs": 35127,
+   "endMs": 36740
+  },
+  {
+   "i": 14,
+   "who": "B",
+   "file": "b_06",
+   "text": "And honestly the whole onboarding flow",
+   "startMs": 36740,
+   "endMs": 39115
+  },
+  {
+   "i": 15,
+   "who": "A",
+   "file": "a_12",
+   "text": "just crashes halfway through every single time.",
+   "startMs": 39115,
+   "endMs": 42015
+  },
+  {
+   "i": 16,
+   "who": "A",
+   "file": "seg_07",
+   "text": "This is worse than a person.",
+   "startMs": 42015,
+   "endMs": 43528
+  },
+  {
+   "i": 17,
+   "who": "A",
+   "file": "seg_08",
+   "text": "So yeah.",
+   "startMs": 43528,
+   "endMs": 43928
+  }
+ ],
+ "events": [
+  {
+   "t": 1277,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a pain-",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "pain-",
+     "start": 0.8,
+     "end": 1
+    }
+   ]
+  },
+  {
+   "t": 3319,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be.",
+     "start": 2.717,
+     "end": 3
+    }
+   ]
+  },
+  {
+   "t": 4245,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked.",
+     "start": 3.217,
+     "end": 3.9
+    }
+   ]
+  },
+  {
+   "t": 5274,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant.",
+     "start": 4.506,
+     "end": 4.9
+    }
+   ]
+  },
+  {
+   "t": 6267,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to up.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "up.",
+     "start": 5.676,
+     "end": 5.9
+    }
+   ]
+  },
+  {
+   "t": 7268,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's license.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "license.",
+     "start": 6.538,
+     "end": 6.9
+    }
+   ]
+  },
+  {
+   "t": 8271,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "licenses",
+     "start": 6.538,
+     "end": 7.038
+    },
+    {
+     "text": "and",
+     "start": 7.038,
+     "end": 7.325
+    },
+    {
+     "text": "things",
+     "start": 7.325,
+     "end": 7.613
+    },
+    {
+     "text": "like",
+     "start": 7.613,
+     "end": 7.9
+    }
+   ]
+  },
+  {
+   "t": 9261,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "licenses",
+     "start": 6.538,
+     "end": 7.038
+    },
+    {
+     "text": "and",
+     "start": 7.038,
+     "end": 7.325
+    },
+    {
+     "text": "things",
+     "start": 7.325,
+     "end": 7.613
+    },
+    {
+     "text": "like",
+     "start": 7.613,
+     "end": 7.9
+    },
+    {
+     "text": "that.",
+     "start": 7.9,
+     "end": 8.9
+    }
+   ]
+  },
+  {
+   "t": 10266,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that. Yeah, yeah. That I thought I'd",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "licenses",
+     "start": 6.538,
+     "end": 7.038
+    },
+    {
+     "text": "and",
+     "start": 7.038,
+     "end": 7.325
+    },
+    {
+     "text": "things",
+     "start": 7.325,
+     "end": 7.613
+    },
+    {
+     "text": "like",
+     "start": 7.613,
+     "end": 7.9
+    },
+    {
+     "text": "that.",
+     "start": 7.9,
+     "end": 8.9
+    },
+    {
+     "text": "Yeah,",
+     "start": 8.9,
+     "end": 9.067
+    },
+    {
+     "text": "yeah.",
+     "start": 9.067,
+     "end": 9.233
+    },
+    {
+     "text": "That",
+     "start": 9.233,
+     "end": 9.4
+    },
+    {
+     "text": "I",
+     "start": 9.4,
+     "end": 9.567
+    },
+    {
+     "text": "thought",
+     "start": 9.567,
+     "end": 9.733
+    },
+    {
+     "text": "I'd",
+     "start": 9.733,
+     "end": 9.9
+    }
+   ]
+  },
+  {
+   "t": 11335,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that. Yeah, yeah. That I thought I'd actually much rather talk.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "licenses",
+     "start": 6.538,
+     "end": 7.038
+    },
+    {
+     "text": "and",
+     "start": 7.038,
+     "end": 7.325
+    },
+    {
+     "text": "things",
+     "start": 7.325,
+     "end": 7.613
+    },
+    {
+     "text": "like",
+     "start": 7.613,
+     "end": 7.9
+    },
+    {
+     "text": "that.",
+     "start": 7.9,
+     "end": 8.9
+    },
+    {
+     "text": "Yeah,",
+     "start": 8.9,
+     "end": 9.067
+    },
+    {
+     "text": "yeah.",
+     "start": 9.067,
+     "end": 9.233
+    },
+    {
+     "text": "That",
+     "start": 9.233,
+     "end": 9.4
+    },
+    {
+     "text": "I",
+     "start": 9.4,
+     "end": 9.567
+    },
+    {
+     "text": "thought",
+     "start": 9.567,
+     "end": 9.733
+    },
+    {
+     "text": "I'd",
+     "start": 9.733,
+     "end": 9.9
+    },
+    {
+     "text": "actually",
+     "start": 9.9,
+     "end": 10.15
+    },
+    {
+     "text": "much",
+     "start": 10.15,
+     "end": 10.4
+    },
+    {
+     "text": "rather",
+     "start": 10.4,
+     "end": 10.65
+    },
+    {
+     "text": "talk.",
+     "start": 10.65,
+     "end": 10.9
+    }
+   ]
+  },
+  {
+   "t": 12274,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that. Yeah, yeah. That I thought I'd actually much rather talk to a person.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.201
+    },
+    {
+     "text": "it's",
+     "start": 0.201,
+     "end": 0.4
+    },
+    {
+     "text": "such",
+     "start": 0.4,
+     "end": 0.6
+    },
+    {
+     "text": "a",
+     "start": 0.6,
+     "end": 0.8
+    },
+    {
+     "text": "painful",
+     "start": 0.8,
+     "end": 1.3
+    },
+    {
+     "text": "process",
+     "start": 1.3,
+     "end": 1.583
+    },
+    {
+     "text": "to",
+     "start": 1.583,
+     "end": 1.867
+    },
+    {
+     "text": "get",
+     "start": 1.867,
+     "end": 2.15
+    },
+    {
+     "text": "me",
+     "start": 2.15,
+     "end": 2.433
+    },
+    {
+     "text": "to",
+     "start": 2.433,
+     "end": 2.717
+    },
+    {
+     "text": "be",
+     "start": 2.717,
+     "end": 3.217
+    },
+    {
+     "text": "checked",
+     "start": 3.217,
+     "end": 3.717
+    },
+    {
+     "text": "and",
+     "start": 3.717,
+     "end": 4.111
+    },
+    {
+     "text": "regulatory",
+     "start": 4.111,
+     "end": 4.506
+    },
+    {
+     "text": "compliant",
+     "start": 4.506,
+     "end": 5.006
+    },
+    {
+     "text": "and",
+     "start": 5.006,
+     "end": 5.229
+    },
+    {
+     "text": "have",
+     "start": 5.229,
+     "end": 5.453
+    },
+    {
+     "text": "to",
+     "start": 5.453,
+     "end": 5.676
+    },
+    {
+     "text": "upload",
+     "start": 5.676,
+     "end": 6.176
+    },
+    {
+     "text": "driver's",
+     "start": 6.176,
+     "end": 6.538
+    },
+    {
+     "text": "licenses",
+     "start": 6.538,
+     "end": 7.038
+    },
+    {
+     "text": "and",
+     "start": 7.038,
+     "end": 7.325
+    },
+    {
+     "text": "things",
+     "start": 7.325,
+     "end": 7.613
+    },
+    {
+     "text": "like",
+     "start": 7.613,
+     "end": 7.9
+    },
+    {
+     "text": "that.",
+     "start": 7.9,
+     "end": 8.9
+    },
+    {
+     "text": "Yeah,",
+     "start": 8.9,
+     "end": 9.067
+    },
+    {
+     "text": "yeah.",
+     "start": 9.067,
+     "end": 9.233
+    },
+    {
+     "text": "That",
+     "start": 9.233,
+     "end": 9.4
+    },
+    {
+     "text": "I",
+     "start": 9.4,
+     "end": 9.567
+    },
+    {
+     "text": "thought",
+     "start": 9.567,
+     "end": 9.733
+    },
+    {
+     "text": "I'd",
+     "start": 9.733,
+     "end": 9.9
+    },
+    {
+     "text": "actually",
+     "start": 9.9,
+     "end": 10.15
+    },
+    {
+     "text": "much",
+     "start": 10.15,
+     "end": 10.4
+    },
+    {
+     "text": "rather",
+     "start": 10.4,
+     "end": 10.65
+    },
+    {
+     "text": "talk",
+     "start": 10.65,
+     "end": 11.15
+    },
+    {
+     "text": "to",
+     "start": 11.15,
+     "end": 11.367
+    },
+    {
+     "text": "a",
+     "start": 11.367,
+     "end": 11.583
+    },
+    {
+     "text": "person.",
+     "start": 11.583,
+     "end": 11.8
+    }
+   ]
+  },
+  {
+   "t": 12767,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that. Yeah, yeah. That I thought I'd actually much rather",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.101,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "it's",
+     "start": 0.121,
+     "end": 0.241,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "such",
+     "start": 0.341,
+     "end": 0.562,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "a",
+     "start": 0.602,
+     "end": 0.622,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "painful",
+     "start": 0.702,
+     "end": 1.142,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "process",
+     "start": 1.203,
+     "end": 1.824,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 2.164,
+     "end": 2.224,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "get",
+     "start": 2.304,
+     "end": 2.465,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "me",
+     "start": 2.505,
+     "end": 2.565,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 2.685,
+     "end": 2.765,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "be",
+     "start": 2.845,
+     "end": 2.945,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "checked",
+     "start": 3.126,
+     "end": 3.506,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 3.727,
+     "end": 3.827,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "regulatory",
+     "start": 3.907,
+     "end": 4.448,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "compliant",
+     "start": 4.508,
+     "end": 5.049,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 5.089,
+     "end": 5.189,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "have",
+     "start": 5.209,
+     "end": 5.369,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 5.389,
+     "end": 5.449,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "upload",
+     "start": 5.569,
+     "end": 6.07,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "driver's",
+     "start": 6.19,
+     "end": 6.631,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "licenses",
+     "start": 6.691,
+     "end": 7.372,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 7.432,
+     "end": 7.553,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "things",
+     "start": 7.593,
+     "end": 7.833,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "like",
+     "start": 7.873,
+     "end": 8.073,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "that.",
+     "start": 8.093,
+     "end": 8.354,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "Yeah,",
+     "start": 8.694,
+     "end": 8.835,
+     "speaker": 1,
+     "speaker_confidence": 0.9594
+    },
+    {
+     "text": "yeah.",
+     "start": 8.875,
+     "end": 9.015,
+     "speaker": 1,
+     "speaker_confidence": 0.9594
+    },
+    {
+     "text": "That",
+     "start": 9.215,
+     "end": 9.315,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "I",
+     "start": 9.416,
+     "end": 9.436,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "thought",
+     "start": 9.476,
+     "end": 9.656,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "I'd",
+     "start": 9.716,
+     "end": 9.796,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "actually",
+     "start": 9.836,
+     "end": 10.117,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "much",
+     "start": 10.157,
+     "end": 10.317,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "rather",
+     "start": 10.357,
+     "end": 11.218,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    }
+   ]
+  },
+  {
+   "t": 13283,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    }
+   ]
+  },
+  {
+   "t": 14318,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    }
+   ]
+  },
+  {
+   "t": 15278,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken and",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "and",
+     "start": 14.55,
+     "end": 14.8
+    }
+   ]
+  },
+  {
+   "t": 16370,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right.",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "in",
+     "start": 14.55,
+     "end": 15.05
+    },
+    {
+     "text": "the",
+     "start": 15.05,
+     "end": 15.3
+    },
+    {
+     "text": "middle.",
+     "start": 15.3,
+     "end": 15.55
+    },
+    {
+     "text": "Right.",
+     "start": 15.55,
+     "end": 15.8
+    }
+   ]
+  },
+  {
+   "t": 17311,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things.",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "in",
+     "start": 14.55,
+     "end": 15.05
+    },
+    {
+     "text": "the",
+     "start": 15.05,
+     "end": 15.3
+    },
+    {
+     "text": "middle.",
+     "start": 15.3,
+     "end": 15.55
+    },
+    {
+     "text": "Right.",
+     "start": 15.55,
+     "end": 15.8
+    },
+    {
+     "text": "And",
+     "start": 15.8,
+     "end": 16
+    },
+    {
+     "text": "they're",
+     "start": 16,
+     "end": 16.2
+    },
+    {
+     "text": "asking",
+     "start": 16.2,
+     "end": 16.4
+    },
+    {
+     "text": "for",
+     "start": 16.4,
+     "end": 16.6
+    },
+    {
+     "text": "things.",
+     "start": 16.6,
+     "end": 16.8
+    }
+   ]
+  },
+  {
+   "t": 18278,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things that don't exist.",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "in",
+     "start": 14.55,
+     "end": 15.05
+    },
+    {
+     "text": "the",
+     "start": 15.05,
+     "end": 15.3
+    },
+    {
+     "text": "middle.",
+     "start": 15.3,
+     "end": 15.55
+    },
+    {
+     "text": "Right.",
+     "start": 15.55,
+     "end": 15.8
+    },
+    {
+     "text": "And",
+     "start": 15.8,
+     "end": 16
+    },
+    {
+     "text": "they're",
+     "start": 16,
+     "end": 16.2
+    },
+    {
+     "text": "asking",
+     "start": 16.2,
+     "end": 16.4
+    },
+    {
+     "text": "for",
+     "start": 16.4,
+     "end": 16.6
+    },
+    {
+     "text": "things",
+     "start": 16.6,
+     "end": 17.1
+    },
+    {
+     "text": "that",
+     "start": 17.1,
+     "end": 17.3
+    },
+    {
+     "text": "don't",
+     "start": 17.3,
+     "end": 17.5
+    },
+    {
+     "text": "exist.",
+     "start": 17.5,
+     "end": 17.7
+    }
+   ]
+  },
+  {
+   "t": 19269,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things that don't exist. And it's",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "in",
+     "start": 14.55,
+     "end": 15.05
+    },
+    {
+     "text": "the",
+     "start": 15.05,
+     "end": 15.3
+    },
+    {
+     "text": "middle.",
+     "start": 15.3,
+     "end": 15.55
+    },
+    {
+     "text": "Right.",
+     "start": 15.55,
+     "end": 15.8
+    },
+    {
+     "text": "And",
+     "start": 15.8,
+     "end": 16
+    },
+    {
+     "text": "they're",
+     "start": 16,
+     "end": 16.2
+    },
+    {
+     "text": "asking",
+     "start": 16.2,
+     "end": 16.4
+    },
+    {
+     "text": "for",
+     "start": 16.4,
+     "end": 16.6
+    },
+    {
+     "text": "things",
+     "start": 16.6,
+     "end": 17.1
+    },
+    {
+     "text": "that",
+     "start": 17.1,
+     "end": 17.3
+    },
+    {
+     "text": "don't",
+     "start": 17.3,
+     "end": 17.5
+    },
+    {
+     "text": "exist.",
+     "start": 17.5,
+     "end": 17.7
+    },
+    {
+     "text": "And",
+     "start": 17.7,
+     "end": 18.2
+    },
+    {
+     "text": "it's",
+     "start": 18.2,
+     "end": 18.7
+    }
+   ]
+  },
+  {
+   "t": 20294,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things that don't exist and it's just like no.",
+   "words": [
+    {
+     "text": "talk",
+     "start": 12.22,
+     "end": 12.336
+    },
+    {
+     "text": "to",
+     "start": 12.336,
+     "end": 12.452
+    },
+    {
+     "text": "a",
+     "start": 12.452,
+     "end": 12.568
+    },
+    {
+     "text": "person",
+     "start": 12.568,
+     "end": 12.684
+    },
+    {
+     "text": "because",
+     "start": 12.684,
+     "end": 12.8
+    },
+    {
+     "text": "this",
+     "start": 12.8,
+     "end": 13
+    },
+    {
+     "text": "is",
+     "start": 13,
+     "end": 13.2
+    },
+    {
+     "text": "just",
+     "start": 13.2,
+     "end": 13.4
+    },
+    {
+     "text": "like",
+     "start": 13.4,
+     "end": 13.6
+    },
+    {
+     "text": "their",
+     "start": 13.6,
+     "end": 13.8
+    },
+    {
+     "text": "flows",
+     "start": 13.8,
+     "end": 14.05
+    },
+    {
+     "text": "are",
+     "start": 14.05,
+     "end": 14.3
+    },
+    {
+     "text": "broken",
+     "start": 14.3,
+     "end": 14.55
+    },
+    {
+     "text": "in",
+     "start": 14.55,
+     "end": 15.05
+    },
+    {
+     "text": "the",
+     "start": 15.05,
+     "end": 15.3
+    },
+    {
+     "text": "middle.",
+     "start": 15.3,
+     "end": 15.55
+    },
+    {
+     "text": "Right.",
+     "start": 15.55,
+     "end": 15.8
+    },
+    {
+     "text": "And",
+     "start": 15.8,
+     "end": 16
+    },
+    {
+     "text": "they're",
+     "start": 16,
+     "end": 16.2
+    },
+    {
+     "text": "asking",
+     "start": 16.2,
+     "end": 16.4
+    },
+    {
+     "text": "for",
+     "start": 16.4,
+     "end": 16.6
+    },
+    {
+     "text": "things",
+     "start": 16.6,
+     "end": 17.1
+    },
+    {
+     "text": "that",
+     "start": 17.1,
+     "end": 17.3
+    },
+    {
+     "text": "don't",
+     "start": 17.3,
+     "end": 17.5
+    },
+    {
+     "text": "exist",
+     "start": 17.5,
+     "end": 18
+    },
+    {
+     "text": "and",
+     "start": 18,
+     "end": 18.34
+    },
+    {
+     "text": "it's",
+     "start": 18.34,
+     "end": 18.68
+    },
+    {
+     "text": "just",
+     "start": 18.68,
+     "end": 19.02
+    },
+    {
+     "text": "like",
+     "start": 19.02,
+     "end": 19.36
+    },
+    {
+     "text": "no.",
+     "start": 19.36,
+     "end": 19.7
+    }
+   ]
+  },
+  {
+   "t": 20641,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things that don't exist and it's just like no.",
+   "words": [
+    {
+     "text": "talk",
+     "start": 10.74,
+     "end": 10.82,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "to",
+     "start": 10.86,
+     "end": 10.92,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "a",
+     "start": 10.981,
+     "end": 11.001,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "person",
+     "start": 11.061,
+     "end": 11.422,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "because",
+     "start": 12.484,
+     "end": 12.744,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "this",
+     "start": 12.744,
+     "end": 12.905,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "is",
+     "start": 12.945,
+     "end": 13.025,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "just",
+     "start": 13.085,
+     "end": 13.265,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "like",
+     "start": 13.306,
+     "end": 13.506,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "their",
+     "start": 13.606,
+     "end": 13.787,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "flows",
+     "start": 13.867,
+     "end": 14.167,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "are",
+     "start": 14.207,
+     "end": 14.308,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "broken",
+     "start": 14.328,
+     "end": 14.668,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "in",
+     "start": 14.709,
+     "end": 14.769,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "the",
+     "start": 14.789,
+     "end": 14.869,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "middle.",
+     "start": 14.889,
+     "end": 15.149,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "Right.",
+     "start": 15.29,
+     "end": 15.51,
+     "speaker": 1,
+     "speaker_confidence": 0.9545
+    },
+    {
+     "text": "And",
+     "start": 15.671,
+     "end": 15.751,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "they're",
+     "start": 15.751,
+     "end": 15.891,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "asking",
+     "start": 15.991,
+     "end": 16.352,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "for",
+     "start": 16.392,
+     "end": 16.492,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "things",
+     "start": 16.552,
+     "end": 16.793,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "that",
+     "start": 16.833,
+     "end": 16.933,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "don't",
+     "start": 16.993,
+     "end": 17.194,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "exist",
+     "start": 17.254,
+     "end": 17.815,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "and",
+     "start": 18.517,
+     "end": 18.597,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "it's",
+     "start": 18.637,
+     "end": 18.757,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "just",
+     "start": 18.797,
+     "end": 18.978,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "like",
+     "start": 19.018,
+     "end": 19.218,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "no.",
+     "start": 19.318,
+     "end": 19.439,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    }
+   ]
+  },
+  {
+   "t": 21327,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    }
+   ]
+  },
+  {
+   "t": 22301,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person.",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    },
+    {
+     "text": "just",
+     "start": 20.7,
+     "end": 20.9
+    },
+    {
+     "text": "talk",
+     "start": 20.9,
+     "end": 21.1
+    },
+    {
+     "text": "to",
+     "start": 21.1,
+     "end": 21.3
+    },
+    {
+     "text": "a",
+     "start": 21.3,
+     "end": 21.5
+    },
+    {
+     "text": "person.",
+     "start": 21.5,
+     "end": 21.7
+    }
+   ]
+  },
+  {
+   "t": 23295,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person at this point.",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    },
+    {
+     "text": "just",
+     "start": 20.7,
+     "end": 20.9
+    },
+    {
+     "text": "talk",
+     "start": 20.9,
+     "end": 21.1
+    },
+    {
+     "text": "to",
+     "start": 21.1,
+     "end": 21.3
+    },
+    {
+     "text": "a",
+     "start": 21.3,
+     "end": 21.5
+    },
+    {
+     "text": "person",
+     "start": 21.5,
+     "end": 22
+    },
+    {
+     "text": "at",
+     "start": 22,
+     "end": 22.233
+    },
+    {
+     "text": "this",
+     "start": 22.233,
+     "end": 22.467
+    },
+    {
+     "text": "point.",
+     "start": 22.467,
+     "end": 22.7
+    }
+   ]
+  },
+  {
+   "t": 24290,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person at this point. So what did you do in the",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    },
+    {
+     "text": "just",
+     "start": 20.7,
+     "end": 20.9
+    },
+    {
+     "text": "talk",
+     "start": 20.9,
+     "end": 21.1
+    },
+    {
+     "text": "to",
+     "start": 21.1,
+     "end": 21.3
+    },
+    {
+     "text": "a",
+     "start": 21.3,
+     "end": 21.5
+    },
+    {
+     "text": "person",
+     "start": 21.5,
+     "end": 22
+    },
+    {
+     "text": "at",
+     "start": 22,
+     "end": 22.233
+    },
+    {
+     "text": "this",
+     "start": 22.233,
+     "end": 22.467
+    },
+    {
+     "text": "point.",
+     "start": 22.467,
+     "end": 22.7
+    },
+    {
+     "text": "So",
+     "start": 22.7,
+     "end": 22.829
+    },
+    {
+     "text": "what",
+     "start": 22.829,
+     "end": 22.957
+    },
+    {
+     "text": "did",
+     "start": 22.957,
+     "end": 23.086
+    },
+    {
+     "text": "you",
+     "start": 23.086,
+     "end": 23.214
+    },
+    {
+     "text": "do",
+     "start": 23.214,
+     "end": 23.343
+    },
+    {
+     "text": "in",
+     "start": 23.343,
+     "end": 23.471
+    },
+    {
+     "text": "the",
+     "start": 23.471,
+     "end": 23.6
+    }
+   ]
+  },
+  {
+   "t": 25300,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person at this point. So what did you do in the end? Did you ever get",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    },
+    {
+     "text": "just",
+     "start": 20.7,
+     "end": 20.9
+    },
+    {
+     "text": "talk",
+     "start": 20.9,
+     "end": 21.1
+    },
+    {
+     "text": "to",
+     "start": 21.1,
+     "end": 21.3
+    },
+    {
+     "text": "a",
+     "start": 21.3,
+     "end": 21.5
+    },
+    {
+     "text": "person",
+     "start": 21.5,
+     "end": 22
+    },
+    {
+     "text": "at",
+     "start": 22,
+     "end": 22.233
+    },
+    {
+     "text": "this",
+     "start": 22.233,
+     "end": 22.467
+    },
+    {
+     "text": "point.",
+     "start": 22.467,
+     "end": 22.7
+    },
+    {
+     "text": "So",
+     "start": 22.7,
+     "end": 22.829
+    },
+    {
+     "text": "what",
+     "start": 22.829,
+     "end": 22.957
+    },
+    {
+     "text": "did",
+     "start": 22.957,
+     "end": 23.086
+    },
+    {
+     "text": "you",
+     "start": 23.086,
+     "end": 23.214
+    },
+    {
+     "text": "do",
+     "start": 23.214,
+     "end": 23.343
+    },
+    {
+     "text": "in",
+     "start": 23.343,
+     "end": 23.471
+    },
+    {
+     "text": "the",
+     "start": 23.471,
+     "end": 23.6
+    },
+    {
+     "text": "end?",
+     "start": 23.6,
+     "end": 23.8
+    },
+    {
+     "text": "Did",
+     "start": 23.8,
+     "end": 24
+    },
+    {
+     "text": "you",
+     "start": 24,
+     "end": 24.2
+    },
+    {
+     "text": "ever",
+     "start": 24.2,
+     "end": 24.4
+    },
+    {
+     "text": "get",
+     "start": 24.4,
+     "end": 24.6
+    }
+   ]
+  },
+  {
+   "t": 26325,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person at this point. So what did you do in the end? Did you ever get through to anyone?",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 20.06,
+     "end": 20.38
+    },
+    {
+     "text": "rather",
+     "start": 20.38,
+     "end": 20.7
+    },
+    {
+     "text": "just",
+     "start": 20.7,
+     "end": 20.9
+    },
+    {
+     "text": "talk",
+     "start": 20.9,
+     "end": 21.1
+    },
+    {
+     "text": "to",
+     "start": 21.1,
+     "end": 21.3
+    },
+    {
+     "text": "a",
+     "start": 21.3,
+     "end": 21.5
+    },
+    {
+     "text": "person",
+     "start": 21.5,
+     "end": 22
+    },
+    {
+     "text": "at",
+     "start": 22,
+     "end": 22.233
+    },
+    {
+     "text": "this",
+     "start": 22.233,
+     "end": 22.467
+    },
+    {
+     "text": "point.",
+     "start": 22.467,
+     "end": 22.7
+    },
+    {
+     "text": "So",
+     "start": 22.7,
+     "end": 22.829
+    },
+    {
+     "text": "what",
+     "start": 22.829,
+     "end": 22.957
+    },
+    {
+     "text": "did",
+     "start": 22.957,
+     "end": 23.086
+    },
+    {
+     "text": "you",
+     "start": 23.086,
+     "end": 23.214
+    },
+    {
+     "text": "do",
+     "start": 23.214,
+     "end": 23.343
+    },
+    {
+     "text": "in",
+     "start": 23.343,
+     "end": 23.471
+    },
+    {
+     "text": "the",
+     "start": 23.471,
+     "end": 23.6
+    },
+    {
+     "text": "end?",
+     "start": 23.6,
+     "end": 23.8
+    },
+    {
+     "text": "Did",
+     "start": 23.8,
+     "end": 24
+    },
+    {
+     "text": "you",
+     "start": 24,
+     "end": 24.2
+    },
+    {
+     "text": "ever",
+     "start": 24.2,
+     "end": 24.4
+    },
+    {
+     "text": "get",
+     "start": 24.4,
+     "end": 24.6
+    },
+    {
+     "text": "through",
+     "start": 24.6,
+     "end": 24.933
+    },
+    {
+     "text": "to",
+     "start": 24.933,
+     "end": 25.267
+    },
+    {
+     "text": "anyone?",
+     "start": 25.267,
+     "end": 25.6
+    }
+   ]
+  },
+  {
+   "t": 26580,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "I'd rather just talk to a person at this point. So what did you do in the end? Did you ever get through to anyone?",
+   "words": [
+    {
+     "text": "I'd",
+     "start": 19.081,
+     "end": 20.385,
+     "speaker": 0,
+     "speaker_confidence": 0.9846
+    },
+    {
+     "text": "rather",
+     "start": 20.425,
+     "end": 20.666,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "just",
+     "start": 20.726,
+     "end": 20.926,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "talk",
+     "start": 20.967,
+     "end": 21.167,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "to",
+     "start": 21.207,
+     "end": 21.267,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "a",
+     "start": 21.328,
+     "end": 21.348,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "person",
+     "start": 21.408,
+     "end": 21.749,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "at",
+     "start": 21.809,
+     "end": 21.869,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "this",
+     "start": 21.909,
+     "end": 22.07,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "point.",
+     "start": 22.13,
+     "end": 22.431,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "So",
+     "start": 22.772,
+     "end": 22.832,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "what",
+     "start": 22.872,
+     "end": 22.972,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "did",
+     "start": 23.012,
+     "end": 23.112,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "you",
+     "start": 23.132,
+     "end": 23.213,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "do",
+     "start": 23.253,
+     "end": 23.313,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "in",
+     "start": 23.413,
+     "end": 23.473,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "the",
+     "start": 23.493,
+     "end": 23.554,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "end?",
+     "start": 23.654,
+     "end": 23.834,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "Did",
+     "start": 23.955,
+     "end": 24.075,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "you",
+     "start": 24.095,
+     "end": 24.155,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "ever",
+     "start": 24.195,
+     "end": 24.336,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "get",
+     "start": 24.376,
+     "end": 24.496,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "through",
+     "start": 24.536,
+     "end": 24.717,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "to",
+     "start": 24.717,
+     "end": 24.777,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "anyone?",
+     "start": 24.837,
+     "end": 25.178,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    }
+   ]
+  },
+  {
+   "t": 27307,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I gave up.",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.88,
+     "end": 26.12
+    },
+    {
+     "text": "gave",
+     "start": 26.12,
+     "end": 26.36
+    },
+    {
+     "text": "up.",
+     "start": 26.36,
+     "end": 26.6
+    }
+   ]
+  },
+  {
+   "t": 28307,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I gave up and sent them an email.",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.88,
+     "end": 26.12
+    },
+    {
+     "text": "gave",
+     "start": 26.12,
+     "end": 26.36
+    },
+    {
+     "text": "up",
+     "start": 26.36,
+     "end": 26.86
+    },
+    {
+     "text": "and",
+     "start": 26.86,
+     "end": 27.008
+    },
+    {
+     "text": "sent",
+     "start": 27.008,
+     "end": 27.156
+    },
+    {
+     "text": "them",
+     "start": 27.156,
+     "end": 27.304
+    },
+    {
+     "text": "an",
+     "start": 27.304,
+     "end": 27.452
+    },
+    {
+     "text": "email.",
+     "start": 27.452,
+     "end": 27.6
+    }
+   ]
+  },
+  {
+   "t": 29261,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I gave up and",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.88,
+     "end": 26.12
+    },
+    {
+     "text": "gave",
+     "start": 26.12,
+     "end": 26.36
+    },
+    {
+     "text": "up",
+     "start": 26.36,
+     "end": 26.86
+    },
+    {
+     "text": "and",
+     "start": 26.86,
+     "end": 27.008
+    }
+   ]
+  },
+  {
+   "t": 30356,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I gave up and sent them an email which they still haven't answered.",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.88,
+     "end": 26.12
+    },
+    {
+     "text": "gave",
+     "start": 26.12,
+     "end": 26.36
+    },
+    {
+     "text": "up",
+     "start": 26.36,
+     "end": 26.86
+    },
+    {
+     "text": "and",
+     "start": 26.86,
+     "end": 27.008
+    },
+    {
+     "text": "sent",
+     "start": 28.5,
+     "end": 28.611
+    },
+    {
+     "text": "them",
+     "start": 28.611,
+     "end": 28.722
+    },
+    {
+     "text": "an",
+     "start": 28.722,
+     "end": 28.833
+    },
+    {
+     "text": "email",
+     "start": 28.833,
+     "end": 28.944
+    },
+    {
+     "text": "which",
+     "start": 28.944,
+     "end": 29.056
+    },
+    {
+     "text": "they",
+     "start": 29.056,
+     "end": 29.167
+    },
+    {
+     "text": "still",
+     "start": 29.167,
+     "end": 29.278
+    },
+    {
+     "text": "haven't",
+     "start": 29.278,
+     "end": 29.389
+    },
+    {
+     "text": "answered.",
+     "start": 29.389,
+     "end": 29.5
+    }
+   ]
+  },
+  {
+   "t": 31274,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "I gave up and sent them an email which",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.88,
+     "end": 26.12
+    },
+    {
+     "text": "gave",
+     "start": 26.12,
+     "end": 26.36
+    },
+    {
+     "text": "up",
+     "start": 26.36,
+     "end": 26.86
+    },
+    {
+     "text": "and",
+     "start": 26.86,
+     "end": 27.008
+    },
+    {
+     "text": "sent",
+     "start": 28.5,
+     "end": 28.611
+    },
+    {
+     "text": "them",
+     "start": 28.611,
+     "end": 28.722
+    },
+    {
+     "text": "an",
+     "start": 28.722,
+     "end": 28.833
+    },
+    {
+     "text": "email",
+     "start": 28.833,
+     "end": 28.944
+    },
+    {
+     "text": "which",
+     "start": 28.944,
+     "end": 29.056
+    }
+   ]
+  },
+  {
+   "t": 31748,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "I gave up and",
+   "words": [
+    {
+     "text": "I",
+     "start": 25.965,
+     "end": 25.985,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "gave",
+     "start": 26.025,
+     "end": 26.226,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "up",
+     "start": 26.286,
+     "end": 26.406,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "and",
+     "start": 28.834,
+     "end": 29.255,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    }
+   ]
+  },
+  {
+   "t": 32328,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "sent them an email which they still haven't answered. Okay.",
+   "words": [
+    {
+     "text": "sent",
+     "start": 30.92,
+     "end": 30.978
+    },
+    {
+     "text": "them",
+     "start": 30.978,
+     "end": 31.036
+    },
+    {
+     "text": "an",
+     "start": 31.036,
+     "end": 31.094
+    },
+    {
+     "text": "email",
+     "start": 31.094,
+     "end": 31.152
+    },
+    {
+     "text": "which",
+     "start": 31.152,
+     "end": 31.21
+    },
+    {
+     "text": "they",
+     "start": 31.21,
+     "end": 31.268
+    },
+    {
+     "text": "still",
+     "start": 31.268,
+     "end": 31.326
+    },
+    {
+     "text": "haven't",
+     "start": 31.326,
+     "end": 31.384
+    },
+    {
+     "text": "answered.",
+     "start": 31.384,
+     "end": 31.442
+    },
+    {
+     "text": "Okay.",
+     "start": 31.442,
+     "end": 31.5
+    }
+   ]
+  },
+  {
+   "t": 33302,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "sent them an email which they still haven't answered. Okay. Then I think we should just call",
+   "words": [
+    {
+     "text": "sent",
+     "start": 30.92,
+     "end": 30.978
+    },
+    {
+     "text": "them",
+     "start": 30.978,
+     "end": 31.036
+    },
+    {
+     "text": "an",
+     "start": 31.036,
+     "end": 31.094
+    },
+    {
+     "text": "email",
+     "start": 31.094,
+     "end": 31.152
+    },
+    {
+     "text": "which",
+     "start": 31.152,
+     "end": 31.21
+    },
+    {
+     "text": "they",
+     "start": 31.21,
+     "end": 31.268
+    },
+    {
+     "text": "still",
+     "start": 31.268,
+     "end": 31.326
+    },
+    {
+     "text": "haven't",
+     "start": 31.326,
+     "end": 31.384
+    },
+    {
+     "text": "answered.",
+     "start": 31.384,
+     "end": 31.442
+    },
+    {
+     "text": "Okay.",
+     "start": 31.442,
+     "end": 31.5
+    },
+    {
+     "text": "Then",
+     "start": 31.5,
+     "end": 31.643
+    },
+    {
+     "text": "I",
+     "start": 31.643,
+     "end": 31.786
+    },
+    {
+     "text": "think",
+     "start": 31.786,
+     "end": 31.929
+    },
+    {
+     "text": "we",
+     "start": 31.929,
+     "end": 32.071
+    },
+    {
+     "text": "should",
+     "start": 32.071,
+     "end": 32.214
+    },
+    {
+     "text": "just",
+     "start": 32.214,
+     "end": 32.357
+    },
+    {
+     "text": "call",
+     "start": 32.357,
+     "end": 32.5
+    }
+   ]
+  },
+  {
+   "t": 34296,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "sent them an email which they still haven't answered. Okay. Then I think we should just call them first thing tomorrow.",
+   "words": [
+    {
+     "text": "sent",
+     "start": 30.92,
+     "end": 30.978
+    },
+    {
+     "text": "them",
+     "start": 30.978,
+     "end": 31.036
+    },
+    {
+     "text": "an",
+     "start": 31.036,
+     "end": 31.094
+    },
+    {
+     "text": "email",
+     "start": 31.094,
+     "end": 31.152
+    },
+    {
+     "text": "which",
+     "start": 31.152,
+     "end": 31.21
+    },
+    {
+     "text": "they",
+     "start": 31.21,
+     "end": 31.268
+    },
+    {
+     "text": "still",
+     "start": 31.268,
+     "end": 31.326
+    },
+    {
+     "text": "haven't",
+     "start": 31.326,
+     "end": 31.384
+    },
+    {
+     "text": "answered.",
+     "start": 31.384,
+     "end": 31.442
+    },
+    {
+     "text": "Okay.",
+     "start": 31.442,
+     "end": 31.5
+    },
+    {
+     "text": "Then",
+     "start": 31.5,
+     "end": 31.643
+    },
+    {
+     "text": "I",
+     "start": 31.643,
+     "end": 31.786
+    },
+    {
+     "text": "think",
+     "start": 31.786,
+     "end": 31.929
+    },
+    {
+     "text": "we",
+     "start": 31.929,
+     "end": 32.071
+    },
+    {
+     "text": "should",
+     "start": 32.071,
+     "end": 32.214
+    },
+    {
+     "text": "just",
+     "start": 32.214,
+     "end": 32.357
+    },
+    {
+     "text": "call",
+     "start": 32.357,
+     "end": 32.5
+    },
+    {
+     "text": "them",
+     "start": 32.5,
+     "end": 32.75
+    },
+    {
+     "text": "first",
+     "start": 32.75,
+     "end": 33
+    },
+    {
+     "text": "thing",
+     "start": 33,
+     "end": 33.25
+    },
+    {
+     "text": "tomorrow.",
+     "start": 33.25,
+     "end": 33.5
+    }
+   ]
+  },
+  {
+   "t": 35252,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "sent them an email which they still haven't answered. Okay. Then I think we should just call them first thing tomorrow morning.",
+   "words": [
+    {
+     "text": "sent",
+     "start": 29.48,
+     "end": 29.641,
+     "speaker": 0,
+     "speaker_confidence": 0.9531
+    },
+    {
+     "text": "them",
+     "start": 29.681,
+     "end": 29.781,
+     "speaker": 1,
+     "speaker_confidence": 0.9476
+    },
+    {
+     "text": "an",
+     "start": 29.842,
+     "end": 29.922,
+     "speaker": 1,
+     "speaker_confidence": 0.9773
+    },
+    {
+     "text": "email",
+     "start": 29.922,
+     "end": 30.022,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "which",
+     "start": 30.022,
+     "end": 30.123,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "they",
+     "start": 30.123,
+     "end": 30.243,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "still",
+     "start": 30.263,
+     "end": 30.524,
+     "speaker": 1,
+     "speaker_confidence": 0.9722
+    },
+    {
+     "text": "haven't",
+     "start": 30.585,
+     "end": 31.047,
+     "speaker": 1,
+     "speaker_confidence": 0.889
+    },
+    {
+     "text": "answered.",
+     "start": 31.047,
+     "end": 31.288,
+     "speaker": 1,
+     "speaker_confidence": 0.946
+    },
+    {
+     "text": "Okay.",
+     "start": 31.288,
+     "end": 31.368,
+     "speaker": 1,
+     "speaker_confidence": 0.9781
+    },
+    {
+     "text": "Then",
+     "start": 31.368,
+     "end": 31.488,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "I",
+     "start": 31.569,
+     "end": 31.589,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "think",
+     "start": 31.629,
+     "end": 31.79,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "we",
+     "start": 31.81,
+     "end": 31.87,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "should",
+     "start": 31.91,
+     "end": 32.051,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "just",
+     "start": 32.071,
+     "end": 32.211,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "call",
+     "start": 32.231,
+     "end": 32.412,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "them",
+     "start": 32.432,
+     "end": 32.533,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "first",
+     "start": 32.633,
+     "end": 32.874,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "thing",
+     "start": 32.914,
+     "end": 33.095,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "tomorrow",
+     "start": 33.155,
+     "end": 33.497,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "morning.",
+     "start": 33.557,
+     "end": 33.878,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    }
+   ]
+  },
+  {
+   "t": 36272,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great.",
+     "start": 35.135,
+     "end": 35.4
+    }
+   ]
+  },
+  {
+   "t": 37316,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    }
+   ]
+  },
+  {
+   "t": 38320,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly,",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    }
+   ]
+  },
+  {
+   "t": 39294,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole on",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "on",
+     "start": 38.067,
+     "end": 38.4
+    }
+   ]
+  },
+  {
+   "t": 40348,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow.",
+     "start": 38.567,
+     "end": 39.4
+    }
+   ]
+  },
+  {
+   "t": 41302,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow",
+     "start": 38.567,
+     "end": 39.067
+    },
+    {
+     "text": "just",
+     "start": 39.067,
+     "end": 39.511
+    },
+    {
+     "text": "crashes",
+     "start": 39.511,
+     "end": 39.956
+    },
+    {
+     "text": "halfway.",
+     "start": 39.956,
+     "end": 40.4
+    }
+   ]
+  },
+  {
+   "t": 42288,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow",
+     "start": 38.567,
+     "end": 39.067
+    },
+    {
+     "text": "just",
+     "start": 39.067,
+     "end": 39.511
+    },
+    {
+     "text": "crashes",
+     "start": 39.511,
+     "end": 39.956
+    },
+    {
+     "text": "halfway",
+     "start": 39.956,
+     "end": 40.456
+    },
+    {
+     "text": "through",
+     "start": 40.456,
+     "end": 40.737
+    },
+    {
+     "text": "every",
+     "start": 40.737,
+     "end": 41.019
+    },
+    {
+     "text": "single",
+     "start": 41.019,
+     "end": 41.3
+    }
+   ]
+  },
+  {
+   "t": 43295,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single time. This is",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow",
+     "start": 38.567,
+     "end": 39.067
+    },
+    {
+     "text": "just",
+     "start": 39.067,
+     "end": 39.511
+    },
+    {
+     "text": "crashes",
+     "start": 39.511,
+     "end": 39.956
+    },
+    {
+     "text": "halfway",
+     "start": 39.956,
+     "end": 40.456
+    },
+    {
+     "text": "through",
+     "start": 40.456,
+     "end": 40.737
+    },
+    {
+     "text": "every",
+     "start": 40.737,
+     "end": 41.019
+    },
+    {
+     "text": "single",
+     "start": 41.019,
+     "end": 41.3
+    },
+    {
+     "text": "time.",
+     "start": 41.3,
+     "end": 41.633
+    },
+    {
+     "text": "This",
+     "start": 41.633,
+     "end": 41.967
+    },
+    {
+     "text": "is",
+     "start": 41.967,
+     "end": 42.3
+    }
+   ]
+  },
+  {
+   "t": 44297,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single time. This is worse than a person.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow",
+     "start": 38.567,
+     "end": 39.067
+    },
+    {
+     "text": "just",
+     "start": 39.067,
+     "end": 39.511
+    },
+    {
+     "text": "crashes",
+     "start": 39.511,
+     "end": 39.956
+    },
+    {
+     "text": "halfway",
+     "start": 39.956,
+     "end": 40.456
+    },
+    {
+     "text": "through",
+     "start": 40.456,
+     "end": 40.737
+    },
+    {
+     "text": "every",
+     "start": 40.737,
+     "end": 41.019
+    },
+    {
+     "text": "single",
+     "start": 41.019,
+     "end": 41.3
+    },
+    {
+     "text": "time.",
+     "start": 41.3,
+     "end": 41.633
+    },
+    {
+     "text": "This",
+     "start": 41.633,
+     "end": 41.967
+    },
+    {
+     "text": "is",
+     "start": 41.967,
+     "end": 42.3
+    },
+    {
+     "text": "worse",
+     "start": 42.3,
+     "end": 42.55
+    },
+    {
+     "text": "than",
+     "start": 42.55,
+     "end": 42.8
+    },
+    {
+     "text": "a",
+     "start": 42.8,
+     "end": 43.05
+    },
+    {
+     "text": "person.",
+     "start": 43.05,
+     "end": 43.3
+    }
+   ]
+  },
+  {
+   "t": 45297,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single time. This is worse than a person. So yeah.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.34,
+     "end": 34.605
+    },
+    {
+     "text": "with",
+     "start": 34.605,
+     "end": 34.87
+    },
+    {
+     "text": "me.",
+     "start": 34.87,
+     "end": 35.135
+    },
+    {
+     "text": "Great,",
+     "start": 35.135,
+     "end": 35.635
+    },
+    {
+     "text": "I'll",
+     "start": 35.635,
+     "end": 35.788
+    },
+    {
+     "text": "set",
+     "start": 35.788,
+     "end": 35.941
+    },
+    {
+     "text": "up",
+     "start": 35.941,
+     "end": 36.094
+    },
+    {
+     "text": "the",
+     "start": 36.094,
+     "end": 36.247
+    },
+    {
+     "text": "call.",
+     "start": 36.247,
+     "end": 36.4
+    },
+    {
+     "text": "And",
+     "start": 36.4,
+     "end": 36.9
+    },
+    {
+     "text": "honestly,",
+     "start": 36.9,
+     "end": 37.4
+    },
+    {
+     "text": "the",
+     "start": 37.4,
+     "end": 37.733
+    },
+    {
+     "text": "whole",
+     "start": 37.733,
+     "end": 38.067
+    },
+    {
+     "text": "onboarding",
+     "start": 38.067,
+     "end": 38.567
+    },
+    {
+     "text": "flow",
+     "start": 38.567,
+     "end": 39.067
+    },
+    {
+     "text": "just",
+     "start": 39.067,
+     "end": 39.511
+    },
+    {
+     "text": "crashes",
+     "start": 39.511,
+     "end": 39.956
+    },
+    {
+     "text": "halfway",
+     "start": 39.956,
+     "end": 40.456
+    },
+    {
+     "text": "through",
+     "start": 40.456,
+     "end": 40.737
+    },
+    {
+     "text": "every",
+     "start": 40.737,
+     "end": 41.019
+    },
+    {
+     "text": "single",
+     "start": 41.019,
+     "end": 41.3
+    },
+    {
+     "text": "time.",
+     "start": 41.3,
+     "end": 41.633
+    },
+    {
+     "text": "This",
+     "start": 41.633,
+     "end": 41.967
+    },
+    {
+     "text": "is",
+     "start": 41.967,
+     "end": 42.3
+    },
+    {
+     "text": "worse",
+     "start": 42.3,
+     "end": 42.55
+    },
+    {
+     "text": "than",
+     "start": 42.55,
+     "end": 42.8
+    },
+    {
+     "text": "a",
+     "start": 42.8,
+     "end": 43.05
+    },
+    {
+     "text": "person.",
+     "start": 43.05,
+     "end": 43.3
+    },
+    {
+     "text": "So",
+     "start": 43.3,
+     "end": 43.763
+    },
+    {
+     "text": "yeah.",
+     "start": 43.763,
+     "end": 44.225
+    }
+   ]
+  },
+  {
+   "t": 45597,
+   "kind": "chunk_final",
+   "is_final": true,
+   "speech_final": false,
+   "text": "Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single time. This is worse than a person. So yeah.",
+   "words": [
+    {
+     "text": "Fine",
+     "start": 34.381,
+     "end": 34.621,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "with",
+     "start": 34.641,
+     "end": 34.761,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "me.",
+     "start": 34.801,
+     "end": 34.861,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "Great,",
+     "start": 35.181,
+     "end": 35.421,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "I'll",
+     "start": 35.521,
+     "end": 35.621,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "set",
+     "start": 35.641,
+     "end": 35.781,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "up",
+     "start": 35.801,
+     "end": 35.881,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "the",
+     "start": 35.941,
+     "end": 36.021,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "call.",
+     "start": 36.081,
+     "end": 36.321,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "And",
+     "start": 36.742,
+     "end": 36.842,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "honestly,",
+     "start": 36.862,
+     "end": 37.262,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "the",
+     "start": 37.602,
+     "end": 37.682,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "whole",
+     "start": 37.722,
+     "end": 37.942,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "onboarding",
+     "start": 38.042,
+     "end": 38.542,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "flow",
+     "start": 38.622,
+     "end": 38.923,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "just",
+     "start": 39.123,
+     "end": 39.283,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "crashes",
+     "start": 39.343,
+     "end": 39.883,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "halfway",
+     "start": 39.943,
+     "end": 40.283,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "through",
+     "start": 40.363,
+     "end": 40.623,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "every",
+     "start": 40.803,
+     "end": 40.983,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "single",
+     "start": 41.064,
+     "end": 41.344,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "time.",
+     "start": 41.384,
+     "end": 41.724,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "This",
+     "start": 42.024,
+     "end": 42.164,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "is",
+     "start": 42.224,
+     "end": 42.304,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "worse",
+     "start": 42.384,
+     "end": 42.664,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "than",
+     "start": 42.684,
+     "end": 42.804,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "a",
+     "start": 42.844,
+     "end": 42.864,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "person.",
+     "start": 42.924,
+     "end": 43.304,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "So",
+     "start": 43.565,
+     "end": 43.645,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "yeah.",
+     "start": 43.705,
+     "end": 43.825,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    }
+   ]
+  },
+  {
+   "t": 46556,
+   "kind": "speech_final",
+   "is_final": true,
+   "speech_final": true,
+   "text": "But it's such a painful process to get me to be checked and regulatory compliant and have to upload driver's licenses and things like that. Yeah, yeah. That I thought I'd actually much rather talk to a person because this is just like their flows are broken in the middle. Right. And they're asking for things that don't exist and it's just like no. I'd rather just talk to a person at this point. So what did you do in the end? Did you ever get through to anyone? I gave up and sent them an email which they still haven't answered. Okay. Then I think we should just call them first thing tomorrow morning. Fine with me. Great, I'll set up the call. And honestly, the whole onboarding flow just crashes halfway through every single time. This is worse than a person. So yeah.",
+   "words": [
+    {
+     "text": "But",
+     "start": 0.001,
+     "end": 0.101,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "it's",
+     "start": 0.121,
+     "end": 0.241,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "such",
+     "start": 0.341,
+     "end": 0.562,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "a",
+     "start": 0.602,
+     "end": 0.622,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "painful",
+     "start": 0.702,
+     "end": 1.142,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "process",
+     "start": 1.203,
+     "end": 1.824,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 2.164,
+     "end": 2.224,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "get",
+     "start": 2.304,
+     "end": 2.465,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "me",
+     "start": 2.505,
+     "end": 2.565,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 2.685,
+     "end": 2.765,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "be",
+     "start": 2.845,
+     "end": 2.945,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "checked",
+     "start": 3.126,
+     "end": 3.506,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 3.727,
+     "end": 3.827,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "regulatory",
+     "start": 3.907,
+     "end": 4.448,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "compliant",
+     "start": 4.508,
+     "end": 5.049,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 5.089,
+     "end": 5.189,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "have",
+     "start": 5.209,
+     "end": 5.369,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "to",
+     "start": 5.389,
+     "end": 5.449,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "upload",
+     "start": 5.569,
+     "end": 6.07,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "driver's",
+     "start": 6.19,
+     "end": 6.631,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "licenses",
+     "start": 6.691,
+     "end": 7.372,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "and",
+     "start": 7.432,
+     "end": 7.553,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "things",
+     "start": 7.593,
+     "end": 7.833,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "like",
+     "start": 7.873,
+     "end": 8.073,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "that.",
+     "start": 8.093,
+     "end": 8.354,
+     "speaker": 0,
+     "speaker_confidence": 0.9994
+    },
+    {
+     "text": "Yeah,",
+     "start": 8.694,
+     "end": 8.835,
+     "speaker": 1,
+     "speaker_confidence": 0.9594
+    },
+    {
+     "text": "yeah.",
+     "start": 8.875,
+     "end": 9.015,
+     "speaker": 1,
+     "speaker_confidence": 0.9594
+    },
+    {
+     "text": "That",
+     "start": 9.215,
+     "end": 9.315,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "I",
+     "start": 9.416,
+     "end": 9.436,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "thought",
+     "start": 9.476,
+     "end": 9.656,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "I'd",
+     "start": 9.716,
+     "end": 9.796,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "actually",
+     "start": 9.836,
+     "end": 10.117,
+     "speaker": 0,
+     "speaker_confidence": 0.996
+    },
+    {
+     "text": "much",
+     "start": 10.157,
+     "end": 10.317,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "rather",
+     "start": 10.357,
+     "end": 11.218,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "talk",
+     "start": 10.74,
+     "end": 10.82,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "to",
+     "start": 10.86,
+     "end": 10.92,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "a",
+     "start": 10.981,
+     "end": 11.001,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "person",
+     "start": 11.061,
+     "end": 11.422,
+     "speaker": 0,
+     "speaker_confidence": 0.9932
+    },
+    {
+     "text": "because",
+     "start": 12.484,
+     "end": 12.744,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "this",
+     "start": 12.744,
+     "end": 12.905,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "is",
+     "start": 12.945,
+     "end": 13.025,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "just",
+     "start": 13.085,
+     "end": 13.265,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "like",
+     "start": 13.306,
+     "end": 13.506,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "their",
+     "start": 13.606,
+     "end": 13.787,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "flows",
+     "start": 13.867,
+     "end": 14.167,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "are",
+     "start": 14.207,
+     "end": 14.308,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "broken",
+     "start": 14.328,
+     "end": 14.668,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "in",
+     "start": 14.709,
+     "end": 14.769,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "the",
+     "start": 14.789,
+     "end": 14.869,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "middle.",
+     "start": 14.889,
+     "end": 15.149,
+     "speaker": 0,
+     "speaker_confidence": 0.9968
+    },
+    {
+     "text": "Right.",
+     "start": 15.29,
+     "end": 15.51,
+     "speaker": 1,
+     "speaker_confidence": 0.9545
+    },
+    {
+     "text": "And",
+     "start": 15.671,
+     "end": 15.751,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "they're",
+     "start": 15.751,
+     "end": 15.891,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "asking",
+     "start": 15.991,
+     "end": 16.352,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "for",
+     "start": 16.392,
+     "end": 16.492,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "things",
+     "start": 16.552,
+     "end": 16.793,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "that",
+     "start": 16.833,
+     "end": 16.933,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "don't",
+     "start": 16.993,
+     "end": 17.194,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "exist",
+     "start": 17.254,
+     "end": 17.815,
+     "speaker": 0,
+     "speaker_confidence": 0.9978
+    },
+    {
+     "text": "and",
+     "start": 18.517,
+     "end": 18.597,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "it's",
+     "start": 18.637,
+     "end": 18.757,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "just",
+     "start": 18.797,
+     "end": 18.978,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "like",
+     "start": 19.018,
+     "end": 19.218,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "no.",
+     "start": 19.318,
+     "end": 19.439,
+     "speaker": 0,
+     "speaker_confidence": 0.9852
+    },
+    {
+     "text": "I'd",
+     "start": 19.081,
+     "end": 20.385,
+     "speaker": 0,
+     "speaker_confidence": 0.9846
+    },
+    {
+     "text": "rather",
+     "start": 20.425,
+     "end": 20.666,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "just",
+     "start": 20.726,
+     "end": 20.926,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "talk",
+     "start": 20.967,
+     "end": 21.167,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "to",
+     "start": 21.207,
+     "end": 21.267,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "a",
+     "start": 21.328,
+     "end": 21.348,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "person",
+     "start": 21.408,
+     "end": 21.749,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "at",
+     "start": 21.809,
+     "end": 21.869,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "this",
+     "start": 21.909,
+     "end": 22.07,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "point.",
+     "start": 22.13,
+     "end": 22.431,
+     "speaker": 0,
+     "speaker_confidence": 0.9955
+    },
+    {
+     "text": "So",
+     "start": 22.772,
+     "end": 22.832,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "what",
+     "start": 22.872,
+     "end": 22.972,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "did",
+     "start": 23.012,
+     "end": 23.112,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "you",
+     "start": 23.132,
+     "end": 23.213,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "do",
+     "start": 23.253,
+     "end": 23.313,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "in",
+     "start": 23.413,
+     "end": 23.473,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "the",
+     "start": 23.493,
+     "end": 23.554,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "end?",
+     "start": 23.654,
+     "end": 23.834,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "Did",
+     "start": 23.955,
+     "end": 24.075,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "you",
+     "start": 24.095,
+     "end": 24.155,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "ever",
+     "start": 24.195,
+     "end": 24.336,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "get",
+     "start": 24.376,
+     "end": 24.496,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "through",
+     "start": 24.536,
+     "end": 24.717,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "to",
+     "start": 24.717,
+     "end": 24.777,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "anyone?",
+     "start": 24.837,
+     "end": 25.178,
+     "speaker": 1,
+     "speaker_confidence": 0.9956
+    },
+    {
+     "text": "I",
+     "start": 25.965,
+     "end": 25.985,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "gave",
+     "start": 26.025,
+     "end": 26.226,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "up",
+     "start": 26.286,
+     "end": 26.406,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "and",
+     "start": 28.834,
+     "end": 29.255,
+     "speaker": 0,
+     "speaker_confidence": 0.9971
+    },
+    {
+     "text": "sent",
+     "start": 29.48,
+     "end": 29.641,
+     "speaker": 0,
+     "speaker_confidence": 0.9531
+    },
+    {
+     "text": "them",
+     "start": 29.681,
+     "end": 29.781,
+     "speaker": 1,
+     "speaker_confidence": 0.9476
+    },
+    {
+     "text": "an",
+     "start": 29.842,
+     "end": 29.922,
+     "speaker": 1,
+     "speaker_confidence": 0.9773
+    },
+    {
+     "text": "email",
+     "start": 29.922,
+     "end": 30.022,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "which",
+     "start": 30.022,
+     "end": 30.123,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "they",
+     "start": 30.123,
+     "end": 30.243,
+     "speaker": 1,
+     "speaker_confidence": 0.9868
+    },
+    {
+     "text": "still",
+     "start": 30.263,
+     "end": 30.524,
+     "speaker": 1,
+     "speaker_confidence": 0.9722
+    },
+    {
+     "text": "haven't",
+     "start": 30.585,
+     "end": 31.047,
+     "speaker": 1,
+     "speaker_confidence": 0.889
+    },
+    {
+     "text": "answered.",
+     "start": 31.047,
+     "end": 31.288,
+     "speaker": 1,
+     "speaker_confidence": 0.946
+    },
+    {
+     "text": "Okay.",
+     "start": 31.288,
+     "end": 31.368,
+     "speaker": 1,
+     "speaker_confidence": 0.9781
+    },
+    {
+     "text": "Then",
+     "start": 31.368,
+     "end": 31.488,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "I",
+     "start": 31.569,
+     "end": 31.589,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "think",
+     "start": 31.629,
+     "end": 31.79,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "we",
+     "start": 31.81,
+     "end": 31.87,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "should",
+     "start": 31.91,
+     "end": 32.051,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "just",
+     "start": 32.071,
+     "end": 32.211,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "call",
+     "start": 32.231,
+     "end": 32.412,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "them",
+     "start": 32.432,
+     "end": 32.533,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "first",
+     "start": 32.633,
+     "end": 32.874,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "thing",
+     "start": 32.914,
+     "end": 33.095,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "tomorrow",
+     "start": 33.155,
+     "end": 33.497,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "morning.",
+     "start": 33.557,
+     "end": 33.878,
+     "speaker": 1,
+     "speaker_confidence": 0.9964
+    },
+    {
+     "text": "Fine",
+     "start": 34.381,
+     "end": 34.621,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "with",
+     "start": 34.641,
+     "end": 34.761,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "me.",
+     "start": 34.801,
+     "end": 34.861,
+     "speaker": 0,
+     "speaker_confidence": 0.9876
+    },
+    {
+     "text": "Great,",
+     "start": 35.181,
+     "end": 35.421,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "I'll",
+     "start": 35.521,
+     "end": 35.621,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "set",
+     "start": 35.641,
+     "end": 35.781,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "up",
+     "start": 35.801,
+     "end": 35.881,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "the",
+     "start": 35.941,
+     "end": 36.021,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "call.",
+     "start": 36.081,
+     "end": 36.321,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "And",
+     "start": 36.742,
+     "end": 36.842,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "honestly,",
+     "start": 36.862,
+     "end": 37.262,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "the",
+     "start": 37.602,
+     "end": 37.682,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "whole",
+     "start": 37.722,
+     "end": 37.942,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "onboarding",
+     "start": 38.042,
+     "end": 38.542,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "flow",
+     "start": 38.622,
+     "end": 38.923,
+     "speaker": 1,
+     "speaker_confidence": 0.9706
+    },
+    {
+     "text": "just",
+     "start": 39.123,
+     "end": 39.283,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "crashes",
+     "start": 39.343,
+     "end": 39.883,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "halfway",
+     "start": 39.943,
+     "end": 40.283,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "through",
+     "start": 40.363,
+     "end": 40.623,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "every",
+     "start": 40.803,
+     "end": 40.983,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "single",
+     "start": 41.064,
+     "end": 41.344,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "time.",
+     "start": 41.384,
+     "end": 41.724,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "This",
+     "start": 42.024,
+     "end": 42.164,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "is",
+     "start": 42.224,
+     "end": 42.304,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "worse",
+     "start": 42.384,
+     "end": 42.664,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "than",
+     "start": 42.684,
+     "end": 42.804,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "a",
+     "start": 42.844,
+     "end": 42.864,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "person.",
+     "start": 42.924,
+     "end": 43.304,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "So",
+     "start": 43.565,
+     "end": 43.645,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    },
+    {
+     "text": "yeah.",
+     "start": 43.705,
+     "end": 43.825,
+     "speaker": 0,
+     "speaker_confidence": 0.9909
+    }
+   ]
+  },
+  {
+   "t": 47171,
+   "kind": "interim",
+   "is_final": false,
+   "speech_final": false,
+   "text": "",
+   "words": []
+  }
+ ]
+}

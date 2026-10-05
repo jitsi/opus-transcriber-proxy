@@ -123,16 +123,26 @@ export const config = {
 		granularMinWords: parseIntOrDefault(process.env.XAI_GRANULAR_MIN_WORDS, 5),
 		// Upper bound on how long a turn can go without a final in the default (one final per
 		// turn) mode. xAI commits the segments of a turn with is_final=true as it goes, but only
-		// the end-of-turn speech_final produces a final. A speaker who talks without a pause long
-		// enough for xAI to call end-of-speech gets no final at all — since 2026-09-19 that is any
-		// continuous monologue, because xAI stopped sending speech_final at the short pauses it
-		// used to. Once a turn is older than this, its committed segments are emitted as a final —
-		// by a per-turn timer when it reaches the cap, or by the next commit past it; the later
-		// speech_final then emits only the rest. 0 disables.
+		// the end-of-turn speech_final produces a final, and speech_final needs `endpointing` ms
+		// of silence — a speaker who never pauses that long gets no final at all. Once a turn is
+		// older than this, its committed segments are emitted as a final — by a per-turn timer
+		// when it reaches the cap, or by the next commit past it; the later speech_final then
+		// emits only the rest. 0 disables the cap and the word budget below with it.
 		maxTurnMs: parseIntOrDefault(process.env.XAI_MAX_TURN_MS, 4000),
+		// Word budget for the held segments, so what the cap releases is caption-sized rather than
+		// whatever accumulated before the clock ran out (captioning guides put a block at ~2 lines,
+		// 6 s, 20-40 words). The held segments go out once they hold at least the soft budget AND
+		// the last one ends a sentence, or at the hard ceiling regardless; a single committed
+		// segment longer than the ceiling is cut at its largest inter-word pause (xAI's word
+		// timestamps) or, failing that, at a sentence end, into pieces between the two budgets.
+		// The time cap stays as the backstop for a slow speaker who never fills the budget.
+		// 0 disables that budget (soft 0 = never flush early on a sentence end; hard 0 = never
+		// flush or split on size).
+		turnSoftMaxWords: parseIntOrDefault(process.env.XAI_TURN_SOFT_MAX_WORDS, 20),
+		turnHardMaxWords: parseIntOrDefault(process.env.XAI_TURN_HARD_MAX_WORDS, 35),
 		// How long after the idle silence forceCommit() injects to wait for xAI's speech_final before
 		// ending the turn without it (see the long-turn cap). xAI answered the silence within ~0.5s
-		// when forceCommit() was verified; since 2026-09-19 it does not always answer at all.
+		// when forceCommit() was verified, but has been seen not to answer at all.
 		idleTurnEndGraceMs: parseIntOrDefault(process.env.XAI_IDLE_TURN_END_GRACE_MS, 3000),
 	},
 

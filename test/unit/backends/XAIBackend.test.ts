@@ -132,6 +132,8 @@ vi.mock('../../../src/config', () => ({
 			granularGuardWords: 3,
 			granularMinWords: 5,
 			maxTurnMs: 15000,
+			turnSoftMaxWords: 20,
+			turnHardMaxWords: 35,
 			idleTurnEndGraceMs: 3000,
 			// 1 attempt by default so the existing tests see the pre-retry behaviour;
 			// the retry tests raise it. Zero backoff keeps them fast.
@@ -2263,6 +2265,228 @@ describe('XAIBackend', () => {
 
 				expect(finalTexts()).toEqual([endOfTurn.text]);
 			});
+		});
+
+		describe('word budget (XAI_TURN_SOFT_MAX_WORDS / XAI_TURN_HARD_MAX_WORDS)', () => {
+			// Numbered words so a count is a count: "w1 w2 … wN" (+ "." when the segment ends a sentence).
+			const seg = (from: number, n: number, sentence = true) =>
+				Array.from({ length: n }, (_, i) => `w${from + i}`).join(' ') + (sentence ? '.' : '');
+			const countWords = (t: string) => t.split(/\s+/).filter(Boolean).length;
+			let flags: Array<[string, boolean | undefined]>;
+
+			beforeEach(() => {
+				flags = [];
+				backend.onCompleteTranscription = (msg, midUtterance) => {
+					finalResults.push(msg);
+					flags.push([msg.transcript[0].text, midUtterance]);
+				};
+			});
+
+			afterEach(() => {
+				(config.xai as any).turnSoftMaxWords = 20;
+				(config.xai as any).turnHardMaxWords = 35;
+			});
+
+			it('releases the held segments at the soft budget when the last one ends a sentence, well before the time cap', () => {
+				partial(seg(1, 7), true, false); // t=0: 7 words held
+				vi.setSystemTime(1000);
+				partial(seg(8, 7), true, false); // 14 held
+				expect(finalResults).toHaveLength(0);
+				vi.setSystemTime(2000);
+				partial(seg(15, 7), true, false); // 21 >= 20 and ends a sentence
+				expect(finalTexts()).toEqual([`${seg(1, 7)} ${seg(8, 7)} ${seg(15, 7)}`]);
+				expect(flags[0][1]).toBe(true); // an early final: the utterance goes on
+			});
+
+			it('keeps holding past the soft budget while the last segment does not end a sentence', () => {
+				partial(seg(1, 7, false), true, false);
+				partial(seg(8, 7, false), true, false);
+				partial(seg(15, 7, false), true, false); // 21 words, mid-sentence
+				expect(finalResults).toHaveLength(0);
+				partial(seg(22, 5), true, false); // 26 words, ends a sentence
+				expect(finalResults).toHaveLength(1);
+				expect(countWords(finalTexts()[0])).toBe(26);
+			});
+
+			it('releases at the hard ceiling even mid-sentence', () => {
+				for (let i = 0; i < 5; i++) partial(seg(1 + i * 7, 7, false), true, false); // 35 words, no sentence end
+				expect(finalResults).toHaveLength(1);
+				expect(countWords(finalTexts()[0])).toBe(35);
+			});
+
+			it('releases what is held before a segment that would take it past the ceiling, so no block exceeds it', () => {
+				partial(seg(1, 15, false), true, false);
+				partial(seg(16, 15, false), true, false); // 30 held, mid-sentence
+				expect(finalResults).toHaveLength(0);
+				partial(seg(31, 10, false), true, false); // 30 + 10 > 35: the 30 go out first, the 10 stay held
+				expect(finalResults).toHaveLength(1);
+				expect(countWords(finalTexts()[0])).toBe(30);
+				vi.setSystemTime(16000);
+				partial(seg(41, 2), true, false); // the time cap releases the rest
+				expect(countWords(finalTexts()[1])).toBe(12);
+			});
+
+			it('leaves only the time cap when both budgets are 0', () => {
+				(config.xai as any).turnSoftMaxWords = 0;
+				(config.xai as any).turnHardMaxWords = 0;
+				for (let i = 0; i < 6; i++) partial(seg(1 + i * 7, 7), true, false); // 42 words, all ending sentences
+				expect(finalResults).toHaveLength(0);
+				vi.setSystemTime(15000);
+				partial(seg(43, 2), true, false);
+				expect(finalResults).toHaveLength(1);
+				expect(countWords(finalTexts()[0])).toBe(44);
+			});
+
+			it('emits only the rest when speech_final follows a budget flush', () => {
+				partial(seg(1, 10), true, false);
+				partial(seg(11, 10), true, false); // 20 words ending a sentence: flushed
+				expect(finalResults).toHaveLength(1);
+				partial(`${seg(1, 10)} ${seg(11, 10)} ${seg(21, 3)}`, true, true);
+				expect(finalTexts()).toEqual([`${seg(1, 10)} ${seg(11, 10)}`, seg(21, 3)]);
+				expect(flags.map((f) => f[1])).toEqual([true, false]);
+				expect(warnLogs()).toEqual([]);
+			});
+
+			describe('a single segment longer than the hard ceiling', () => {
+				// xAI word entries with timestamps: `gapAfter` ms of silence before the next word.
+				type Spec = { text: string; speaker?: number; gapAfter?: number };
+				const timed = (specs: Spec[]) => {
+					let t = 0;
+					return specs.map((w) => {
+						const start = t;
+						const end = start + 0.2;
+						t = end + (w.gapAfter ?? 100) / 1000;
+						return { text: w.text, start, end, ...(w.speaker !== undefined && { speaker: w.speaker }) };
+					});
+				};
+				const run = (from: number, n: number, extra: Partial<Spec> = {}, last: Partial<Spec> = {}): Spec[] =>
+					Array.from({ length: n }, (_, i) => ({ text: `w${from + i}`, ...extra, ...(i === n - 1 ? last : {}) }));
+
+				it('is cut at the longest pause that also ends a sentence, over a longer pause that does not', () => {
+					const words = timed([
+						...run(1, 25, {}, { text: 'w25.', gapAfter: 400 }), // sentence end + 400 ms pause at word 25
+						...run(26, 5, {}, { gapAfter: 600 }), // longer pause at word 30, mid-sentence
+						...run(31, 10, {}, { text: 'w40.' }),
+					]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([25, 15]);
+					expect(finalTexts()[0].endsWith('w25.')).toBe(true);
+					expect(flags.every((f) => f[1] === true)).toBe(true);
+				});
+
+				it('is cut at the longest pause when no pause in range ends a sentence', () => {
+					const words = timed([...run(1, 28, {}, { gapAfter: 350 }), ...run(29, 12, {}, { text: 'w40.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([28, 12]);
+				});
+
+				it('is cut at the last sentence end in range when no pause is long enough', () => {
+					const words = timed([...run(1, 22, {}, { text: 'w22.' }), ...run(23, 18, {}, { text: 'w40.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([22, 18]);
+				});
+
+				it('is cut at the ceiling when there is neither a pause nor a sentence end in range', () => {
+					const words = timed(run(1, 40, {}, { text: 'w40.' }));
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([35, 5]);
+				});
+
+				it('keeps each piece under its own speakers when diarized', () => {
+					(config.xai as any).diarize = true;
+					try {
+						const words = timed([
+							...run(1, 24, { speaker: 0 }, { text: 'w24.', gapAfter: 400 }),
+							...run(25, 16, { speaker: 1 }, { text: 'w40.' }),
+						]);
+						partial(words.map((w) => w.text).join(' '), true, false, words);
+						expect(finalResults.map((m) => [countWords(m.transcript[0].text), m.speaker])).toEqual([
+							[24, 0],
+							[16, 1],
+						]);
+					} finally {
+						(config.xai as any).diarize = false;
+					}
+				});
+
+				it('is cut only at a sentence end when the words carry no timestamps, and left whole when they have none', () => {
+					partial(`${seg(1, 22)} ${seg(23, 18)}`, true, false); // no words at all
+					expect(finalTexts().map(countWords)).toEqual([22, 18]);
+					finalResults.length = 0;
+					partial(seg(41, 40, false), true, false); // 40 words, no sentence end, no timestamps
+					expect(finalTexts().map(countWords)).toEqual([40]);
+				});
+
+				it('releases what was held before it first, in order, and reconciles the speech_final after it', () => {
+					partial(seg(1, 5), true, false); // held
+					const words = timed([...run(6, 25, {}, { text: 'w30.', gapAfter: 400 }), ...run(31, 12, {}, { text: 'w42.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([5, 25, 12]);
+					partial(`${seg(1, 5)} ${words.map((w) => w.text).join(' ')} ${seg(43, 2)}`, true, true);
+					expect(finalTexts()[3]).toBe(seg(43, 2));
+					expect(warnLogs()).toEqual([]);
+				});
+			});
+		});
+
+		describe('replaying a diarized two-speaker stream (fixtures captured 2026-10-05)', () => {
+			// Two TTS voices on one stream, xAI diarize=true, after xAI fixed its is_final labels:
+			// every is_final word carries speaker/start/end and the labels agree with the speech_final's.
+			const norm = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+			const labelled = (words: any[]) =>
+				words.map((w) => [norm(w.text), w.speaker] as [string, number]).filter((p) => p[0]);
+			const replay = (events: any[]) => {
+				for (const e of events) {
+					vi.setSystemTime(e.t);
+					partial(e.text, e.is_final, e.speech_final, e.words);
+				}
+			};
+			const emitted = () =>
+				finalResults.flatMap((m) =>
+					m.transcript[0].text
+						.split(/\s+/)
+						.map(norm)
+						.filter(Boolean)
+						.map((w) => [w, m.speaker] as [string, number | undefined]),
+				);
+
+			beforeEach(() => {
+				(config.xai as any).diarize = true;
+				(config.xai as any).maxTurnMs = 5000; // the deployed value
+			});
+			afterEach(() => {
+				(config.xai as any).diarize = false;
+			});
+
+			for (const name of ['paused', 'fluent']) {
+				const fixture = require(`../../fixtures/xai-diarized-dialog-${name}.json`);
+				const speechFinalAt = fixture.events.findIndex((e: any) => e.speech_final);
+				const speechFinal = fixture.events[speechFinalAt];
+
+				it(`${name}: emits every word exactly once, in order, under the speaker the speech_final gives it`, () => {
+					replay(fixture.events);
+					expect(finalResults.length).toBeGreaterThan(3);
+					expect(emitted()).toEqual(labelled(speechFinal.words));
+					expect(finalResults.every((m) => m.speaker !== undefined)).toBe(true);
+					expect(warnLogs()).toEqual([]);
+				});
+
+				it(`${name}: no final is longer than the hard ceiling`, () => {
+					replay(fixture.events);
+					const longest = Math.max(...finalResults.map((m) => m.transcript[0].text.split(/\s+/).length));
+					expect(longest).toBeLessThanOrEqual(35);
+				});
+
+				it(`${name}: still emits every word when the speech_final never comes`, () => {
+					replay(fixture.events.slice(0, speechFinalAt));
+					vi.advanceTimersByTime(5000); // the cap timer releases whatever is still held
+					const got = emitted().map((p) => p[0]);
+					const want = labelled(speechFinal.words).map((p) => p[0]);
+					// The last is_final may not have been committed by xAI yet when the stream ends.
+					expect(want.join(' ').startsWith(got.join(' '))).toBe(true);
+					expect(got.length).toBeGreaterThan(want.length - 10);
+				});
+			}
 		});
 	});
 
