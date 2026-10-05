@@ -2426,6 +2426,58 @@ describe('XAIBackend', () => {
 					expect(finalTexts().map(countWords)).toEqual([24, 16]);
 				});
 
+				it('makes no piece shorter than half the ceiling when the soft budget is 0', () => {
+					(config.xai as any).turnSoftMaxWords = 0;
+					const words = timed([...run(1, 1, {}, { gapAfter: 900 }), ...run(2, 20, {}, { gapAfter: 500 }), ...run(22, 19, {}, { text: 'w40.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					// The 900 ms pause after w1 is ignored (a one-word caption); the 500 ms one at w21 is taken.
+					expect(finalTexts().map(countWords)).toEqual([21, 19]);
+				});
+
+				it('gives the first piece the speaker the whole segment would have had when its own words are unlabelled', () => {
+					(config.xai as any).diarize = true;
+					try {
+						const words = timed([...run(1, 24, {}, { text: 'w24.', gapAfter: 400 }), ...run(25, 16, { speaker: 1 }, { text: 'w40.' })]);
+						partial(words.map((w) => w.text).join(' '), true, false, words);
+						// Unsplit, emitDiarized would seed the leading unlabelled words from the first label (1).
+						expect(finalResults.map((m) => [countWords(m.transcript[0].text), m.speaker])).toEqual([
+							[24, 1],
+							[16, 1],
+						]);
+					} finally {
+						(config.xai as any).diarize = false;
+					}
+				});
+
+				it('rebuilds a piece of a language written without spaces with no spaces', () => {
+					// Forty distinct two-character Han "words" (no digits: a digit would end a word in a spaced script).
+					const cjk = Array.from({ length: 40 }, (_, i) => String.fromCharCode(0x4e00 + i, 0x5200 + i));
+					cjk[24] += '。';
+					const words = timed(cjk.map((text, i) => ({ text, gapAfter: i === 24 ? 400 : 100 })));
+					partial(cjk.join(''), true, false, words);
+					expect(finalTexts()[0]).toBe(cjk.slice(0, 25).join(''));
+					expect(finalTexts()[0]).not.toContain(' ');
+					// (No text-only variant: how many UAX #29 words an unspaced string holds depends on ICU's
+					// dictionary, so whether it is over the ceiling at all is not something a test can pin.)
+				});
+
+				it('cuts between entries even when one entry renders to several words', () => {
+					const words = timed([...run(1, 23, {}, { text: 'w23-and-w24.', gapAfter: 400 }), ...run(25, 16, {}, { text: 'w40.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts()[0].endsWith('w23-and-w24.')).toBe(true);
+					expect(finalTexts()).toHaveLength(2);
+				});
+
+				it('is still cut into pieces when it arrives after the time cap has passed', () => {
+					partial('alpha beta.', true, false);
+					vi.setSystemTime(16000);
+					partial('gamma delta.', true, false); // past the cap: flushes both, and every later commit flushes at once
+					finalResults.length = 0;
+					const words = timed([...run(1, 25, {}, { text: 'w25.', gapAfter: 400 }), ...run(26, 15, {}, { text: 'w40.' })]);
+					partial(words.map((w) => w.text).join(' '), true, false, words);
+					expect(finalTexts().map(countWords)).toEqual([25, 15]);
+				});
+
 				it('is cut only at a sentence end when the words carry no timestamps, and left whole when they have none', () => {
 					partial(`${seg(1, 22)} ${seg(23, 18)}`, true, false); // no words at all
 					expect(finalTexts().map(countWords)).toEqual([22, 18]);

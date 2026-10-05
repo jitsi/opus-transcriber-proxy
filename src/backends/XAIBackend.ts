@@ -102,12 +102,12 @@ const XAI_RETRY_AFTER_MAX_MS = XAI_CONNECT_BACKOFF_MAX_MS;
 // waits out the remainder, bounded by XAI_RETRY_AFTER_MAX_MS like every other wait here.
 let connectCooldownUntil = 0;
 
-/** Clears the process-wide connect cooldown. Test hook only. */
 /** Test hook: let the budget-order warning fire again. */
 export function resetXAIBudgetWarning(): void {
 	warnedBudgetOrder = false;
 }
 
+/** Clears the process-wide connect cooldown. Test hook only. */
 export function resetXAIConnectCooldown(): void {
 	connectCooldownUntil = 0;
 }
@@ -210,8 +210,8 @@ const wordSegmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 
 /**
  * A word of xAI's `words` array. Loosely typed on purpose: xAI documents no shape for it, and every
- * field has been seen absent (`speaker` on trailing words since 2026-09-19, `punctuated_word` on some
- * streams), so each use handles a missing one.
+ * field has been seen absent (`speaker` on the trailing words of a committed segment, `punctuated_word`
+ * on some streams), so each use handles a missing one.
  */
 interface XAIWord {
 	text?: string;
@@ -335,7 +335,8 @@ function joinText(parts: string[]): string {
 // A sentence terminator (Unicode Sentence_Terminal: ., ?, !, 。, ।, ۔, ։, ።, ။, ។ …) possibly followed
 // by closing quotes/brackets, at the end of a piece of text. Greek's `;` question mark is not in
 // the property and Thai/Lao have no terminator, so the budget rules that use this only ever delay a
-// flush up to the hard ceiling for them; they never force a bad cut.
+// flush up to the hard ceiling for them; they never force a bad cut. An abbreviation ("Dr.", "etc.")
+// passes as a sentence end, which can move a release by a few words; harmless.
 const SENTENCE_END_RE = /\p{Sentence_Terminal}[\p{Pe}\p{Pf}"'”’)\]]*$/u;
 
 function endsSentence(text: string): boolean {
@@ -390,14 +391,16 @@ function pauseBefore(words: XAIWord[], k: number): number | undefined {
  */
 function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWords: number): HeldSegment[] {
 	if (hardMaxWords <= 0) return [segment];
-	const minLen = softMaxWords > 0 ? Math.min(softMaxWords, hardMaxWords) : 1;
+	// The shortest piece worth making: the soft budget, or half the ceiling when the soft budget is
+	// off (it means "no early release on a sentence end", not "a one-word caption is fine").
+	const minLen = Math.min(softMaxWords > 0 ? softMaxWords : Math.ceil(hardMaxWords / 2), hardMaxWords);
 	if (segment.words) {
+		if (segment.words.length <= hardMaxWords) return [segment];
+		const words = seedLeadingSpeaker(segment.words);
 		// Measured in `words` entries here, since that is where the cuts can go, while the budget in
 		// commitSegment counts UAX #29 words of the text. The two agree for a language written with
 		// spaces; for one written without (where an entry may hold several words, or one word
 		// several entries) a piece can land a few words either side of the budget, which is fine.
-		const words = segment.words;
-		if (words.length <= hardMaxWords) return [segment];
 		const pieces: HeldSegment[] = [];
 		let start = 0;
 		while (words.length - start > hardMaxWords) {
@@ -442,6 +445,19 @@ function splitLongSegment(segment: HeldSegment, softMaxWords: number, hardMaxWor
 	// no timestamps there is nowhere better to cut it, and a long block beats a block cut mid-phrase.
 	pieces.push(heldSegment(text, undefined));
 	return pieces;
+}
+
+/**
+ * The words with their leading unlabelled entries given the segment's first speaker label, so the
+ * first piece of a cut segment goes out under the speaker the whole segment would have (emitDiarized
+ * seeds leading unlabelled words from the first label found, which a cut could leave in a later piece).
+ * Copies the entries it labels; the rest are shared.
+ */
+function seedLeadingSpeaker(words: XAIWord[]): XAIWord[] {
+	const first = words.findIndex((w) => w?.speaker !== undefined);
+	if (first <= 0) return words;
+	const speaker = words[first].speaker;
+	return words.map((w, i) => (i < first ? { ...w, speaker } : w));
 }
 
 function pieceOf(words: XAIWord[]): HeldSegment {
@@ -1426,6 +1442,7 @@ export class XAIBackend implements TranscriptionBackend {
 		const segments = this.pendingSegments;
 		this.pendingSegments = [];
 		const segmentText = joinText(segments.map((s) => s.text));
+		if (!segmentText) return; // entries that render to nothing: there is no final to send
 		// A segment xAI sent without `words`, or with none of them labelled, still belongs to the turn's
 		// speaker: its text stands in as unlabelled words, which emitDiarized gives to the speaker before
 		// them (the speaker the turn was last emitted under, when no held word is labelled). The
@@ -1753,10 +1770,10 @@ export class XAIBackend implements TranscriptionBackend {
 
 	/**
 	 * Emit the words as one message per run of consecutive same-speaker words. A word with no
-	 * `speaker` belongs to the speaker of the word before it: since 2026-09-19 xAI's committed
-	 * segments (is_final) often leave their trailing words unlabelled while the speech_final
-	 * labels every word, and treating "no label" as a speaker change would cut one sentence into
-	 * two finals, the second with no speaker at all. Leading unlabelled words take `priorSpeaker`
+	 * `speaker` belongs to the speaker of the word before it: xAI has sent committed segments
+	 * (is_final) with their trailing words unlabelled while the speech_final labelled every word,
+	 * and treating "no label" as a speaker change would cut one sentence into two finals, the
+	 * second with no speaker at all. Leading unlabelled words take `priorSpeaker`
 	 * (the speaker the words before this slice were emitted under), else the first label found.
 	 */
 	private emitDiarized(
