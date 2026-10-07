@@ -350,6 +350,8 @@ function heldSegment(text: string, words: XAIWord[] | undefined): HeldSegment {
 
 // Said once per process: the budgets are deployment-wide, so saying it per connection would be noise.
 let warnedBudgetOrder = false;
+// Likewise for XAI_IDLE_FLUSH=silence being overridden on the raw-Opus path.
+let warnedSilenceOnOpus = false;
 
 /** Warn, once, when the soft budget cannot fire because the hard ceiling is below it. */
 function checkBudgetOrder(softMaxWords: number, hardMaxWords: number): void {
@@ -676,9 +678,9 @@ export class XAIBackend implements TranscriptionBackend {
 	// The whole of the last turn that ended, carried: a transcript.done arriving with no turn in
 	// progress is reconciled against it (see handleDone).
 	private lastTurn?: EmittedTurn;
-	// Ends the turn when xAI sends no speech_final after the idle silence (see forceCommit()).
+	// Ends the turn when xAI sends no speech_final after the idle flush (see forceCommit()).
 	private idleTurnEndTimer?: ReturnType<typeof setTimeout>;
-	// A turn ended after the last audio was sent, so there is nothing for an idle silence to finalize.
+	// A turn ended after the last audio was sent, so there is nothing for an idle flush to finalize.
 	private turnEndedSinceAudio = false;
 	// Failed-utterance errors since the last non-empty transcript (see XAI_UTTERANCE_FAILED_RE).
 	private consecutiveUtteranceFailures = 0;
@@ -1156,10 +1158,14 @@ export class XAIBackend implements TranscriptionBackend {
 			// nothing to emit, e.g. because the long-turn cap had emitted it all, clears no idle
 			// timer in the owner), and no turn has started since. There is nothing left to finalize.
 			// A turn opened since — from audio sent before that speech_final arrived — still needs it.
-			logger.debug(`Skipping idle silence for tag ${this.tag}: the turn already ended after the last audio`);
+			logger.debug(`Skipping idle flush for tag ${this.tag}: the turn already ended after the last audio`);
 			return;
 		}
 		if (config.xai.idleFlush === 'finalize' || this.sendsOpus()) {
+			if (config.xai.idleFlush !== 'finalize' && !warnedSilenceOnOpus) {
+				warnedSilenceOnOpus = true;
+				logger.warn('XAI_IDLE_FLUSH=silence has no effect on a raw-Opus stream (there is no PCM silence to inject); using finalize');
+			}
 			try {
 				this.ws.send(JSON.stringify({ type: 'finalize' }));
 				logger.debug(`Sent finalize to flush xAI final (WS kept open) for tag ${this.tag}`);
@@ -1194,7 +1200,7 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	/**
-	 * End a turn in progress if xAI answers the idle silence with no speech_final. Otherwise the
+	 * End a turn in progress if xAI answers the idle flush with no speech_final. Otherwise the
 	 * turn would stay open across the silence, and every segment the speaker commits minutes later
 	 * would go out at once as past the cap. What xAI committed is flushed and the turn's clock
 	 * stops; interim text it never committed is not emitted here.

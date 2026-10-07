@@ -771,6 +771,25 @@ describe('XAIBackend', () => {
 			expect(sent[0].length).toBe(Math.round((16000 * (300 + 300)) / 1000) * 2);
 		});
 
+		it('arms the idle turn end for the silence length plus the grace period on the silence path', async () => {
+			(config.xai as any).idleFlush = 'silence';
+			vi.useFakeTimers();
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect(DEFAULT_CONFIG);
+				getMockWs().simulateOpen();
+				await connectPromise;
+				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: true, speech_final: false, text: 'alpha beta.' }));
+				backend.forceCommit();
+				vi.advanceTimersByTime(3000); // the finalize path's grace alone: too early for the silence path
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(false);
+				vi.advanceTimersByTime(850 + 300); // plus the silence length
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(true);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it('always uses finalize on the raw-Opus path, since there is no PCM silence to inject', async () => {
 			(config.xai as any).idleFlush = 'silence';
 			(config.xai as any).encoding = 'opus';
@@ -785,6 +804,7 @@ describe('XAIBackend', () => {
 			const sent = getMockWs().getSentMessages();
 			expect(sent).toHaveLength(1);
 			expect(JSON.parse(sent[0])).toEqual({ type: 'finalize' });
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('XAI_IDLE_FLUSH=silence has no effect'))).toBe(true);
 		});
 	});
 
@@ -804,6 +824,7 @@ describe('XAIBackend', () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const input = { encoding: 'opus' as const, sampleRate: 48000, channels: 2 };
 			const got = backend.getDesiredAudioFormat(input);
+			// The channel count is copied, not acted on: WebRTC signals 2 and encodes mono, which xAI takes.
 			expect(got).toEqual(input);
 			expect(got).not.toBe(input);
 		});
