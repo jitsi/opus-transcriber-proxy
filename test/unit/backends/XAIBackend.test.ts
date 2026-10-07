@@ -827,6 +827,15 @@ describe('XAIBackend', () => {
 			expect(url.searchParams.get('interim_results')).toBe('true');
 		});
 
+		it('declares pcm when XAI_ENCODING=opus but the format was never negotiated', async () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG); // no getDesiredAudioFormat() first
+			getMockWs().simulateOpen();
+			await connectPromise;
+			expect(new URL(getMockWs().url).searchParams.get('encoding')).toBe('pcm');
+		});
+
 		it('declares pcm at 16 kHz when the pass-through did not apply (Ogg input)', async () => {
 			(config.xai as any).encoding = 'opus';
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
@@ -1847,7 +1856,7 @@ describe('XAIBackend', () => {
 			partial('gamma delta.', true, false); // emitted past the cap
 			partial('epsilon.', true, false); // likewise
 			backend.forceCommit();
-			vi.advanceTimersByTime(3000);
+			vi.advanceTimersByTime(3000); // the idle turn end: XAI_IDLE_TURN_END_GRACE_MS after the finalize was sent
 			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(true);
 
 			// Minutes later a new turn starts fresh: held inside its own cap, not emitted at once,

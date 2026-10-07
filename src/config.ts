@@ -4,6 +4,18 @@ import { validateTags } from './utils';
 // Load environment variables from .env file
 dotenv.config();
 
+/**
+ * An env var restricted to a fixed set of values. A value outside the set falls back to the default
+ * with a warning on stderr (config loads before the logger), rather than being cast and silently
+ * misread: an operator who sets XAI_ENCODING=pcm should learn that it meant nothing.
+ */
+function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
+	if (raw === undefined || raw === '') return fallback;
+	if ((allowed as readonly string[]).includes(raw)) return raw as T;
+	console.warn(`${name}=${JSON.stringify(raw)} is not one of ${allowed.join('|')}; using ${fallback}`);
+	return fallback;
+}
+
 function parseIntOrDefault(value: string | undefined, defaultValue: number): number {
 	if (!value) return defaultValue;
 	const parsed = parseInt(value, 10);
@@ -149,12 +161,12 @@ export const config = {
 		// xAI accepts (verified: same transcript, labels and timestamps as PCM) and which saves a
 		// decode per participant and the PCM bandwidth to xAI. Only raw Opus is passed through; Ogg
 		// input is still decoded, since xAI wants bare packets. Mono only, which is what WebRTC sends.
-		encoding: (process.env.XAI_ENCODING || 'l16') as 'l16' | 'opus',
+		encoding: oneOf('XAI_ENCODING', process.env.XAI_ENCODING, ['l16', 'opus'] as const, 'l16'),
 		// How forceCommit() finalizes the trailing utterance when a participant goes idle:
 		// 'finalize' sends xAI's documented `{"type":"finalize"}` client message (speech_final in
 		// ~0.15 s, stream stays open); 'silence' injects endpointing + 300 ms of PCM silence, the
 		// pre-finalize method, kept as a rollback and usable only on the l16 path.
-		idleFlush: (process.env.XAI_IDLE_FLUSH || 'finalize') as 'finalize' | 'silence',
+		idleFlush: oneOf('XAI_IDLE_FLUSH', process.env.XAI_IDLE_FLUSH, ['finalize', 'silence'] as const, 'finalize'),
 	},
 
 	// Deepgram configuration

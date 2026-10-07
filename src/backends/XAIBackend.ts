@@ -1275,10 +1275,13 @@ export class XAIBackend implements TranscriptionBackend {
 		return this.negotiatedFormat;
 	}
 
-	/** Whether the stream carries raw Opus packets rather than PCM. */
+	/**
+	 * Whether the stream carries raw Opus packets rather than PCM. Decided by the negotiated format
+	 * alone: until getDesiredAudioFormat() has run, the decoder has not been told to pass anything
+	 * through, so the stream is PCM whatever XAI_ENCODING says.
+	 */
 	private sendsOpus(): boolean {
-		const fmt = this.negotiatedFormat ?? (config.xai.encoding === 'opus' ? { encoding: 'opus' as const } : { encoding: 'l16' as const });
-		return fmt.encoding === 'opus';
+		return this.negotiatedFormat?.encoding === 'opus';
 	}
 
 	private async handleMessage(data: any): Promise<void> {
