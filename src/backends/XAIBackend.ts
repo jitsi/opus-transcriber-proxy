@@ -105,9 +105,10 @@ const XAI_RETRY_AFTER_MAX_MS = XAI_CONNECT_BACKOFF_MAX_MS;
 // waits out the remainder, bounded by XAI_RETRY_AFTER_MAX_MS like every other wait here.
 let connectCooldownUntil = 0;
 
-/** Test hook: let the budget-order warning fire again. */
-export function resetXAIBudgetWarning(): void {
+/** Test hook: let the say-once warnings (budget order, silence flush on the Opus path) fire again. */
+export function resetXAIWarnings(): void {
 	warnedBudgetOrder = false;
+	warnedSilenceOnOpus = false;
 }
 
 /** Clears the process-wide connect cooldown. Test hook only. */

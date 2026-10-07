@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { XAIBackend, resetXAIBudgetWarning, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
+import { XAIBackend, resetXAIWarnings, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
 import type { MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -154,6 +154,7 @@ describe('XAIBackend', () => {
 		wsInstances.length = 0;
 		(config.xai as any).connectAttempts = 1;
 		resetXAIConnectCooldown();
+		resetXAIWarnings();
 	});
 
 	describe('Constructor', () => {
@@ -2462,7 +2463,6 @@ describe('XAIBackend', () => {
 			});
 
 			it('warns once when the soft budget is above the hard ceiling, and still releases at the ceiling', () => {
-				resetXAIBudgetWarning();
 				(config.xai as any).turnSoftMaxWords = 40;
 				(config.xai as any).turnHardMaxWords = 20;
 				for (let i = 0; i < 3; i++) partial(seg(1 + i * 7, 7), true, false); // 14 held, then a third would pass 20

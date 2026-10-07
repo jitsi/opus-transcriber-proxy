@@ -152,10 +152,14 @@ export class OutgoingConnection {
 	}
 
 	private async initializeBackend(): Promise<void> {
+		// The backend this call created. A concurrent reinitializeDecoder() can replace this.backend
+		// through reconnectBackend() at any await below, having connected the replacement itself;
+		// every step after an await checks that this is still the live one before acting on it.
+		let backend: TranscriptionBackend | undefined;
 		try {
 			// Create backend using factory
 			// Use provider from options (URL param), or fall back to config default
-			const backend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
+			backend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
 			this.backend = backend;
 
 			await this.reinitializeDecoder();
@@ -184,10 +188,13 @@ export class OutgoingConnection {
 
 			// Connect the backend
 			const connectStartTime = Date.now();
-			await this.backend.connect(backendConfig);
+			await backend.connect(backendConfig);
 
-			// close() may have been called while we were connecting.
-			if (this.isClosed) return;
+			// close() may have been called, or a concurrent reinitializeDecoder() may have replaced the
+			// backend via reconnectBackend(), while we were connecting: xAI's connect can take seconds
+			// (handshake retries, the process-wide cooldown). The replacement is already connected and
+			// counted; counting this one or announcing it would be for a backend that is gone.
+			if (this.isClosed || this.backend !== backend) return;
 
 			const connectDurationSec = (Date.now() - connectStartTime) / 1000;
 
@@ -208,9 +215,11 @@ export class OutgoingConnection {
 				this.processPendingAudioData();
 			}
 		} catch (error) {
-			// Suppress cascading errors if close() was already called — doClose()
-			// has run (or is running) and any further teardown is a no-op.
-			if (this.isClosed) return;
+			// Suppress cascading errors if close() was already called — doClose() has run (or is
+			// running) and any further teardown is a no-op — or if the backend this call was
+			// connecting was replaced meanwhile: reconnectBackend() closed it, which makes its pending
+			// connect() throw, and the replacement it connected must not be torn down for that.
+			if (this.isClosed || (backend !== undefined && this.backend !== backend)) return;
 			logger.error(`Failed to initialize transcription backend for tag ${this.localTag}:`, error);
 			this.backend = undefined;
 			this.onBackendError?.('connection_failed', error instanceof Error ? error.message : 'Unknown error');
