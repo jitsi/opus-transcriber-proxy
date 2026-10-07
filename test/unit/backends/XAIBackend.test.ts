@@ -1985,6 +1985,22 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta.']);
 		});
 
+		it('leaves the turn open when the finalize cannot be sent, and the socket close then flushes what was held', () => {
+			partial('alpha beta.', true, false); // held inside the cap
+			const ws = getMockWs();
+			const realSend = ws.send.bind(ws);
+			ws.send = () => { throw new Error('socket is closing'); };
+			backend.forceCommit();
+			expect((logger.error as any).mock.calls.some((args: any[]) => String(args[0]).includes('Failed to send finalize'))).toBe(true);
+			// xAI never got the request, so no idle turn end is armed: nothing is ended on its behalf…
+			vi.advanceTimersByTime(3000);
+			expect(finalResults).toHaveLength(0);
+			ws.send = realSend;
+			// …and the dying socket's close flushes the held segment as the end of the utterance.
+			getMockWs().simulateClose(1006, '', false);
+			expect(finalTexts()).toEqual(['alpha beta.']);
+		});
+
 		it('marks what a socket close flushes as the end of the utterance', () => {
 			const flags: Array<boolean | undefined> = [];
 			backend.onCompleteTranscription = (_msg, midUtterance) => flags.push(midUtterance);
