@@ -717,6 +717,30 @@ describe('DeepgramBackend', () => {
 
 			expect(backend.getStatus()).toBe('closed');
 		});
+
+		it('should not recurse if ws.close() synchronously re-fires the "error" event', async () => {
+			// Reproduces a real crash found via the integration test harness: with a bad API key,
+			// the underlying (undici) WebSocket can synchronously re-dispatch 'error' from inside
+			// ws.close() for a connection that never successfully opened. The 'error' handler calls
+			// this.close(), which calls ws.close() again — without a reentrancy guard this recurses
+			// without bound and stack-overflows the entire Node process (not just this connection).
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const backendConfig: BackendConfig = { model: 'nova-2', language: undefined, prompt: undefined };
+
+			const connectPromise = backend.connect(backendConfig);
+			connectPromise.catch(() => {}); // rejection is expected; just avoid an unhandled-rejection warning
+
+			const mockWs = mockWsManager.mockWs;
+			let closeCallCount = 0;
+			(mockWs as any).close = () => {
+				closeCallCount++;
+				mockWs.simulateError(new Error('Connection failed'));
+			};
+
+			expect(() => mockWs.simulateError(new Error('Connection failed'))).not.toThrow();
+			expect(closeCallCount).toBe(1);
+			expect(backend.getStatus()).toBe('closed');
+		});
 	});
 
 	describe('getStatus', () => {
