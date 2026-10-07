@@ -161,11 +161,13 @@ export const config = {
 		// rate); 'opus' passes the client's raw Opus packets through unchanged, one per frame, which
 		// xAI accepts (verified: same transcript, labels and timestamps as PCM) and which saves a
 		// decode per participant and the PCM bandwidth to xAI. Only raw Opus is passed through; Ogg
-		// input is still decoded, since xAI wants bare packets. xAI takes mono only: WebRTC signals
-		// Opus as 2 channels but encodes mono, which is fine, while a deployment that enables true
-		// stereo Opus (jitsi-meet `audioQuality.stereo`) must stay on l16, where the decoder downmixes.
-		// Pass-through also forgoes the decoder's packet-loss concealment: a lost packet reaches xAI
-		// as a splice rather than 20 ms of concealed audio, the trade Deepgram pass-through makes too.
+		// input is still decoded, since xAI wants bare packets. Channel count is not a concern: an
+		// Opus packet's channel layout is in the packet, and a decoder set up for one channel (xAI's,
+		// like our own) downmixes a stereo-encoded packet itself, so mono- and stereo-encoded WebRTC
+		// audio both pass. Only multistream (surround) Opus would need handling, and it needs the
+		// Ogg/multistream framing that is not passed through anyway. Pass-through does forgo the
+		// decoder's packet-loss concealment: a lost packet reaches xAI as a splice rather than 20 ms
+		// of concealed audio, the trade Deepgram pass-through makes too.
 		encoding: oneOf('XAI_ENCODING', process.env.XAI_ENCODING, ['l16', 'opus'] as const, 'l16'),
 		// How forceCommit() finalizes the trailing utterance when a participant goes idle:
 		// 'finalize' sends xAI's documented `{"type":"finalize"}` client message (speech_final in
