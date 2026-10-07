@@ -4,6 +4,19 @@ import { validateTags } from './utils';
 // Load environment variables from .env file
 dotenv.config();
 
+/**
+ * An env var restricted to a fixed set of values. A value outside the set falls back to the default
+ * with a warning on stderr (config loads before the logger), rather than being cast and silently
+ * misread: an operator who sets XAI_ENCODING=pcm should learn that it meant nothing.
+ */
+function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
+	if (raw === undefined || raw.trim() === '') return fallback;
+	const value = raw.trim().toLowerCase(); // XAI_ENCODING=Opus means opus
+	if ((allowed as readonly string[]).includes(value)) return value as T;
+	console.warn(`${name}=${JSON.stringify(raw)} is not one of ${allowed.join('|')}; using ${fallback}`);
+	return fallback;
+}
+
 function parseIntOrDefault(value: string | undefined, defaultValue: number): number {
 	if (!value) return defaultValue;
 	const parsed = parseInt(value, 10);
@@ -140,10 +153,27 @@ export const config = {
 		// flush or split on size).
 		turnSoftMaxWords: parseIntOrDefault(process.env.XAI_TURN_SOFT_MAX_WORDS, 20),
 		turnHardMaxWords: parseIntOrDefault(process.env.XAI_TURN_HARD_MAX_WORDS, 35),
-		// How long after the idle silence forceCommit() injects to wait for xAI's speech_final before
-		// ending the turn without it (see the long-turn cap). xAI answered the silence within ~0.5s
-		// when forceCommit() was verified, but has been seen not to answer at all.
+		// How long after the idle flush (forceCommit) to wait for xAI's speech_final before ending the
+		// turn without it (see the long-turn cap). xAI answers a `finalize` within ~0.15 s and the
+		// injected silence within ~0.5 s when it answers at all; it has been seen not to.
 		idleTurnEndGraceMs: parseIntOrDefault(process.env.XAI_IDLE_TURN_END_GRACE_MS, 3000),
+		// What the backend sends xAI: 'l16' decodes the client's Opus to 16 kHz PCM (xAI's native
+		// rate); 'opus' passes the client's raw Opus packets through unchanged, one per frame, which
+		// xAI accepts (verified: same transcript, labels and timestamps as PCM) and which saves a
+		// decode per participant and the PCM bandwidth to xAI. Only raw Opus is passed through; Ogg
+		// input is still decoded, since xAI wants bare packets. Channel count is not a concern: an
+		// Opus packet's channel layout is in the packet, and a decoder set up for one channel (xAI's,
+		// like our own) downmixes a stereo-encoded packet itself, so mono- and stereo-encoded WebRTC
+		// audio both pass. Only multistream (surround) Opus would need handling, and it needs the
+		// Ogg/multistream framing that is not passed through anyway. Pass-through does forgo the
+		// decoder's packet-loss concealment: a lost packet reaches xAI as a splice rather than 20 ms
+		// of concealed audio, the trade Deepgram pass-through makes too.
+		encoding: oneOf('XAI_ENCODING', process.env.XAI_ENCODING, ['l16', 'opus'] as const, 'l16'),
+		// How forceCommit() finalizes the trailing utterance when a participant goes idle:
+		// 'finalize' sends xAI's documented `{"type":"finalize"}` client message (speech_final in
+		// ~0.15 s, stream stays open); 'silence' injects endpointing + 300 ms of PCM silence, the
+		// pre-finalize method, kept as a rollback and usable only on the l16 path.
+		idleFlush: oneOf('XAI_IDLE_FLUSH', process.env.XAI_IDLE_FLUSH, ['finalize', 'silence'] as const, 'finalize'),
 	},
 
 	// Deepgram configuration

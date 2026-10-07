@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { XAIBackend, resetXAIBudgetWarning, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
+import { XAIBackend, resetXAIWarnings, resetXAIConnectCooldown } from '../../../src/backends/XAIBackend';
 import type { MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -135,6 +135,8 @@ vi.mock('../../../src/config', () => ({
 			turnSoftMaxWords: 20,
 			turnHardMaxWords: 35,
 			idleTurnEndGraceMs: 3000,
+			encoding: 'l16',
+			idleFlush: 'finalize',
 			// 1 attempt by default so the existing tests see the pre-retry behaviour;
 			// the retry tests raise it. Zero backoff keeps them fast.
 			connectAttempts: 1,
@@ -152,6 +154,7 @@ describe('XAIBackend', () => {
 		wsInstances.length = 0;
 		(config.xai as any).connectAttempts = 1;
 		resetXAIConnectCooldown();
+		resetXAIWarnings();
 	});
 
 	describe('Constructor', () => {
@@ -715,7 +718,12 @@ describe('XAIBackend', () => {
 	});
 
 	describe('forceCommit', () => {
-		it('should inject a silence tail (not audio.done) to flush the final and keep the WS open', async () => {
+		afterEach(() => {
+			(config.xai as any).idleFlush = 'finalize';
+			(config.xai as any).encoding = 'l16';
+		});
+
+		it('sends xAI the finalize message (not audio.done) to flush the final and keep the WS open', async () => {
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect(DEFAULT_CONFIG);
 			getMockWs().simulateOpen();
@@ -725,18 +733,33 @@ describe('XAIBackend', () => {
 
 			const sent = getMockWs().getSentMessages();
 			expect(sent).toHaveLength(1);
-			// Binary silence, NOT an audio.done (which would close the stream).
-			expect(Buffer.isBuffer(sent[0])).toBe(true);
+			expect(JSON.parse(sent[0])).toEqual({ type: 'finalize' });
 			expect(sent.some((m: any) => typeof m === 'string' && m.includes('audio.done'))).toBe(false);
-			// (endpointing 850ms + 300ms margin) of 16kHz signed-16-bit mono silence.
-			const expectedBytes = Math.round((16000 * (850 + 300)) / 1000) * 2;
-			expect(sent[0].length).toBe(expectedBytes);
-			expect(sent[0].every((b: number) => b === 0)).toBe(true);
 			// Stream stays open — no teardown.
 			expect(backend.getStatus()).toBe('connected');
 		});
 
-		it('should size the silence tail to a per-connection endpointing override', async () => {
+		it('injects a PCM silence tail instead when XAI_IDLE_FLUSH=silence', async () => {
+			(config.xai as any).idleFlush = 'silence';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			backend.forceCommit();
+
+			const sent = getMockWs().getSentMessages();
+			expect(sent).toHaveLength(1);
+			expect(Buffer.isBuffer(sent[0])).toBe(true);
+			// (endpointing 850ms + 300ms margin) of 16kHz signed-16-bit mono silence.
+			const expectedBytes = Math.round((16000 * (850 + 300)) / 1000) * 2;
+			expect(sent[0].length).toBe(expectedBytes);
+			expect(sent[0].every((b: number) => b === 0)).toBe(true);
+			expect(backend.getStatus()).toBe('connected');
+		});
+
+		it('sizes the silence tail to a per-connection endpointing override', async () => {
+			(config.xai as any).idleFlush = 'silence';
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
 			const connectPromise = backend.connect({ ...DEFAULT_CONFIG, xaiEndpointing: 300 });
 			getMockWs().simulateOpen();
@@ -747,6 +770,103 @@ describe('XAIBackend', () => {
 			const sent = getMockWs().getSentMessages();
 			expect(sent).toHaveLength(1);
 			expect(sent[0].length).toBe(Math.round((16000 * (300 + 300)) / 1000) * 2);
+		});
+
+		it('arms the idle turn end for the silence length plus the grace period on the silence path', async () => {
+			(config.xai as any).idleFlush = 'silence';
+			vi.useFakeTimers();
+			try {
+				const backend = new XAIBackend('test-tag', { id: 'p1' });
+				const connectPromise = backend.connect(DEFAULT_CONFIG);
+				getMockWs().simulateOpen();
+				await connectPromise;
+				getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.partial', is_final: true, speech_final: false, text: 'alpha beta.' }));
+				backend.forceCommit();
+				vi.advanceTimersByTime(3000); // the finalize path's grace alone: too early for the silence path
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(false);
+				vi.advanceTimersByTime(850 + 300); // plus the silence length
+				expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(true);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('always uses finalize on the raw-Opus path, since there is no PCM silence to inject', async () => {
+			(config.xai as any).idleFlush = 'silence';
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+
+			backend.forceCommit();
+
+			const sent = getMockWs().getSentMessages();
+			expect(sent).toHaveLength(1);
+			expect(JSON.parse(sent[0])).toEqual({ type: 'finalize' });
+			expect((logger.warn as any).mock.calls.some((args: any[]) => String(args[0]).includes('XAI_IDLE_FLUSH=silence has no effect'))).toBe(true);
+		});
+	});
+
+	describe('audio format negotiation', () => {
+		afterEach(() => {
+			(config.xai as any).encoding = 'l16';
+		});
+
+		it('asks for 16 kHz PCM by default, whatever the client sends', () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 16000 });
+			expect(backend.getDesiredAudioFormat({ encoding: 'ogg', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 16000 });
+		});
+
+		it('passes raw Opus through when XAI_ENCODING=opus, as one constant format whatever the client signals', () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			// xAI ignores sample rate and channels for Opus, so the desired format does not follow the
+			// client's: a start event changing only those must not make the owner reconnect the stream.
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000, channels: 2 })).toEqual({ encoding: 'opus', sampleRate: 48000 });
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 24000, channels: 1 })).toEqual({ encoding: 'opus', sampleRate: 48000 });
+		});
+
+		it('still decodes Ogg-encapsulated input when XAI_ENCODING=opus, since xAI wants bare packets', () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			expect(backend.getDesiredAudioFormat({ encoding: 'ogg', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 16000 });
+		});
+
+		it('declares encoding=opus with no sample_rate on the stream URL for a pass-through stream', async () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000 });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+			const url = new URL(getMockWs().url);
+			expect(url.searchParams.get('encoding')).toBe('opus');
+			expect(url.searchParams.has('sample_rate')).toBe(false);
+			expect(url.searchParams.get('interim_results')).toBe('true');
+		});
+
+		it('declares pcm when XAI_ENCODING=opus but the format was never negotiated', async () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(DEFAULT_CONFIG); // no getDesiredAudioFormat() first
+			getMockWs().simulateOpen();
+			await connectPromise;
+			expect(new URL(getMockWs().url).searchParams.get('encoding')).toBe('pcm');
+		});
+
+		it('declares pcm at 16 kHz when the pass-through did not apply (Ogg input)', async () => {
+			(config.xai as any).encoding = 'opus';
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			backend.getDesiredAudioFormat({ encoding: 'ogg', sampleRate: 48000 });
+			const connectPromise = backend.connect(DEFAULT_CONFIG);
+			getMockWs().simulateOpen();
+			await connectPromise;
+			const url = new URL(getMockWs().url);
+			expect(url.searchParams.get('encoding')).toBe('pcm');
+			expect(url.searchParams.get('sample_rate')).toBe('16000');
 		});
 	});
 
@@ -1246,7 +1366,7 @@ describe('XAIBackend', () => {
 			expect(finalResults.map((m) => m.transcript[0].text).join(' ')).toBe(afterTurn);
 		});
 
-		it('injects the idle silence for a granular turn that opened after the previous one ended', async () => {
+		it('sends the idle flush for a granular turn that opened after the previous one ended', async () => {
 			await connectGranular();
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('hello world foo bar', true, true); // turn A ends after the last audio
@@ -1734,7 +1854,7 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['alpha beta.']);
 		});
 
-		it('skips the idle silence when the turn already ended after the last audio', async () => {
+		it('skips the idle flush when the turn already ended after the last audio', async () => {
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('alpha beta.', true, false);
 			vi.setSystemTime(16000);
@@ -1751,13 +1871,13 @@ describe('XAIBackend', () => {
 			expect(getMockWs().getSentMessages()).toHaveLength(1);
 		});
 
-		it('ends the turn when xAI sends no speech_final after the idle silence', () => {
+		it('ends the turn when xAI sends no speech_final after the idle flush', () => {
 			partial('alpha beta.', true, false);
 			vi.setSystemTime(16000);
 			partial('gamma delta.', true, false); // emitted past the cap
 			partial('epsilon.', true, false); // likewise
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000); // the idle turn end: XAI_IDLE_TURN_END_GRACE_MS after the finalize was sent
 			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(true);
 
 			// Minutes later a new turn starts fresh: held inside its own cap, not emitted at once,
@@ -1769,7 +1889,7 @@ describe('XAIBackend', () => {
 			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.', 'next turn starts. and ends.']);
 		});
 
-		it('keeps the turn open after the idle silence when the speaker resumes', async () => {
+		it('keeps the turn open after the idle flush when the speaker resumes', async () => {
 			partial('alpha beta.', true, false);
 			backend.forceCommit();
 			vi.advanceTimersByTime(1000);
@@ -1786,7 +1906,7 @@ describe('XAIBackend', () => {
 			partial('gamma delta.', true, false); // emitted past the cap
 			partial('epsilon.', true, false); // past the cap, emitted as it commits
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000); // the idle turn end fires
+			vi.advanceTimersByTime(3000); // the idle turn end fires
 			expect(finalTexts()).toEqual(['alpha beta. gamma delta.', 'epsilon.']);
 
 			// xAI answers after the grace period with the whole turn: only the tail is new.
@@ -1798,7 +1918,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma.', true, false);
 			vi.advanceTimersByTime(15000); // cap timer emits "alpha beta gamma."
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000); // idle turn end
+			vi.advanceTimersByTime(3000); // idle turn end
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('delta', false, false); // xAI's turn is still the same one
 			partial('alpha beta gamma. delta epsilon.', true, true);
@@ -1809,7 +1929,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta gamma. delta.' }));
 			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta.']);
 		});
@@ -1818,7 +1938,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			partial('alpha beta.', true, true); // exactly the turn again: the late answer, not a new turn
 			expect(finalTexts()).toEqual(['alpha beta.']);
 		});
@@ -1827,7 +1947,7 @@ describe('XAIBackend', () => {
 			partial('okay', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			// A one-word anchor is in most turns; at the end of this one it would drop the whole turn.
 			partial('I think that is okay', true, true);
@@ -1836,7 +1956,7 @@ describe('XAIBackend', () => {
 			partial('okay', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			// At the start it is as likely a repeat as a continuation: a repeat is preferred to a loss.
 			partial('okay so let us move on', true, true);
@@ -1847,7 +1967,7 @@ describe('XAIBackend', () => {
 			partial('see you soon everyone bye.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			// The full anchor ("soon everyone bye") is there, but far from where the count puts it: not this turn.
 			partial('thanks. right, I will say it once more: soon everyone bye.', true, true);
@@ -1866,7 +1986,7 @@ describe('XAIBackend', () => {
 			} finally {
 				ws.send = send;
 			}
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			expect((logger.info as any).mock.calls.some((args: any[]) => String(args[0]).includes('no speech_final'))).toBe(false);
 			expect(finalResults).toHaveLength(0);
 		});
@@ -1884,6 +2004,22 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma.', true, true);
 			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'alpha beta gamma. delta.' }));
 			expect(finalTexts()).toEqual(['alpha beta gamma.', 'delta.']);
+		});
+
+		it('leaves the turn open when the finalize cannot be sent, and the socket close then flushes what was held', () => {
+			partial('alpha beta.', true, false); // held inside the cap
+			const ws = getMockWs();
+			const realSend = ws.send.bind(ws);
+			ws.send = () => { throw new Error('socket is closing'); };
+			backend.forceCommit();
+			expect((logger.error as any).mock.calls.some((args: any[]) => String(args[0]).includes('Failed to send finalize'))).toBe(true);
+			// xAI never got the request, so no idle turn end is armed: nothing is ended on its behalf…
+			vi.advanceTimersByTime(3000);
+			expect(finalResults).toHaveLength(0);
+			ws.send = realSend;
+			// …and the dying socket's close flushes the held segment as the end of the utterance.
+			getMockWs().simulateClose(1006, '', false);
+			expect(finalTexts()).toEqual(['alpha beta.']);
 		});
 
 		it('marks what a socket close flushes as the end of the utterance', () => {
@@ -2004,7 +2140,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta epsilon.', true, false);
 			vi.advanceTimersByTime(15000); // cap timer emits turn A
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000); // idle turn end: A's record is carried
+			vi.advanceTimersByTime(3000); // idle turn end: A's record is carried
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('one two three.', true, false); // turn B
 			vi.advanceTimersByTime(15000); // cap timer emits "one two three."
@@ -2019,7 +2155,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta epsilon.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('one two three.', true, false);
 			vi.advanceTimersByTime(15000);
@@ -2092,7 +2228,7 @@ describe('XAIBackend', () => {
 				partial(text, true, false);
 				vi.advanceTimersByTime(15000);
 				backend.forceCommit();
-				vi.advanceTimersByTime(850 + 300 + 3000);
+				vi.advanceTimersByTime(3000);
 				await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			};
 			await idleEnd('alpha beta gamma delta.');
@@ -2143,7 +2279,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000); // A idle-ends, carried
+			vi.advanceTimersByTime(3000); // A idle-ends, carried
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('one two three four five.', true, true); // B, a fresh turn
 			getMockWs().simulateMessage(JSON.stringify({ type: 'transcript.done', text: 'one two three four five.' }));
@@ -2168,7 +2304,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('¿Qué pasa contigo? “Hello,” he said. $100.', true, true);
 			expect(finalTexts()).toEqual(['alpha beta gamma delta.', '¿Qué pasa contigo? “Hello,” he said. $100.']);
@@ -2199,7 +2335,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta epsilon.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000); // A idle-ends, carried
+			vi.advanceTimersByTime(3000); // A idle-ends, carried
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('one two three.', true, false);
 			vi.advanceTimersByTime(15000); // cap emits "one two three."
@@ -2212,7 +2348,7 @@ describe('XAIBackend', () => {
 			partial('alpha beta gamma delta epsilon.', true, false);
 			vi.advanceTimersByTime(15000);
 			backend.forceCommit();
-			vi.advanceTimersByTime(850 + 300 + 3000);
+			vi.advanceTimersByTime(3000);
 			await backend.sendAudio(Buffer.from([1, 2]).toString('base64'));
 			partial('one two three.', true, false); // held, inside the cap
 			partial('four five six.', true, false);
@@ -2327,7 +2463,6 @@ describe('XAIBackend', () => {
 			});
 
 			it('warns once when the soft budget is above the hard ceiling, and still releases at the ceiling', () => {
-				resetXAIBudgetWarning();
 				(config.xai as any).turnSoftMaxWords = 40;
 				(config.xai as any).turnHardMaxWords = 20;
 				for (let i = 0; i < 3; i++) partial(seg(1 + i * 7, 7), true, false); // 14 held, then a third would pass 20

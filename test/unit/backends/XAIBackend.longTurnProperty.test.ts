@@ -75,6 +75,8 @@ vi.mock('../../../src/config', () => ({
 			turnSoftMaxWords: 20,
 			turnHardMaxWords: 35,
 			idleTurnEndGraceMs: 3000,
+			encoding: 'l16',
+			idleFlush: 'finalize',
 			connectAttempts: 1,
 			connectBackoffMs: 0,
 		},

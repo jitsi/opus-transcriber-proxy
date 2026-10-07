@@ -26,6 +26,8 @@ const textDecoder = new TextDecoder();
 // which avoids a server-side resample. Used for the request param, the desired decoder
 // output format, and the idle-silence buffer — keep these in sync.
 const XAI_SAMPLE_RATE = 16000;
+// Nominal rate of the pass-through Opus format (Opus's internal rate; xAI ignores it for Opus input).
+const XAI_OPUS_SAMPLE_RATE = 48000;
 
 // Extra silence (ms) injected beyond the endpointing threshold on idle commit, to be
 // sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
@@ -103,9 +105,10 @@ const XAI_RETRY_AFTER_MAX_MS = XAI_CONNECT_BACKOFF_MAX_MS;
 // waits out the remainder, bounded by XAI_RETRY_AFTER_MAX_MS like every other wait here.
 let connectCooldownUntil = 0;
 
-/** Test hook: let the budget-order warning fire again. */
-export function resetXAIBudgetWarning(): void {
+/** Test hook: let the say-once warnings (budget order, silence flush on the Opus path) fire again. */
+export function resetXAIWarnings(): void {
 	warnedBudgetOrder = false;
+	warnedSilenceOnOpus = false;
 }
 
 /** Clears the process-wide connect cooldown. Test hook only. */
@@ -350,6 +353,8 @@ function heldSegment(text: string, words: XAIWord[] | undefined): HeldSegment {
 
 // Said once per process: the budgets are deployment-wide, so saying it per connection would be noise.
 let warnedBudgetOrder = false;
+// Likewise for XAI_IDLE_FLUSH=silence being overridden on the raw-Opus path.
+let warnedSilenceOnOpus = false;
 
 /** Warn, once, when the soft budget cannot fire because the hard ceiling is below it. */
 function checkBudgetOrder(softMaxWords: number, hardMaxWords: number): void {
@@ -658,6 +663,8 @@ export class XAIBackend implements TranscriptionBackend {
 	private segmenter?: XAIGranularSegmenter;
 	private granularTimer?: ReturnType<typeof setTimeout>;
 	private lastLanguage?: string;
+	/** Format negotiated by getDesiredAudioFormat(): what the decoder produces and what the stream URL declares. */
+	private negotiatedFormat?: AudioFormat;
 
 	// Long-turn cap for the default (one final per turn) mode — see config.xai.maxTurnMs. A turn
 	// runs from its first partial to its speech_final. Segments xAI commits (is_final) during the
@@ -674,9 +681,9 @@ export class XAIBackend implements TranscriptionBackend {
 	// The whole of the last turn that ended, carried: a transcript.done arriving with no turn in
 	// progress is reconciled against it (see handleDone).
 	private lastTurn?: EmittedTurn;
-	// Ends the turn when xAI sends no speech_final after the idle silence (see forceCommit()).
+	// Ends the turn when xAI sends no speech_final after the idle flush (see forceCommit()).
 	private idleTurnEndTimer?: ReturnType<typeof setTimeout>;
-	// A turn ended after the last audio was sent, so there is nothing for an idle silence to finalize.
+	// A turn ended after the last audio was sent, so there is nothing for an idle flush to finalize.
 	private turnEndedSinceAudio = false;
 	// Failed-utterance errors since the last non-empty transcript (see XAI_UTTERANCE_FAILED_RE).
 	private consecutiveUtteranceFailures = 0;
@@ -850,11 +857,12 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	private buildStreamUrl(backendConfig: BackendConfig): string {
-		const params = new URLSearchParams({
-			sample_rate: XAI_SAMPLE_RATE.toString(),
-			encoding: 'pcm',
-			interim_results: 'true',
-		});
+		// xAI ignores sample_rate for Opus (the packets carry it), so it is sent only with PCM.
+		const params = new URLSearchParams(
+			this.sendsOpus()
+				? { encoding: 'opus', interim_results: 'true' }
+				: { sample_rate: XAI_SAMPLE_RATE.toString(), encoding: 'pcm', interim_results: 'true' },
+		);
 
 		const language = backendConfig.language || config.xai.language;
 		if (language) {
@@ -1136,20 +1144,15 @@ export class XAIBackend implements TranscriptionBackend {
 	forceCommit(): void {
 		// Finalize the trailing utterance when the stream goes idle WITHOUT closing it.
 		//
-		// xAI exposes no flush/commit message (unlike OpenAI's input_audio_buffer.commit
-		// or Deepgram's Finalize) — only `audio.done`, which makes xAI close the WS
-		// (code 1006). Closing forces a full OutgoingConnection teardown + cold-start of
-		// the next utterance (clipped post-pause burst, lost context, churn). #94 instead
-		// made this a no-op, but then the trailing utterance before a pause/mute was never
-		// finalized once audio stopped.
-		//
-		// Finalization is driven by `endpointing`: xAI's VAD emits speech_final once it
-		// sees `endpointing` ms of silence in the audio. When the client stops sending
-		// (pause/mute) no further frames arrive, so the VAD never crosses the threshold.
-		// We bridge that by injecting a short tail of digital silence — enough to exceed
-		// the endpointing window — which makes xAI finalize the pending utterance while
-		// the WS stays open for the next one. (Same idea as jitsi/skynet's idle flush
-		// worker, adapted: we can't force-transcribe xAI's model locally.)
+		// xAI's `{"type":"finalize"}` client message does exactly that: it forces the current
+		// utterance out as a speech_final (measured ~0.15 s) and leaves the stream open for the
+		// next one. `audio.done` is the other flush, and it closes the WS (code 1006), which costs
+		// a full OutgoingConnection teardown + cold start of the next utterance; #94 had made this
+		// a no-op for that reason, which left the trailing utterance before a pause/mute never
+		// finalized. Before `finalize` was documented the bridge was to inject endpointing + 300 ms
+		// of PCM silence so xAI's VAD crossed its threshold; that path is kept behind
+		// XAI_IDLE_FLUSH=silence as a rollback, PCM only (there is no silence to inject on the
+		// raw-Opus path, so it always uses finalize).
 		if (!this.ws || this.status !== 'connected') {
 			return;
 		}
@@ -1158,7 +1161,24 @@ export class XAIBackend implements TranscriptionBackend {
 			// nothing to emit, e.g. because the long-turn cap had emitted it all, clears no idle
 			// timer in the owner), and no turn has started since. There is nothing left to finalize.
 			// A turn opened since — from audio sent before that speech_final arrived — still needs it.
-			logger.debug(`Skipping idle silence for tag ${this.tag}: the turn already ended after the last audio`);
+			logger.debug(`Skipping idle flush for tag ${this.tag}: the turn already ended after the last audio`);
+			return;
+		}
+		if (config.xai.idleFlush === 'finalize' || this.sendsOpus()) {
+			if (config.xai.idleFlush !== 'finalize' && !warnedSilenceOnOpus) {
+				warnedSilenceOnOpus = true;
+				logger.warn('XAI_IDLE_FLUSH=silence has no effect on a raw-Opus stream (there is no PCM silence to inject); using finalize');
+			}
+			try {
+				this.ws.send(JSON.stringify({ type: 'finalize' }));
+				logger.debug(`Sent finalize to flush xAI final (WS kept open) for tag ${this.tag}`);
+			} catch (error) {
+				// xAI never got the request, so it cannot be blamed for not answering it: leave the
+				// turn open rather than end it without a speech_final.
+				logger.error(`Failed to send finalize for tag ${this.tag}`, error);
+				return;
+			}
+			this.armIdleTurnEnd(config.xai.idleTurnEndGraceMs);
 			return;
 		}
 		const endpointingMs = this.backendConfig?.xaiEndpointing ?? config.xai.endpointing;
@@ -1183,7 +1203,7 @@ export class XAIBackend implements TranscriptionBackend {
 	}
 
 	/**
-	 * End a turn in progress if xAI answers the idle silence with no speech_final. Otherwise the
+	 * End a turn in progress if xAI answers the idle flush with no speech_final. Otherwise the
 	 * turn would stay open across the silence, and every segment the speaker commits minutes later
 	 * would go out at once as past the cap. What xAI committed is flushed and the turn's clock
 	 * stops; interim text it never committed is not emitted here.
@@ -1202,7 +1222,7 @@ export class XAIBackend implements TranscriptionBackend {
 			this.idleTurnEndTimer = undefined;
 			if (this.status !== 'connected' || this.turnStartedAt === undefined) return;
 			logger.info(
-				`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle silence being sent (its length plus XAI_IDLE_TURN_END_GRACE_MS); ending the turn`,
+				`xAI sent no speech_final for ${this.tag} within ${delayMs}ms of the idle flush; ending the turn`,
 			);
 			this.flushHeldSegments(this.lastLanguage, 'ended on idle without speech_final', false);
 			this.stopTurnClock();
@@ -1253,8 +1273,28 @@ export class XAIBackend implements TranscriptionBackend {
 		return this.status;
 	}
 
-	getDesiredAudioFormat(_inputFormat: AudioFormat): AudioFormat {
-		return { encoding: 'l16', sampleRate: XAI_SAMPLE_RATE };
+	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
+		// Raw Opus is passed through only when XAI_ENCODING=opus and the client sends bare packets:
+		// xAI takes one Opus packet per frame and nothing Ogg-encapsulated, so Ogg input (and l16)
+		// still goes through the decoder to 16 kHz PCM, xAI's native rate. The pass-through format
+		// is a constant rather than a copy of the input: xAI ignores sample_rate and channels for
+		// Opus (the packets carry them), and a desired format that followed the client's would make
+		// the owner reconnect the stream, dropping held turn text, on a start event that changed
+		// nothing xAI cares about.
+		this.negotiatedFormat =
+			config.xai.encoding === 'opus' && inputFormat.encoding === 'opus'
+				? { encoding: 'opus', sampleRate: XAI_OPUS_SAMPLE_RATE }
+				: { encoding: 'l16', sampleRate: XAI_SAMPLE_RATE };
+		return this.negotiatedFormat;
+	}
+
+	/**
+	 * Whether the stream carries raw Opus packets rather than PCM. Decided by the negotiated format
+	 * alone: until getDesiredAudioFormat() has run, the decoder has not been told to pass anything
+	 * through, so the stream is PCM whatever XAI_ENCODING says.
+	 */
+	private sendsOpus(): boolean {
+		return this.negotiatedFormat?.encoding === 'opus';
 	}
 
 	private async handleMessage(data: any): Promise<void> {

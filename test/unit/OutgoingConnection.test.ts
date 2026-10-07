@@ -659,6 +659,81 @@ describe('OutgoingConnection', () => {
 		});
 	});
 
+	describe('raw pass-through (a backend that wants the client encoding, e.g. XAI_ENCODING=opus)', () => {
+		it('hands each Opus packet to the backend as its own sendAudio call, bytes untouched', async () => {
+			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus', sampleRate: 48000, channels: 2 }, options);
+			await vi.runAllTimersAsync();
+
+			const packets = [new Uint8Array([0x78, 1, 2, 3]), new Uint8Array([0x78, 4, 5]), new Uint8Array([0x78, 6, 7, 8, 9, 10])];
+			packets.forEach((p, i) => conn.handleMediaEvent({ media: { tag: 'test-tag', payload: Buffer.from(p).toString('base64'), chunk: i, timestamp: i * 960 } }));
+			await vi.runAllTimersAsync();
+
+			// One backend send per packet, in order, with the client's bytes exactly: xAI's encoding=opus
+			// takes one raw packet per binary frame, so batching or re-framing here would break it.
+			expect(mockBackend.getSentAudio()).toEqual(packets.map((p) => Buffer.from(p).toString('base64')));
+			conn.close();
+		});
+	});
+
+	describe('a format change during the first decoder init', () => {
+		it('does not connect the replacement backend a second time', async () => {
+			// Backend A is created by initializeBackend; a start event switching to a format with a
+			// different desired encoding arrives while A's decoder is still initializing, so the
+			// concurrent reinitializeDecoder replaces A with B and connects B. initializeBackend then
+			// resumes and must leave B alone rather than connect it again (a second socket under it).
+			const backendA = new MockTranscriptionBackend({ autoConnect: false, wantsRawAudio: true });
+			const backendB = new MockTranscriptionBackend({ autoConnect: false, wantsRawAudio: true });
+			vi.mocked(createBackend).mockImplementationOnce(() => backendA as any).mockImplementationOnce(() => backendB as any);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'l16', sampleRate: 24000 }, options); // desired: l16
+			conn.updateInputFormat({ encoding: 'opus', sampleRate: 48000 }); // desired: opus pass-through → reconnect
+			await vi.runAllTimersAsync();
+
+			expect(backendB.getConnectCallCount()).toBe(1);
+			expect(backendA.getConnectCallCount()).toBe(0);
+			expect(backendB.getStatus()).toBe('connected');
+			conn.close();
+		});
+	});
+
+	describe('a format change while the first connect is pending', () => {
+		// A backend whose connect() takes time and throws if it was closed meanwhile, as XAIBackend's
+		// does ("connect abandoned") when reconnectBackend() closes it mid-handshake.
+		class SlowBackend extends MockTranscriptionBackend {
+			constructor(private readonly delayMs: number) {
+				super({ autoConnect: false, wantsRawAudio: true });
+			}
+			override async connect(config: any): Promise<void> {
+				(this as any)._connectCallCount++;
+				await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+				if (this.getStatus() === 'closed') throw new Error('connect abandoned');
+				(this as any)._status = 'connected';
+			}
+		}
+
+		it('keeps the replacement backend when the original connect is aborted by the replacement', async () => {
+			const backendA = new SlowBackend(1000);
+			const backendB = new SlowBackend(10);
+			vi.mocked(createBackend).mockImplementationOnce(() => backendA as any).mockImplementationOnce(() => backendB as any);
+			const onError = vi.fn();
+			const onBackendConnected = vi.fn();
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'l16', sampleRate: 24000 }, options); // desired: l16
+			conn.onError = onError;
+			conn.onBackendConnected = onBackendConnected;
+			await vi.advanceTimersByTimeAsync(100); // decoder ready, A's connect pending
+			conn.updateInputFormat({ encoding: 'opus', sampleRate: 48000 }); // desired: opus → reconnectBackend closes A, connects B
+			await vi.runAllTimersAsync(); // A's connect now throws "connect abandoned"
+
+			expect(onError).not.toHaveBeenCalled(); // the abandoned connect is not a failure of the participant
+			expect(backendB.getStatus()).toBe('connected');
+			expect(backendB.getConnectCallCount()).toBe(1);
+			expect(onBackendConnected).toHaveBeenCalledTimes(1); // once, for B, by reconnectBackend
+			conn.close();
+		});
+	});
+
 	describe('updateInputFormat', () => {
 		it('should skip reinitializeDecoder when the format is unchanged', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
