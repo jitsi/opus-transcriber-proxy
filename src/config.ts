@@ -189,9 +189,41 @@ export const config = {
 		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 
-	// Endpoint enablement (per container/worker). Both default true.
+	// Endpoint enablement (per container/worker). Transcribe/translate default true. The agent
+	// endpoint defaults FALSE: it dials out to arbitrary customer WebSocket endpoints, so it must
+	// be an explicit deployment decision (ENABLE_AGENT=true).
 	enableTranscribe: process.env.ENABLE_TRANSCRIBE !== 'false',
 	enableTranslate: process.env.ENABLE_TRANSLATE !== 'false',
+	enableAgent: process.env.ENABLE_AGENT === 'true',
+
+	agent: {
+		// Require wss:// for the customer endpoint URL (AGENT_REQUIRE_WSS=false allows ws:// for dev).
+		requireWss: process.env.AGENT_REQUIRE_WSS !== 'false',
+		// How much agent audio (ms) may be released ahead of real time by the pacer.
+		paceLeadMs: parseIntOrDefault(process.env.AGENT_PACE_LEAD_MS, 200),
+		// Shared secret gating the /agent WebSocket upgrade. When set, the caller (the bridge) must send a
+		// matching X-Agent-Token header, so a network peer that reaches the proxy can't trigger a dial-out.
+		// Unset disables the check (a warning is logged) — only safe when the proxy is strictly bridge-only.
+		sharedSecret: process.env.AGENT_SHARED_SECRET || '',
+		// Optional allowlist of customer endpoint hosts (comma-separated, exact host or ".suffix" match). When
+		// non-empty, the endpoint host must match. Empty = allow any PUBLIC host (private ranges always blocked).
+		allowedHosts: (process.env.AGENT_ALLOWED_HOSTS || '').split(',').map(h => h.trim().toLowerCase())
+			.filter(h => h),
+		// Dev/same-host opt-in: skip the private/internal-address SSRF denylist so the agent endpoint may be on
+		// localhost or an internal IP. Removes SSRF protection - never enable where untrusted callers can reach
+		// the /agent endpoint.
+		allowPrivateEndpoints: process.env.AGENT_ALLOW_PRIVATE_ENDPOINTS === 'true',
+		// Honor the dev-only ?endpoint= query param (otherwise the endpoint comes from the provisioning API).
+		allowEndpointParam: process.env.AGENT_ALLOW_ENDPOINT_PARAM === 'true',
+		// Base URL of the provisioning API's internal routes (prosody's /voice-agent or the JaaS gateway). The
+		// gateway fetches each agent's dial config from it by id (GET dial) and reports the media leg to it (POST
+		// status): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
+		// Unset, only the dev ?endpoint= path can dial and the agent never advances past jicofo's `connecting`.
+		provisioningUrl: process.env.AGENT_PROVISIONING_URL || '',
+		provisioningToken: process.env.AGENT_PROVISIONING_TOKEN || '',
+		// Host header override for a prosody that routes HTTP by virtual host.
+		provisioningHost: process.env.AGENT_PROVISIONING_HOST || '',
+	},
 
 	// Text translation: translate each final transcript into the target languages the bridge
 	// requests in the `sources` control event. Distinct from the /translate endpoint, which is

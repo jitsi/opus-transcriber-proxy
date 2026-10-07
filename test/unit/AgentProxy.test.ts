@@ -1,0 +1,380 @@
+/**
+ * Tests for AgentProxy (the /agent voice-agent relay).
+ *
+ * Covers:
+ * - dials the customer endpoint and queues outbound messages until it opens
+ * - forwards participant audio: start announcement + decoded PCM media per source
+ * - never feeds the agent's own source back to the customer
+ * - return path: customer PCM is encoded, DTX frames dropped, voice frames emitted with talk
+ *   boundaries, tagged with the source name from the bridge's `sources` event
+ * - clear (barge-in) empties the pacer queue
+ * - mark is echoed back after the audio ahead of it is released
+ * - endpoint failure closes the bridge socket (session retry via the bridge's reconnect)
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AgentProxy, CLOSE_CODE_AGENT_ENDED, CLOSE_CODE_ENDPOINT_UNREACHABLE } from '../../src/agentproxy';
+
+class MockWebSocket {
+	sent: string[] = [];
+	closed = false;
+	closeCode?: number;
+	closeReason?: string;
+	listeners = new Map<string, Array<(event: any) => void>>();
+
+	send(data: string) {
+		this.sent.push(data);
+	}
+	close(code?: number, reason?: string) {
+		this.closed = true;
+		this.closeCode = code;
+		this.closeReason = reason;
+		this.fire('close', {});
+	}
+	addEventListener(type: string, listener: (event: any) => void) {
+		const list = this.listeners.get(type) ?? [];
+		list.push(listener);
+		this.listeners.set(type, list);
+	}
+	fire(type: string, event: any) {
+		for (const listener of this.listeners.get(type) ?? []) {
+			listener(event);
+		}
+	}
+	receive(message: Record<string, unknown>) {
+		this.fire('message', { data: JSON.stringify(message) });
+	}
+	sentJson(): any[] {
+		return this.sent.map((s) => JSON.parse(s));
+	}
+}
+
+/** A decoder that "decodes" any opus frame to a fixed PCM buffer, ready immediately. */
+function mockDecoder() {
+	return {
+		ready: Promise.resolve(),
+		decodeFrame: vi.fn(() => ({ audioData: new Uint8Array([1, 2, 3, 4]), samplesDecoded: 2, errors: [] })),
+		conceal: vi.fn(),
+		reset: vi.fn(),
+		free: vi.fn(),
+	};
+}
+
+/**
+ * An encoder that emits one voice frame per encodeFrame call by default; tests can push
+ * `nextInDtx` values to control the DTX flag per emitted frame.
+ */
+function mockEncoder() {
+	const nextInDtx: boolean[] = [];
+	return {
+		ready: Promise.resolve(),
+		nextInDtx,
+		encodeFrame: vi.fn(() => [{ data: new Uint8Array([9, 9]), inDtx: nextInDtx.shift() ?? false }]),
+		getFrameSize: vi.fn(() => 480),
+		getFrameSizeBytes: vi.fn(() => 960),
+		free: vi.fn(),
+	};
+}
+
+function mockRuntime(decoder: any, encoder: any): any {
+	return {
+		logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+		config: { talkSilenceTimeoutMs: 350 },
+		writeMetric: vi.fn(),
+		createMetricBatcher: () => ({ increment: vi.fn(), flush: vi.fn() }),
+		createOutboundWebSocket: vi.fn(),
+		createOpusDecoder: vi.fn(() => decoder),
+		createOpusEncoder: vi.fn(() => encoder),
+		buildServerInfo: () => undefined,
+	};
+}
+
+const OPUS_B64 = Buffer.from([0, 1, 2]).toString('base64');
+const PCM_B64 = Buffer.from(new Uint8Array(960)).toString('base64');
+
+describe('AgentProxy', () => {
+	let bridgeWs: MockWebSocket;
+	let endpointWs: MockWebSocket;
+	let decoder: ReturnType<typeof mockDecoder>;
+	let encoder: ReturnType<typeof mockEncoder>;
+	let runtime: any;
+
+	beforeEach(() => {
+		vi.useRealTimers();
+		bridgeWs = new MockWebSocket();
+		endpointWs = new MockWebSocket();
+		decoder = mockDecoder();
+		encoder = mockEncoder();
+		runtime = mockRuntime(decoder, encoder);
+	});
+
+	function createProxy() {
+		const proxy = new AgentProxy(
+			bridgeWs as any,
+			{
+				endpointUrl: 'wss://agents.example.com/session',
+				createEndpointWebSocket: () => endpointWs as any,
+				customParameters: { session: 's1' },
+				paceLeadMs: 10_000, // effectively no pacing delay in tests unless stated otherwise
+			},
+			runtime,
+		);
+		return proxy;
+	}
+
+	/** Flush microtasks (the endpoint connect and codec-ready continuations). */
+	async function settle() {
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+	}
+
+	it('reports active once the customer socket opens', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		await settle();
+		endpointWs.fire('open', {});
+
+		expect(lifecycle).toEqual([ { state: 'active' } ]);
+	});
+
+	it('a refused dial reports failed and closes the bridge leg with the unreachable code', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+
+		endpointWs.fire('error', { message: 'Unexpected server response: 401' });
+		endpointWs.fire('close', {});
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint refused: HTTP 401' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		expect(bridgeWs.closeReason).toBe('endpoint refused: HTTP 401');
+	});
+
+	it('an unreachable endpoint reports failed with the error text', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+
+		endpointWs.fire('error', { message: 'connect ECONNREFUSED 127.0.0.1:9094' });
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: connect ECONNREFUSED 127.0.0.1:9094' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+	});
+
+	it('a mid-session endpoint loss closes normally so the bridge may redial', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+		endpointWs.fire('open', {});
+
+		endpointWs.fire('error', { message: 'read ECONNRESET' });
+
+		expect(lifecycle).toEqual([ { state: 'active' } ]);
+		expect(bridgeWs.closed).toBe(true);
+		expect(bridgeWs.closeCode).toBeUndefined();
+	});
+
+	it('end from the agent closes both legs, the bridge leg with the agent-ended code', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		const closed = vi.fn();
+		proxy.on('closed', closed);
+
+		endpointWs.receive({ event: 'end' });
+
+		expect(lifecycle).toEqual([ { state: 'active' }, { state: 'ended', reason: 'agent ended' } ]);
+
+		expect(endpointWs.closed).toBe(true);
+		expect(bridgeWs.closed).toBe(true);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_AGENT_ENDED);
+		expect(closed).toHaveBeenCalledTimes(1);
+	});
+
+	it('dials the endpoint and flushes queued messages once it opens', async () => {
+		createProxy();
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		await settle();
+		// Nothing sent yet: the endpoint socket has not opened.
+		expect(endpointWs.sent.length).toBe(0);
+
+		endpointWs.fire('open', {});
+		const events = endpointWs.sentJson().map((m) => m.event);
+		// info + per-source start + the media for it, in order.
+		expect(events).toEqual(['info', 'start', 'media']);
+	});
+
+	it('announces each source with the agent PCM format and forwards decoded media', async () => {
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: 1, timestamp: 1060, payload: OPUS_B64 } });
+		await settle();
+
+		const messages = endpointWs.sentJson();
+		const start = messages.find((m) => m.event === 'start');
+		expect(start.start.tag).toBe('user1-a0');
+		expect(start.start.mediaFormat).toEqual({ encoding: 'audio/l16', sampleRate: 24000, channels: 1 });
+		expect(start.start.customParameters).toEqual({ session: 's1' });
+
+		const media = messages.filter((m) => m.event === 'media');
+		expect(media.length).toBe(2);
+		expect(media[0].media.tag).toBe('user1-a0');
+		expect(media[0].media.chunk).toBe(0);
+		expect(media[1].media.chunk).toBe(1);
+		expect(media[1].media.timestamp).toBe(1060);
+		expect(Buffer.from(media[0].media.payload, 'base64')).toEqual(Buffer.from([1, 2, 3, 4]));
+	});
+
+	it('does not forward the agent\'s own source back to the customer', async () => {
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		bridgeWs.receive({ event: 'media', media: { tag: 'agent1-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		await settle();
+		const events = endpointWs.sentJson().map((m) => m.event);
+		// The pipe works (info arrived) but the agent's own audio was not looped back.
+		expect(events).toContain('info');
+		expect(events).not.toContain('media');
+	});
+
+	it('carries the encoder audio level and vad on voice frames', async () => {
+		const proxy = createProxy();
+		const frames: any[] = [];
+		proxy.on('audioFrame', (data: any) => frames.push(data));
+		encoder.encodeFrame.mockImplementation(() => [{ data: new Uint8Array([9, 9]), inDtx: false, audioLevel: 42 }]);
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		endpointWs.fire('open', {});
+		await settle();
+
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		await settle();
+
+		expect(frames.length).toBe(1);
+		expect(frames[0].audioLevel).toBe(42);
+		expect(frames[0].vad).toBe(true);
+	});
+
+	it('encodes customer audio and emits it with talk boundaries on the agent tag', async () => {
+		const proxy = createProxy();
+		const frames: any[] = [];
+		const talks: string[] = [];
+		proxy.on('audioFrame', (data: any) => frames.push(data));
+		proxy.on('talkStart', () => talks.push('start'));
+		proxy.on('talkStop', () => talks.push('stop'));
+
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		await settle();
+
+		expect(encoder.encodeFrame).toHaveBeenCalledTimes(1);
+		expect(frames.length).toBe(1);
+		expect(frames[0].tag).toBe('agent1-a0');
+		expect(typeof frames[0].chunk).toBe('number');
+		expect(typeof frames[0].timestamp).toBe('number');
+		expect(talks).toEqual(['start']);
+	});
+
+	it('drops DTX (silence) frames from the return path', async () => {
+		const proxy = createProxy();
+		const frames: any[] = [];
+		proxy.on('audioFrame', (data: any) => frames.push(data));
+
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		encoder.nextInDtx.push(true);
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		await settle();
+
+		expect(encoder.encodeFrame).toHaveBeenCalledTimes(2);
+		expect(frames.length).toBe(1);
+	});
+
+	it('clear empties the pacer queue (barge-in)', async () => {
+		// A tiny lead budget so pushed frames stay queued rather than releasing immediately.
+		const proxy = new AgentProxy(
+			bridgeWs as any,
+			{
+				endpointUrl: 'wss://agents.example.com/session',
+				createEndpointWebSocket: () => endpointWs as any,
+				paceLeadMs: 20,
+			},
+			runtime,
+		);
+		const frames: any[] = [];
+		proxy.on('audioFrame', (data: any) => frames.push(data));
+
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		for (let i = 0; i < 5; i++) {
+			endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		}
+		await settle();
+		const releasedBefore = frames.length;
+		expect(releasedBefore).toBeLessThan(5);
+
+		endpointWs.receive({ event: 'clear' });
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		// Nothing further was released after the clear.
+		expect(frames.length).toBe(releasedBefore);
+	});
+
+	it('echoes marks after the audio queued ahead of them', async () => {
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+		endpointWs.receive({ event: 'mark', mark: { name: 'checkpoint-1' } });
+		await settle();
+
+		const marks = endpointWs.sentJson().filter((m) => m.event === 'mark');
+		expect(marks.length).toBe(1);
+		expect(marks[0].mark.name).toBe('checkpoint-1');
+	});
+
+	it('closes the bridge socket when the endpoint leg fails', async () => {
+		const proxy = createProxy();
+		const events: string[] = [];
+		proxy.on('error', () => events.push('error'));
+		proxy.on('closed', () => events.push('closed'));
+
+		await settle();
+		endpointWs.fire('error', { message: 'connection refused' });
+
+		expect(events).toEqual(['error', 'closed']);
+		expect(bridgeWs.closed).toBe(true);
+	});
+
+	it('responds to bridge pings', async () => {
+		createProxy();
+		await settle();
+		bridgeWs.receive({ event: 'ping', id: 7 });
+		const pongs = bridgeWs.sentJson().filter((m) => m.event === 'pong');
+		expect(pongs).toEqual([{ event: 'pong', id: 7 }]);
+	});
+});
