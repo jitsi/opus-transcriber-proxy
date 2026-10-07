@@ -140,10 +140,21 @@ export const config = {
 		// flush or split on size).
 		turnSoftMaxWords: parseIntOrDefault(process.env.XAI_TURN_SOFT_MAX_WORDS, 20),
 		turnHardMaxWords: parseIntOrDefault(process.env.XAI_TURN_HARD_MAX_WORDS, 35),
-		// How long after the idle silence forceCommit() injects to wait for xAI's speech_final before
-		// ending the turn without it (see the long-turn cap). xAI answered the silence within ~0.5s
-		// when forceCommit() was verified, but has been seen not to answer at all.
+		// How long after the idle flush (forceCommit) to wait for xAI's speech_final before ending the
+		// turn without it (see the long-turn cap). xAI answers a `finalize` within ~0.15 s and the
+		// injected silence within ~0.5 s when it answers at all; it has been seen not to.
 		idleTurnEndGraceMs: parseIntOrDefault(process.env.XAI_IDLE_TURN_END_GRACE_MS, 3000),
+		// What the backend sends xAI: 'l16' decodes the client's Opus to 16 kHz PCM (xAI's native
+		// rate); 'opus' passes the client's raw Opus packets through unchanged, one per frame, which
+		// xAI accepts (verified: same transcript, labels and timestamps as PCM) and which saves a
+		// decode per participant and the PCM bandwidth to xAI. Only raw Opus is passed through; Ogg
+		// input is still decoded, since xAI wants bare packets. Mono only, which is what WebRTC sends.
+		encoding: (process.env.XAI_ENCODING || 'l16') as 'l16' | 'opus',
+		// How forceCommit() finalizes the trailing utterance when a participant goes idle:
+		// 'finalize' sends xAI's documented `{"type":"finalize"}` client message (speech_final in
+		// ~0.15 s, stream stays open); 'silence' injects endpointing + 300 ms of PCM silence, the
+		// pre-finalize method, kept as a rollback and usable only on the l16 path.
+		idleFlush: (process.env.XAI_IDLE_FLUSH || 'finalize') as 'finalize' | 'silence',
 	},
 
 	// Deepgram configuration

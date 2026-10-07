@@ -55,6 +55,8 @@ export interface Env {
 	XAI_TURN_SOFT_MAX_WORDS?: string;
 	XAI_TURN_HARD_MAX_WORDS?: string;
 	XAI_IDLE_TURN_END_GRACE_MS?: string;
+	XAI_ENCODING?: string;
+	XAI_IDLE_FLUSH?: string;
 	PROVIDERS_PRIORITY?: string;
 	FORCE_COMMIT_TIMEOUT?: string;
 	DEBUG?: string;
