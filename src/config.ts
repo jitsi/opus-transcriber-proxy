@@ -10,8 +10,9 @@ dotenv.config();
  * misread: an operator who sets XAI_ENCODING=pcm should learn that it meant nothing.
  */
 function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
-	if (raw === undefined || raw === '') return fallback;
-	if ((allowed as readonly string[]).includes(raw)) return raw as T;
+	if (raw === undefined || raw.trim() === '') return fallback;
+	const value = raw.trim().toLowerCase(); // XAI_ENCODING=Opus means opus
+	if ((allowed as readonly string[]).includes(value)) return value as T;
 	console.warn(`${name}=${JSON.stringify(raw)} is not one of ${allowed.join('|')}; using ${fallback}`);
 	return fallback;
 }

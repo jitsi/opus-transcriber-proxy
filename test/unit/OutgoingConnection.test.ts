@@ -659,6 +659,44 @@ describe('OutgoingConnection', () => {
 		});
 	});
 
+	describe('raw pass-through (a backend that wants the client encoding, e.g. XAI_ENCODING=opus)', () => {
+		it('hands each Opus packet to the backend as its own sendAudio call, bytes untouched', async () => {
+			mockBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus', sampleRate: 48000, channels: 2 }, options);
+			await vi.runAllTimersAsync();
+
+			const packets = [new Uint8Array([0x78, 1, 2, 3]), new Uint8Array([0x78, 4, 5]), new Uint8Array([0x78, 6, 7, 8, 9, 10])];
+			packets.forEach((p, i) => conn.handleMediaEvent({ media: { tag: 'test-tag', payload: Buffer.from(p).toString('base64'), chunk: i, timestamp: i * 960 } }));
+			await vi.runAllTimersAsync();
+
+			// One backend send per packet, in order, with the client's bytes exactly: xAI's encoding=opus
+			// takes one raw packet per binary frame, so batching or re-framing here would break it.
+			expect(mockBackend.getSentAudio()).toEqual(packets.map((p) => Buffer.from(p).toString('base64')));
+			conn.close();
+		});
+	});
+
+	describe('a format change during the first decoder init', () => {
+		it('does not connect the replacement backend a second time', async () => {
+			// Backend A is created by initializeBackend; a start event switching to a format with a
+			// different desired encoding arrives while A's decoder is still initializing, so the
+			// concurrent reinitializeDecoder replaces A with B and connects B. initializeBackend then
+			// resumes and must leave B alone rather than connect it again (a second socket under it).
+			const backendA = new MockTranscriptionBackend({ autoConnect: false, wantsRawAudio: true });
+			const backendB = new MockTranscriptionBackend({ autoConnect: false, wantsRawAudio: true });
+			vi.mocked(createBackend).mockImplementationOnce(() => backendA as any).mockImplementationOnce(() => backendB as any);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'l16', sampleRate: 24000 }, options); // desired: l16
+			conn.updateInputFormat({ encoding: 'opus', sampleRate: 48000 }); // desired: opus pass-through → reconnect
+			await vi.runAllTimersAsync();
+
+			expect(backendB.getConnectCallCount()).toBe(1);
+			expect(backendA.getConnectCallCount()).toBe(0);
+			expect(backendB.getStatus()).toBe('connected');
+			conn.close();
+		});
+	});
+
 	describe('updateInputFormat', () => {
 		it('should skip reinitializeDecoder when the format is unchanged', async () => {
 			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);

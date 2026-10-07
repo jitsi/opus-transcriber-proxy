@@ -155,12 +155,18 @@ export class OutgoingConnection {
 		try {
 			// Create backend using factory
 			// Use provider from options (URL param), or fall back to config default
-			this.backend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
+			const backend = createBackend(this.localTag, this.participant, this.options.provider, this.getOpenAICustomOptions());
+			this.backend = backend;
 
 			await this.reinitializeDecoder();
 
 			// close() may have been called while we were initializing the decoder.
 			if (this.isClosed) return;
+			// A start event that changed the desired format while the decoder was initializing made a
+			// concurrent reinitializeDecoder() replace the backend via reconnectBackend(), which has
+			// already set up and connected the replacement. Connecting it a second time would open a
+			// second socket under it and count the connection twice.
+			if (this.backend !== backend) return;
 
 			this.setupBackendHandlers(this.backend);
 

@@ -26,6 +26,8 @@ const textDecoder = new TextDecoder();
 // which avoids a server-side resample. Used for the request param, the desired decoder
 // output format, and the idle-silence buffer — keep these in sync.
 const XAI_SAMPLE_RATE = 16000;
+// Nominal rate of the pass-through Opus format (Opus's internal rate; xAI ignores it for Opus input).
+const XAI_OPUS_SAMPLE_RATE = 48000;
 
 // Extra silence (ms) injected beyond the endpointing threshold on idle commit, to be
 // sure xAI's VAD crosses the silence boundary and emits the final. See forceCommit().
@@ -1273,10 +1275,14 @@ export class XAIBackend implements TranscriptionBackend {
 	getDesiredAudioFormat(inputFormat: AudioFormat): AudioFormat {
 		// Raw Opus is passed through only when XAI_ENCODING=opus and the client sends bare packets:
 		// xAI takes one Opus packet per frame and nothing Ogg-encapsulated, so Ogg input (and l16)
-		// still goes through the decoder to 16 kHz PCM, xAI's native rate.
+		// still goes through the decoder to 16 kHz PCM, xAI's native rate. The pass-through format
+		// is a constant rather than a copy of the input: xAI ignores sample_rate and channels for
+		// Opus (the packets carry them), and a desired format that followed the client's would make
+		// the owner reconnect the stream, dropping held turn text, on a start event that changed
+		// nothing xAI cares about.
 		this.negotiatedFormat =
 			config.xai.encoding === 'opus' && inputFormat.encoding === 'opus'
-				? { ...inputFormat }
+				? { encoding: 'opus', sampleRate: XAI_OPUS_SAMPLE_RATE }
 				: { encoding: 'l16', sampleRate: XAI_SAMPLE_RATE };
 		return this.negotiatedFormat;
 	}

@@ -819,14 +819,13 @@ describe('XAIBackend', () => {
 			expect(backend.getDesiredAudioFormat({ encoding: 'ogg', sampleRate: 48000 })).toEqual({ encoding: 'l16', sampleRate: 16000 });
 		});
 
-		it('passes raw Opus through unchanged when XAI_ENCODING=opus, as a copy', () => {
+		it('passes raw Opus through when XAI_ENCODING=opus, as one constant format whatever the client signals', () => {
 			(config.xai as any).encoding = 'opus';
 			const backend = new XAIBackend('test-tag', { id: 'p1' });
-			const input = { encoding: 'opus' as const, sampleRate: 48000, channels: 2 };
-			const got = backend.getDesiredAudioFormat(input);
-			// The channel count is copied, not acted on: WebRTC signals 2 and encodes mono, which xAI takes.
-			expect(got).toEqual(input);
-			expect(got).not.toBe(input);
+			// xAI ignores sample rate and channels for Opus, so the desired format does not follow the
+			// client's: a start event changing only those must not make the owner reconnect the stream.
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 48000, channels: 2 })).toEqual({ encoding: 'opus', sampleRate: 48000 });
+			expect(backend.getDesiredAudioFormat({ encoding: 'opus', sampleRate: 24000, channels: 1 })).toEqual({ encoding: 'opus', sampleRate: 48000 });
 		});
 
 		it('still decodes Ogg-encapsulated input when XAI_ENCODING=opus, since xAI wants bare packets', () => {
