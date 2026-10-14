@@ -71,31 +71,33 @@ colibri2 endpoint, and JVB dials the agent's media WebSocket (`jitsi-agent-media
 Request:
 ```json
 {
-  "conference": "room1@conference.<domain>",
+  "conference": "acme/room1",
   "displayName": "Support Bot",
   "agentId": "support",
   "endpoint": { "url": "wss://bot.example.com/ws", "authorization": "Bearer <secret>" },
   "customParameters": { "campaign": "42" },
-  "callbackUrl": "https://app.example.com/jaas/agent-events"
+  "callbackUrl": "https://app.example.com/jaas/agent-events",
+  "mediaFormat": { "encoding": "audio/opus" }
 }
 ```
 
 | field | type | req | notes |
 |---|---|---|---|
-| `conference` | string | yes | Room JID (OSS) or JaaS room name the tenant owns. |
+| `conference` | string | yes | The room's name as in the meeting URL: `<room>`, or `<tenant>/<room>` on a multi-tenant deployment. Any case, plain (`Sales Standup`) or percent-encoded (`sales%20standup`). A room JID is accepted too, and is the only way to name a breakout room. Responses, webhooks and the agent's `info` always use the public name, spelled as the meeting URL does (lower-case, percent-encoded), never a JID. |
 | `displayName` | string | yes | Roster name; length-bounded. |
 | `agentId` | string | no | Suffix or full `agent-` id; charset/length-bounded; normalized to the namespace. **Idempotency key** (see below). Auto-generated if omitted. |
 | `endpoint.url` | string | yes | Agent media WS; **`wss://` required** (prod). Stays in the control plane; the media relay fetches it at dial time. |
 | `endpoint.authorization` | string | no | Sent as the `Authorization` header on the media dial. Leaves the control plane only for that dial; never in room metadata, jicofo or the bridge. |
 | `customParameters` | object(string→string) | no | Opaque; bounded, control chars rejected; echoed to the agent in the media `info`/`start` (`customParameters`). |
 | `callbackUrl` | string | no | HTTPS webhook for this agent's lifecycle events (see **Webhooks**). |
+| `mediaFormat.encoding` | string | no | Audio on the agent's media socket: `audio/l16` (PCM16 24 kHz, default) or `audio/opus` (relayed without transcoding; see the media contract's **Opus** section). Other `mediaFormat` fields are rejected in v1. |
 
 Response `200`:
 ```json
 { "agentId": "agent-support", "sourceName": "agent-support-a0" }
 ```
 
-Errors: `400` (invalid displayName / agentId / customParameters / missing or non-`wss` endpoint),
+Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / missing or non-`wss` endpoint),
 `401`/`403`, `404` (room not found), `409` (per-room agent cap reached, or `agentId` conflict).
 
 **Idempotency:** a repeated `invite` with the same `agentId` in the same conference and identical
@@ -146,8 +148,10 @@ acknowledged with `200` and ignored, so each lifecycle webhook fires once.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
-**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, endpoint, customParameters }`
-(`404` once the agent is gone), authenticated like `status`. On JaaS the gateway serves it from its own store.
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat }`
+(`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
+passes to the agent in the media `info`; the internal identifiers on the dial URL never reach the agent. On JaaS the
+gateway serves it from its own store.
 
 ## Webhooks *(v1 addition)*
 
@@ -156,10 +160,10 @@ plane POSTs lifecycle events so the customer backend need not poll `list`. This 
 Twilio's status callbacks.
 
 ```json
-{ "event": "agent.connected", "agentId": "agent-support", "conference": "room1@...",
+{ "event": "agent.connected", "agentId": "agent-support", "conference": "acme/room1",
   "sourceName": "agent-support-a0", "state": "active", "timestamp": "2026-09-25T14:00:00Z" }
 ```
-Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with a short, stable `reason` such as `no bridge available`; bridge error detail stays in operator logs). `agent.ended`
+Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with a short, stable `reason` such as `no bridge available`; bridge error detail stays in operator logs, and any internal address left in a reason is masked as `<internal>`). `agent.ended`
 fires for **both** a REST `dismiss` and the media-protocol `end` event, so teardown is observable
 regardless of who initiated it.
 
@@ -203,9 +207,10 @@ deployments simply omit this layer.
    belongs to the calling tenant. A tenant can never invite into, dismiss from, or list another
    tenant's rooms. This is the property OSS gets for free (single tenant) and the gateway must
    enforce explicitly.
-3. **Room → domain mapping.** JaaS rooms live under tenant-scoped MUC domains
-   (`<tenant>.8x8.vc` style). The gateway maps the tenant's room name to the internal room JID and
-   sets the `Host` the OSS component expects.
+3. **Room naming.** The component takes the public `<tenant>/<room>` form and resolves the internal
+   room itself, so the gateway only checks that the tenant segment is the caller's (or prefixes it
+   when the tenant sent a bare room name). The component also takes room JIDs, so the gateway must
+   check a JID's `[tenant]` the same way, or refuse JIDs from tenants. Nothing it returns carries one.
 4. **Mint the internal ASAP token.** The gateway calls the OSS route server-to-server with a system
    ASAP JWT signed by the internal key the component trusts. The tenant credential never reaches the
    component; the ASAP token never reaches the tenant.
@@ -245,12 +250,12 @@ dial from JVB to the customer's bot, and is carried opaquely.
 Customer backend                Gateway                         Prosody component (OSS route)
   POST /v1/voice-agent/invite     verify tenant JWT               POST /voice-agent/invite
   Authorization: <tenant JWT>  →  authorize room↔tenant        →  Authorization: <system ASAP>
-  { conference: "myroom", ... }   map room→JID, set Host           Host: <tenant muc domain>
-                                  check endpoint vs allowlist       { conference: "<jid>", ... }
+  { conference: "myroom", ... }   prefix/verify the tenant          { conference: "<tenant>/myroom", ... }
+                                  check endpoint vs allowlist
                                ←  200 { agentId, sourceName }    ←  200 { agentId, sourceName }
 ```
 
-The body is passed through essentially unchanged (after room-name→JID rewrite and policy checks), so
+The body is passed through essentially unchanged (after the tenant prefix and policy checks), so
 the frozen schema is what both the tenant and the component see.
 
 ## OSS deployment (no gateway)

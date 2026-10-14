@@ -55,6 +55,25 @@ describe('ProvisioningClient', () => {
 			expect(config).toEqual({ endpoint: { url: 'wss://bot.example.com/ws', authorization: 'Bearer k' }, customParameters: { campaign: '42' } });
 		});
 
+		it('carries the customer-facing room name when the API returns one', async () => {
+			const { c } = client([{ status: 200, body: JSON.stringify({ conference: 'acme/room1', endpoint: { url: 'wss://bot.example.com/ws' } }) }]);
+			expect(await c.dialConfig('[acme]room1@muc', 'agent-1')).toEqual({ conference: 'acme/room1', endpoint: { url: 'wss://bot.example.com/ws' } });
+		});
+
+		it('carries the requested media encoding as given, for the caller to check', async () => {
+			const { c } = client([
+				{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' }, mediaFormat: { encoding: 'audio/pcmu' } }) },
+				{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' }, mediaFormat: { encoding: 7 } }) },
+			]);
+			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toEqual({ encoding: 'audio/pcmu' });
+			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toBeUndefined();
+		});
+
+		it('never passes on a room name that is an XMPP address', async () => {
+			const { c } = client([{ status: 200, body: JSON.stringify({ conference: 'room1@conference.example.com', endpoint: { url: 'wss://bot.example.com/ws' } }) }]);
+			expect((await c.dialConfig('room1@conference.example.com', 'agent-1'))?.conference).toBeUndefined();
+		});
+
 		it('omits an absent authorization and non-object custom parameters', async () => {
 			const { c } = client([{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' }, customParameters: 'nope' }) }]);
 			expect(await c.dialConfig('room@muc', 'agent-1')).toEqual({ endpoint: { url: 'wss://bot.example.com/ws' } });

@@ -1,4 +1,6 @@
 import { AgentPacer } from './agent/AgentPacer';
+import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
+import { computeAudioLevel } from './OpusEncoder/audioLevel';
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { Emitter } from './translate/emitter';
@@ -14,6 +16,15 @@ const SAMPLES_PER_FRAME = (RTP_CLOCK_RATE * FRAME_DURATION_MS) / 1000;
 // Pipecat) resample internally as needed. TODO(MVP gap): offer 16 kHz via the Resampler.
 export const AGENT_PCM_SAMPLE_RATE = 24000;
 const AGENT_MEDIA_FORMAT = { encoding: 'audio/l16', sampleRate: AGENT_PCM_SAMPLE_RATE, channels: 1 };
+// Opus on the customer leg: RTP Opus packets as the bridge exports them, relayed without decoding.
+const AGENT_OPUS_MEDIA_FORMAT = { encoding: 'audio/opus', sampleRate: RTP_CLOCK_RATE, channels: 1 };
+// libopus emits a packet of at most 2 bytes for a DTX (silence) frame.
+const MAX_OPUS_DTX_PACKET_BYTES = 2;
+// RFC 6716 §3.2.1: one Opus frame is at most 1275 bytes, and a 20 ms packet from an encoder is one frame.
+const MAX_OPUS_PACKET_BYTES = 1275;
+// RFC 6464 level at or above which a decoded agent packet is silence: encoded digital silence and libopus's
+// comfort-noise refreshes decode to about -100..-117 dBov, speech to well above -90.
+const OPUS_SILENCE_LEVEL = 95;
 
 // Wire-protocol identity in `info`; bump major only on a breaking change (see AGENT_PROTOCOL.md).
 export const AGENT_PROTOCOL = 'jitsi-agent-media';
@@ -21,7 +32,10 @@ export const AGENT_PROTOCOL_VERSION = '1.0';
 
 /** Application close code on the bridge leg after the agent's `end`: the session is over, not to be redialed. */
 export const CLOSE_CODE_AGENT_ENDED = 4001;
-/** Application close code on the bridge leg when the dial to the customer endpoint failed: redialing would loop. */
+/**
+ * Application close code on the bridge leg when the dial to the customer endpoint failed, or the agent broke the
+ * media contract: redialing would repeat it.
+ */
 export const CLOSE_CODE_ENDPOINT_UNREACHABLE = 4002;
 
 /** A short, stable reason for a failed dial; the WebSocket close reason is capped at 123 bytes. */
@@ -34,6 +48,9 @@ export function dialFailureReason(message: string): string {
 const MAX_PENDING_OPUS_FRAMES = 500; // ~10 s of 20 ms frames per source
 const MAX_PENDING_PCM_BYTES = AGENT_PCM_SAMPLE_RATE * 2 * 10; // 10 s of return PCM
 const MAX_PENDING_ENDPOINT_MESSAGES = 1000; // JSON messages queued before the customer socket opens
+const MAX_QUEUED_AGENT_FRAMES = 3000; // 60 s of agent audio waiting in the pacer
+/** WebSocket close code towards the agent when it broke the media contract. */
+const CLOSE_CODE_POLICY_VIOLATION = 1008;
 
 export interface AgentProxyOptions {
 	/** The customer's WebSocket endpoint to dial out to. */
@@ -52,6 +69,8 @@ export interface AgentProxyOptions {
 	customParameters?: Record<string, unknown>;
 	/** How much agent audio (ms) may be released ahead of real time. Default 200. */
 	paceLeadMs?: number;
+	/** The customer-leg encoding the invite asked for. Default `audio/l16`. */
+	encoding?: AgentEncoding;
 }
 
 /** Per-participant-source state: decodes the bridge's Opus into PCM for the customer leg. */
@@ -78,6 +97,9 @@ interface SourceState {
  *    exactly like the translation path.
  *  - `clear` (barge-in) drops the un-released part of the agent's audio; `mark` checkpoints are
  *    echoed back once the pacer releases past them.
+ *  - With `audio/opus` neither direction is transcoded: participant packets go out as exported, and the
+ *    agent's 20 ms packets are paced and returned as sent. Only the agent's single stream is decoded,
+ *    for the audio level the bridge's speaker detection needs.
  *
  * A failure on the customer leg closes the bridge socket: the bridge's Exporter reconnects with
  * backoff, which re-dials the customer endpoint (session-level retry for free).
@@ -91,6 +113,16 @@ export class AgentProxy extends Emitter {
 	private readonly runtime: TranslationRuntime;
 
 	private readonly sources = new Map<string, SourceState>();
+
+	/** Opus on the customer leg (no transcoding); otherwise PCM16. */
+	private readonly opus: boolean;
+	private readonly mediaFormat: Record<string, unknown>;
+	/** Opus mode: decodes the agent's packets for their audio level only. */
+	private levelDecoder?: IOpusDecoder<typeof AGENT_PCM_SAMPLE_RATE>;
+	private levelDecoderReady = false;
+	private warnedPacerFull = false;
+	/** How the customer socket is closed, when not normally. */
+	private endpointClose?: { code: number; reason: string };
 
 	/** The agent's synthetic source name, from the bridge's `sources.requests`. */
 	private agentTag?: string;
@@ -126,6 +158,8 @@ export class AgentProxy extends Emitter {
 		this.options = options;
 		this.runtime = runtime;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
+		this.opus = options.encoding === 'audio/opus';
+		this.mediaFormat = this.opus ? AGENT_OPUS_MEDIA_FORMAT : AGENT_MEDIA_FORMAT;
 		this.pacer = new AgentPacer({ leadMs: options.paceLeadMs });
 		this.pacer.onFrame = (payload, audioLevel) => this.sendAgentFrame(payload, audioLevel);
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
@@ -137,7 +171,11 @@ export class AgentProxy extends Emitter {
 		});
 		this.ws.addEventListener('message', (event) => this.handleBridgeMessage(event.data));
 
-		this.initializeEncoder();
+		if (this.opus) {
+			this.initializeLevelDecoder();
+		} else {
+			this.initializeEncoder();
+		}
 		// Deferred to a microtask so the host has wired the 'error'/'closed' handlers by the time a
 		// synchronous connect failure (e.g. malformed URL) can fire.
 		queueMicrotask(() => this.connectEndpoint());
@@ -169,8 +207,9 @@ export class AgentProxy extends Emitter {
 		}
 		this.sources.clear();
 		this.encoder?.free();
+		this.levelDecoder?.free();
 		try {
-			this.endpointWs?.close();
+			this.endpointWs?.close(this.endpointClose?.code, this.endpointClose?.reason);
 		} catch {
 			// already closing/closed
 		}
@@ -251,6 +290,10 @@ export class AgentProxy extends Emitter {
 		if (tag === this.agentTag) {
 			return;
 		}
+		if (this.opus) {
+			this.forwardOpus(tag, message.media);
+			return;
+		}
 
 		let opusFrame: Uint8Array;
 		try {
@@ -286,16 +329,21 @@ export class AgentProxy extends Emitter {
 			event: 'start',
 			start: {
 				tag,
-				mediaFormat: { ...AGENT_MEDIA_FORMAT },
+				mediaFormat: { ...this.mediaFormat },
 				...(this.options.customParameters !== undefined ? { customParameters: this.options.customParameters } : {}),
 			},
 		});
+		if (this.opus) {
+			return state;
+		}
 
 		const decoder = this.runtime.createOpusDecoder({ sampleRate: AGENT_PCM_SAMPLE_RATE, channels: 1 });
 		state.decoder = decoder;
 		decoder.ready
 			.then(() => {
 				if (this.isClosed) {
+					// free() before ready is a no-op, so close() could not release it.
+					decoder.free();
 					return;
 				}
 				state.decoderStatus = 'ready';
@@ -311,6 +359,15 @@ export class AgentProxy extends Emitter {
 				this.runtime.logger.error(`agent: failed to initialise decoder for tag ${tag}:`, error);
 			});
 		return state;
+	}
+
+	/** Opus mode: the participant's packet goes out as exported, keeping the bridge's numbering so gaps show loss. */
+	private forwardOpus(tag: string, media: { chunk?: unknown; timestamp?: unknown; payload: string }): void {
+		if (!Number.isInteger(media.chunk) || !Number.isInteger(media.timestamp)) {
+			return;
+		}
+		this.ensureSource(tag);
+		this.sendToEndpoint({ event: 'media', media: { tag, chunk: media.chunk, timestamp: media.timestamp, payload: media.payload } });
 	}
 
 	private decodeAndForward(tag: string, state: SourceState, opusFrame: Uint8Array): void {
@@ -385,7 +442,7 @@ export class AgentProxy extends Emitter {
 				protocol: AGENT_PROTOCOL,
 				version: AGENT_PROTOCOL_VERSION,
 				application: 'opus-transcriber-proxy',
-				mediaFormat: { ...AGENT_MEDIA_FORMAT },
+				mediaFormat: { ...this.mediaFormat },
 				sessionId: this.sessionId,
 				...(this.options.agentId !== undefined ? { agentId: this.options.agentId } : {}),
 				...(this.options.conference !== undefined ? { conference: this.options.conference } : {}),
@@ -485,9 +542,11 @@ export class AgentProxy extends Emitter {
 				// DTX lets libopus's VAD flag silence frames; they are dropped and bracket the talks.
 				dtx: true,
 			});
-			this.encoder.ready
+			const encoder = this.encoder;
+			encoder.ready
 				.then(() => {
 					if (this.isClosed) {
+						encoder.free();
 						return;
 					}
 					this.encoderStatus = 'ready';
@@ -528,6 +587,10 @@ export class AgentProxy extends Emitter {
 		} catch {
 			return;
 		}
+		if (this.opus) {
+			this.relayAgentOpus(pcm);
+			return;
+		}
 
 		if (this.encoderStatus === 'ready') {
 			this.encodeReturnPcm(pcm);
@@ -551,12 +614,93 @@ export class AgentProxy extends Emitter {
 				// DTX frame: silence, not voice. Don't queue it — the pacer gap plus the RtpTimestamper's
 				// gap insertion produce true silence downstream, and the talk timer ends the talk.
 				if (!frame.inDtx) {
-					this.pacer.push(frame.data, frame.audioLevel);
+					this.pushAgentFrame(frame.data, frame.audioLevel);
 				}
 			}
 		} catch (error) {
 			this.runtime.logger.error('agent: failed to encode return audio:', error);
 		}
+	}
+
+	private initializeLevelDecoder(): void {
+		try {
+			const decoder = this.runtime.createOpusDecoder({ sampleRate: AGENT_PCM_SAMPLE_RATE, channels: 1 });
+			this.levelDecoder = decoder;
+			decoder.ready
+				.then(() => {
+					if (this.isClosed) {
+						decoder.free();
+						return;
+					}
+					this.levelDecoderReady = true;
+				})
+				.catch((error: unknown) => {
+					// Audio still flows, just without a level or a validity check.
+					this.runtime.logger.warn(`agent: failed to initialise the level decoder: ${String(error)}`);
+				});
+		} catch (error) {
+			this.runtime.logger.warn(`agent: failed to create the level decoder: ${String(error)}`);
+		}
+	}
+
+	/**
+	 * Opus mode: one 20 ms packet per agent `media`, paced and returned unchanged. DTX packets and packets that
+	 * decode to silence are dropped (ending the talk); a packet that breaks the contract ends the session.
+	 */
+	private relayAgentOpus(packet: Uint8Array): void {
+		if (packet.length <= MAX_OPUS_DTX_PACKET_BYTES) {
+			return;
+		}
+		if (opusPacketDurationMs(packet) !== FRAME_DURATION_MS || packet.length > MAX_OPUS_PACKET_BYTES) {
+			this.failAgent(`agent audio must be ${FRAME_DURATION_MS} ms Opus packets of at most ${MAX_OPUS_PACKET_BYTES} bytes`);
+			return;
+		}
+		const level = this.measureAgentPacket(packet);
+		if (level === 'invalid') {
+			this.failAgent('agent sent an Opus packet that does not decode');
+			return;
+		}
+		if (level !== undefined && level >= OPUS_SILENCE_LEVEL) {
+			return;
+		}
+		this.pushAgentFrame(packet, level);
+	}
+
+	/** The packet's RFC 6464 level, 'invalid' when it does not decode, or undefined before the decoder is ready. */
+	private measureAgentPacket(packet: Uint8Array): number | 'invalid' | undefined {
+		if (!this.levelDecoderReady || !this.levelDecoder) {
+			return undefined;
+		}
+		try {
+			const decoded = this.levelDecoder.decodeFrame(packet);
+			return decoded.errors.length === 0 && decoded.audioData.length > 0 ? computeAudioLevel(decoded.audioData) : 'invalid';
+		} catch {
+			return 'invalid';
+		}
+	}
+
+	/** Queues a frame for pacing, dropping it when the agent has sent far more than real time. */
+	private pushAgentFrame(payload: Uint8Array, audioLevel?: number): void {
+		if (this.pacer.queuedFrames >= MAX_QUEUED_AGENT_FRAMES) {
+			if (!this.warnedPacerFull) {
+				this.warnedPacerFull = true;
+				this.runtime.logger.warn(`agent: more than ${MAX_QUEUED_AGENT_FRAMES} frames queued; dropping agent audio`);
+			}
+			return;
+		}
+		this.pacer.push(payload, audioLevel);
+	}
+
+	/** The agent broke the media contract: tell it why and end the session; a redial would only repeat it. */
+	private failAgent(reason: string): void {
+		if (this.isClosed) {
+			return;
+		}
+		this.runtime.logger.warn(`agent: ${reason}`);
+		this.endpointClose = { code: CLOSE_CODE_POLICY_VIOLATION, reason };
+		this.endpointStatus = 'failed';
+		this.emit('lifecycle', { state: 'failed', reason });
+		this.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, reason);
 	}
 
 	/** Called by the pacer as each frame becomes due: stamp RTP timing and emit toward the bridge. */
@@ -583,7 +727,7 @@ export class AgentProxy extends Emitter {
 			timestamp,
 			payload: bytesToBase64(payload),
 			audioLevel,
-			// Every queued frame passed the encoder's DTX check, so it is voice.
+			// Every queued frame passed a DTX check, so it is voice.
 			vad: true,
 			sequenceNumber: this.envelopeSequenceNumber++,
 		});

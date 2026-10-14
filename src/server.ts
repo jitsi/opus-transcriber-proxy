@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { AgentDialConfig, AgentLifecycleState, ProvisioningClient } from './agent/ProvisioningClient';
+import { AgentEncoding, isAgentEncoding } from './agent/mediaFormat';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
@@ -70,6 +71,9 @@ const activeTranslateSessions = new Set<TranslatorProxy>();
 // Active /agent proxies, tracked for graceful shutdown like the translation proxies.
 const activeAgentSessions = new Set<AgentProxy>();
 
+/** Largest message accepted from a customer agent (ws defaults to 100 MiB); ~20 s of base64 PCM16 at 24 kHz. */
+const AGENT_ENDPOINT_MAX_MESSAGE_BYTES = 1 << 20;
+
 /** The customer endpoint an /agent connection should dial, resolved from the connect's header/params. */
 interface AgentEndpoint {
 	url: string;
@@ -80,6 +84,10 @@ interface AgentEndpoint {
 	conference?: string;
 	agentId?: string;
 	meetingId?: string;
+	/** The room as the customer names it, from the dial config; the only form the agent ever sees. */
+	publicConference?: string;
+	/** The customer-leg encoding from the dial config; absent means PCM16. */
+	encoding?: AgentEncoding;
 }
 
 /** Built on first use, so importing this module needs no agent config (tests mock a partial config). */
@@ -127,6 +135,14 @@ async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
 			? 'Missing conference and agentId query parameters'
 			: 'No provisioning API configured (AGENT_PROVISIONING_URL)';
 	}
+	const encoding = dial.mediaFormat?.encoding;
+	if (encoding !== undefined && !isAgentEncoding(encoding)) {
+		// Speaking another format than the agent asked for would play noise to the meeting; fail it visibly instead.
+		if (conference !== undefined && agentId !== undefined) {
+			void provisioning().report(conference, agentId, 'failed', `unsupported media format ${encoding}`.slice(0, 120));
+		}
+		return `Agent ${agentId} asks for an unsupported media format`;
+	}
 	let parsed: URL;
 	try {
 		parsed = new URL(dial.endpoint.url);
@@ -144,6 +160,8 @@ async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
 		...(conference !== undefined ? { conference } : {}),
 		...(agentId !== undefined ? { agentId } : {}),
 		...(meetingId !== undefined ? { meetingId } : {}),
+		...(dial.conference !== undefined ? { publicConference: dial.conference } : {}),
+		...(encoding !== undefined ? { encoding } : {}),
 	};
 }
 
@@ -218,12 +236,15 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 			endpointUrl: endpoint.url,
 			// The `ws` client here (not the runtime's OpenAI-shaped factory) so the forwarded
 			// Authorization header reaches the customer endpoint on the handshake.
-			createEndpointWebSocket: (url) => new WebSocket(url, { headers: endpoint.headers }) as unknown as IWebSocket,
+			createEndpointWebSocket: (url) =>
+				new WebSocket(url, { headers: endpoint.headers, maxPayload: AGENT_ENDPOINT_MAX_MESSAGE_BYTES }) as unknown as IWebSocket,
 			customParameters: endpoint.customParameters,
 			agentId: endpoint.agentId,
-			conference: endpoint.conference,
+			// The customer-facing room name only; the JID stays internal (status reports use it).
+			conference: endpoint.publicConference,
 			meetingId: endpoint.meetingId,
 			paceLeadMs: config.agent.paceLeadMs,
+			encoding: endpoint.encoding,
 		},
 		createNodeTranslationRuntime(),
 	);

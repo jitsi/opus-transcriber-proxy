@@ -174,6 +174,15 @@ AgentProxy (agentproxy.ts) - one per connection
        to the bridge (the tag is the agent's synthetic source from `sources.requests`)
 ```
 
+An agent invited with `mediaFormat.encoding: "audio/opus"` (dial config `mediaFormat`, `agent/mediaFormat.ts`)
+skips both codecs: participant packets go to the customer as exported (the bridge's `chunk`/`timestamp` kept), and the
+customer's packets, which must be one 20 ms Opus packet of ≤ 1275 bytes per `media` (TOC-checked), go straight to the
+pacer. Only the agent's single stream is decoded: to reject packets that don't decode, to drop silence (≤ 2-byte DTX
+packets and anything quieter than level 95) and for the RFC 6464 level the bridge's speaker detection reads. A
+contract violation closes the customer socket with 1008 and fails the session (`failed`, bridge close 4002); an
+encoding in the dial config the relay doesn't know fails the dial (`failed` reported) rather than falling back to PCM.
+The pacer holds at most 60 s of agent audio, and customer messages are capped at 1 MiB (`maxPayload`).
+
 Agent-specific control events on the customer leg: `clear` (barge-in — drops the pacer's queued,
 not-yet-released audio; only the ≤ AGENT_PACE_LEAD_MS already released can still play out) and
 `mark` (playback checkpoint, echoed back when the pacer releases past it — approximates "played",

@@ -10,6 +10,7 @@
  * - clear (barge-in) empties the pacer queue
  * - mark is echoed back after the audio ahead of it is released
  * - endpoint failure closes the bridge socket (session retry via the bridge's reconnect)
+ * - audio/opus: no transcoding in either direction; the agent's 20 ms packets carry a decoded audio level
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -108,7 +109,7 @@ describe('AgentProxy', () => {
 		runtime = mockRuntime(decoder, encoder);
 	});
 
-	function createProxy() {
+	function createProxy(extra: Record<string, unknown> = {}) {
 		const proxy = new AgentProxy(
 			bridgeWs as any,
 			{
@@ -116,6 +117,7 @@ describe('AgentProxy', () => {
 				createEndpointWebSocket: () => endpointWs as any,
 				customParameters: { session: 's1' },
 				paceLeadMs: 10_000, // effectively no pacing delay in tests unless stated otherwise
+				...extra,
 			},
 			runtime,
 		);
@@ -310,6 +312,131 @@ describe('AgentProxy', () => {
 
 		expect(encoder.encodeFrame).toHaveBeenCalledTimes(2);
 		expect(frames.length).toBe(1);
+	});
+
+	describe('audio/opus', () => {
+		// TOC bytes (RFC 6716 §3.1): CELT FB 20 ms (config 31), SILK WB 60 ms (config 11), both one frame (code 0).
+		const OPUS_20MS = Buffer.from([0xf8, 1, 2, 3]);
+		const OPUS_60MS = Buffer.from([0x58, 1, 2, 3]);
+
+		async function openOpusProxy() {
+			const proxy = createProxy({ encoding: 'audio/opus' });
+			await settle();
+			endpointWs.fire('open', {});
+			bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+			await settle();
+			return proxy;
+		}
+
+		it('announces Opus in info and start and transcodes nothing on the way to the agent', async () => {
+			await openOpusProxy();
+			bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: 7012, timestamp: 336000, payload: OPUS_B64 } });
+			await settle();
+
+			const messages = endpointWs.sentJson();
+			const opusFormat = { encoding: 'audio/opus', sampleRate: 48000, channels: 1 };
+			expect(messages.find((m) => m.event === 'info').mediaFormat).toEqual(opusFormat);
+			expect(messages.find((m) => m.event === 'start').start.mediaFormat).toEqual(opusFormat);
+			expect(messages.find((m) => m.event === 'media').media).toEqual({ tag: 'user1-a0', chunk: 7012, timestamp: 336000, payload: OPUS_B64 });
+			expect(runtime.createOpusEncoder).not.toHaveBeenCalled();
+			// Only the agent's level decoder; participant packets are never decoded.
+			expect(runtime.createOpusDecoder).toHaveBeenCalledTimes(1);
+			expect(decoder.decodeFrame).not.toHaveBeenCalled();
+		});
+
+		it('returns the agent\'s 20 ms packets unchanged, with an audio level', async () => {
+			const proxy = await openOpusProxy();
+			const frames: any[] = [];
+			proxy.on('audioFrame', (data: any) => frames.push(data));
+
+			endpointWs.receive({ event: 'media', media: { payload: OPUS_20MS.toString('base64') } });
+			await settle();
+
+			expect(frames.length).toBe(1);
+			expect(frames[0].tag).toBe('agent1-a0');
+			expect(Buffer.from(frames[0].payload, 'base64')).toEqual(OPUS_20MS);
+			expect(frames[0].audioLevel).toBeGreaterThanOrEqual(0);
+			expect(frames[0].audioLevel).toBeLessThanOrEqual(127);
+			expect(frames[0].vad).toBe(true);
+		});
+
+		it('drops DTX packets and packets that decode to silence', async () => {
+			const proxy = await openOpusProxy();
+			const frames: any[] = [];
+			proxy.on('audioFrame', (data: any) => frames.push(data));
+			decoder.decodeFrame.mockImplementation(() => ({ audioData: new Uint8Array(960), samplesDecoded: 480, errors: [] }));
+
+			endpointWs.receive({ event: 'media', media: { payload: Buffer.from([0xf8]).toString('base64') } });
+			endpointWs.receive({ event: 'media', media: { payload: OPUS_20MS.toString('base64') } });
+			await settle();
+
+			expect(frames.length).toBe(0);
+			expect(bridgeWs.closed).toBe(false);
+		});
+
+		it('forwards no participant packet without the bridge\'s chunk and timestamp', async () => {
+			await openOpusProxy();
+			bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', payload: OPUS_B64 } });
+			await settle();
+
+			expect(endpointWs.sentJson().filter((m) => m.event === 'media')).toEqual([]);
+		});
+
+		const violations: Array<[string, () => void, string]> = [
+			['a packet that is not 20 ms', () => undefined, OPUS_60MS.toString('base64')],
+			['an oversized packet', () => undefined, Buffer.concat([Buffer.from([0xf8]), Buffer.alloc(1300, 7)]).toString('base64')],
+			[
+				'a packet that does not decode',
+				() => decoder.decodeFrame.mockImplementation(() => ({ audioData: new Uint8Array(0), samplesDecoded: 0, errors: ['corrupt'] }) as any),
+				OPUS_20MS.toString('base64'),
+			],
+		];
+		for (const [what, arrange, payload] of violations) {
+			it(`fails the session on ${what}, telling the agent why`, async () => {
+				const proxy = await openOpusProxy();
+				const lifecycle: any[] = [];
+				proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+				arrange();
+
+				endpointWs.receive({ event: 'media', media: { payload } });
+
+				expect(lifecycle).toEqual([{ state: 'failed', reason: expect.stringMatching(/Opus packet/) }]);
+				expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+				expect(endpointWs.closeCode).toBe(1008);
+				expect(endpointWs.closeReason).toBe(lifecycle[0].reason);
+			});
+		}
+
+		it('frees the level decoder when the session closes before it is ready', async () => {
+			let ready!: () => void;
+			const slow = { ...mockDecoder(), ready: new Promise<void>((resolve) => (ready = resolve)) };
+			runtime.createOpusDecoder.mockImplementation(() => slow);
+			const proxy = createProxy({ encoding: 'audio/opus' });
+			proxy.close();
+			ready();
+			await settle();
+
+			expect(slow.free).toHaveBeenCalled();
+		});
+
+		it('stops queueing agent audio far ahead of real time', async () => {
+			const proxy = new AgentProxy(
+				bridgeWs as any,
+				{ endpointUrl: 'wss://agents.example.com/session', createEndpointWebSocket: () => endpointWs as any, paceLeadMs: 20, encoding: 'audio/opus' },
+				runtime,
+			);
+			await settle();
+			endpointWs.fire('open', {});
+			bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+			await settle();
+
+			for (let i = 0; i < 3010; i++) {
+				endpointWs.receive({ event: 'media', media: { payload: OPUS_20MS.toString('base64') } });
+			}
+
+			expect(runtime.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/frames queued/));
+			proxy.close();
+		});
 	});
 
 	it('clear empties the pacer queue (barge-in)', async () => {

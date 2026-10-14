@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 
+
 /** The media-leg states the gateway reports; jicofo reports `connecting` and allocation failures itself. */
 export type AgentLifecycleState = 'active' | 'failed' | 'ended';
 
@@ -8,6 +9,10 @@ export type AgentLifecycleState = 'active' | 'failed' | 'ended';
 export interface AgentDialConfig {
 	endpoint: { url: string; authorization?: string };
 	customParameters?: Record<string, unknown>;
+	/** The room as the customer names it (`<tenant>/<room>` or `<room>`), never the MUC JID. */
+	conference?: string;
+	/** The encoding the invite asked for on the customer leg, unchecked: the caller fails a dial it cannot speak. */
+	mediaFormat?: { encoding: string };
 }
 
 export interface ProvisioningResponse {
@@ -68,7 +73,12 @@ export class ProvisioningClient {
 			this.options.logger.warn(`Dial config fetch for ${label} failed with status ${response.status}`);
 			return undefined;
 		}
-		let parsed: { endpoint?: { url?: unknown; authorization?: unknown }; customParameters?: unknown };
+		let parsed: {
+			endpoint?: { url?: unknown; authorization?: unknown };
+			customParameters?: unknown;
+			conference?: unknown;
+			mediaFormat?: { encoding?: unknown };
+		};
 		try {
 			parsed = JSON.parse(response.body);
 		} catch {
@@ -82,8 +92,15 @@ export class ProvisioningClient {
 		}
 		const authorization = parsed.endpoint?.authorization;
 		const customParameters = parsed.customParameters;
+		const publicConference = parsed.conference;
+		const encoding = parsed.mediaFormat?.encoding;
 		return {
 			endpoint: { url, ...(typeof authorization === 'string' ? { authorization } : {}) },
+			// The agent must never see an internal XMPP address, whatever the API returns.
+			...(typeof publicConference === 'string' && publicConference !== '' && !publicConference.includes('@')
+				? { conference: publicConference }
+				: {}),
+			...(typeof encoding === 'string' ? { mediaFormat: { encoding } } : {}),
 			...(customParameters !== null && typeof customParameters === 'object' && !Array.isArray(customParameters)
 				? { customParameters: customParameters as Record<string, unknown> }
 				: {}),
