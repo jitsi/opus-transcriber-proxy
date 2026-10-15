@@ -98,7 +98,9 @@ Response `200`:
 ```
 
 Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / missing or non-`wss` endpoint),
-`401`/`403`, `404` (room not found), `409` (per-room agent cap reached, or `agentId` conflict).
+`401`/`403`, `404` (room not found), `409` (per-room agent cap reached, `agentId` conflict, or end-to-end
+encryption is on in the meeting: `{ "error": "End-to-end encryption is on in this meeting" }`; the agent's media goes
+through the bridge, which cannot decrypt it).
 
 **Idempotency:** a repeated `invite` with the same `agentId` in the same conference and identical
 parameters returns `200` with the existing agent (no duplicate). Same `agentId` with different
