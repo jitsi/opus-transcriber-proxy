@@ -146,7 +146,9 @@ jicofo); ASAP remains accepted, and the secret never authorizes the provisioning
 report is rebroadcast as room metadata and an automatic retry would loop. To retry, `invite` again with the
 same `agentId`: a failed agent is replaced rather than treated as a duplicate, and a fresh `connecting` →
 `active` sequence follows. Status reports are forward-only: a duplicate or a stale earlier state is
-acknowledged with `200` and ignored, so each lifecycle webhook fires once.
+acknowledged with `200` and ignored, so each lifecycle webhook fires once. `failed` and `ended` rank alike, so
+neither follows the other. A report for an agent that is already gone, such as a repeated `ended`, returns `404`,
+which reporters take as done.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
@@ -167,7 +169,8 @@ Twilio's status callbacks.
 ```
 Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with a short, stable `reason` such as `no bridge available`; bridge error detail stays in operator logs, and any internal address left in a reason is masked as `<internal>`). `agent.ended`
 fires for **both** a REST `dismiss` and the media-protocol `end` event, so teardown is observable
-regardless of who initiated it.
+regardless of who initiated it, and for each agent still in the meeting when it ends (`reason: room-destroyed`).
+A failed agent already had its terminal event, so it gets `agent.ended` only if it is dismissed.
 
 - **Signing:** `X-Agent-Signature: sha256=<hmac>` over the raw body, keyed by the per-tenant
   (OSS: per-deployment) webhook secret, so the customer can verify authenticity.
