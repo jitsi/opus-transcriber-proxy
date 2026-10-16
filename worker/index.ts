@@ -133,6 +133,17 @@ function buildContainerEnvVars(env: Env): Record<string, string> {
 		OTLP_ENV: env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
 		OTLP_HEADERS: env.OTLP_HEADERS || '',
+		// Voice agents (/agent, served by the container): off unless the Worker env enables it; the AGENT_*
+		// knobs are forwarded only when set, so the container defaults apply otherwise.
+		...(env.ENABLE_AGENT && { ENABLE_AGENT: env.ENABLE_AGENT }),
+		...(env.AGENT_REQUIRE_WSS && { AGENT_REQUIRE_WSS: env.AGENT_REQUIRE_WSS }),
+		...(env.AGENT_ALLOWED_HOSTS && { AGENT_ALLOWED_HOSTS: env.AGENT_ALLOWED_HOSTS }),
+		...(env.AGENT_ALLOW_PRIVATE_ENDPOINTS && { AGENT_ALLOW_PRIVATE_ENDPOINTS: env.AGENT_ALLOW_PRIVATE_ENDPOINTS }),
+		...(env.AGENT_SHARED_SECRET && { AGENT_SHARED_SECRET: env.AGENT_SHARED_SECRET }),
+		...(env.AGENT_PACE_LEAD_MS && { AGENT_PACE_LEAD_MS: env.AGENT_PACE_LEAD_MS }),
+		...(env.AGENT_PROVISIONING_URL && { AGENT_PROVISIONING_URL: env.AGENT_PROVISIONING_URL }),
+		...(env.AGENT_PROVISIONING_TOKEN && { AGENT_PROVISIONING_TOKEN: env.AGENT_PROVISIONING_TOKEN }),
+		...(env.AGENT_PROVISIONING_HOST && { AGENT_PROVISIONING_HOST: env.AGENT_PROVISIONING_HOST }),
 		PORT: '8080',
 		HOST: '0.0.0.0',
 	};
