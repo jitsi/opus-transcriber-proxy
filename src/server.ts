@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { AgentDialConfig, AgentLifecycleState, ProvisioningClient } from './agent/ProvisioningClient';
+import { AgentFanIn, isAgentFanIn } from './agent/fanIn';
 import { AgentEncoding, isAgentEncoding } from './agent/mediaFormat';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -88,6 +89,8 @@ interface AgentEndpoint {
 	publicConference?: string;
 	/** The customer-leg encoding from the dial config; absent means PCM16. */
 	encoding?: AgentEncoding;
+	/** The fan-in from the dial config; absent means per-source. */
+	fanIn?: AgentFanIn;
 }
 
 /** Built on first use, so importing this module needs no agent config (tests mock a partial config). */
@@ -143,6 +146,13 @@ async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
 		}
 		return `Agent ${agentId} asks for an unsupported media format`;
 	}
+	const fanIn = dial.fanIn;
+	if (fanIn !== undefined && !isAgentFanIn(fanIn)) {
+		if (conference !== undefined && agentId !== undefined) {
+			void provisioning().report(conference, agentId, 'failed', `unsupported fan-in ${fanIn}`.slice(0, 120));
+		}
+		return `Agent ${agentId} asks for an unsupported fan-in`;
+	}
 	let parsed: URL;
 	try {
 		parsed = new URL(dial.endpoint.url);
@@ -162,6 +172,7 @@ async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
 		...(meetingId !== undefined ? { meetingId } : {}),
 		...(dial.conference !== undefined ? { publicConference: dial.conference } : {}),
 		...(encoding !== undefined ? { encoding } : {}),
+		...(fanIn !== undefined ? { fanIn } : {}),
 	};
 }
 
@@ -245,6 +256,7 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 			meetingId: endpoint.meetingId,
 			paceLeadMs: config.agent.paceLeadMs,
 			encoding: endpoint.encoding,
+			fanIn: endpoint.fanIn,
 		},
 		createNodeTranslationRuntime(),
 	);

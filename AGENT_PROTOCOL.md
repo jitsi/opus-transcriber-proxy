@@ -1,10 +1,12 @@
-# Jitsi Agent Media Protocol — v1.0 (frozen)
+# Jitsi Agent Media Protocol — v1.1 (frozen at v1.0, additive since)
 
-Status: **frozen, v1.0**. The `/agent` customer leg speaks this contract. It is the surface an
-upstream Pipecat `JitsiFrameSerializer` (and any other third-party voice-agent framework) targets,
-so it must not change in a breaking way once published — see **Versioning** below.
+Status: **frozen at v1.0; v1.1 adds only optional fields and events**. The `/agent` customer leg
+speaks this contract. It is the surface an upstream Pipecat `JitsiFrameSerializer` (and any other
+third-party voice-agent framework) targets, so it must not change in a breaking way once published —
+see **Versioning** below.
 
-`protocol` identifier: `jitsi-agent-media`. Current `version`: `1.0`.
+`protocol` identifier: `jitsi-agent-media`. Current `version`: `1.1` (adds `info.fanIn` and the
+`speakers` event; a v1.0 consumer ignores both).
 
 ## Roles and transport
 
@@ -39,6 +41,7 @@ so it must not change in a breaking way once published — see **Versioning** be
 { "event": "info", "protocol": "jitsi-agent-media", "version": "1.0",
   "application": "opus-transcriber-proxy",
   "mediaFormat": { "encoding": "audio/l16", "sampleRate": 24000, "channels": 1 },
+  "fanIn": "per-source",
   "sessionId": "5f1c7e0a-…", "agentId": "agent-support",
   "conference": "acme/room1", "meetingId": "9b3d2c41-…",
   "customParameters": { "...": "..." },
@@ -50,6 +53,7 @@ so it must not change in a breaking way once published — see **Versioning** be
 | `version` | string | yes | `MAJOR.MINOR` of this contract. |
 | `application` | string | yes | Gateway build identifier (informational). |
 | `mediaFormat` | object | yes | Default audio format for the connection (per-stream `start` may restate it). |
+| `fanIn` | string | no (v1.1) | Which participants' audio arrives: `per-source` (every exported source, the default) or `dominant` (only the dominant speaker's; see **Multi-speaker**). Absent from a v1.0 gateway, meaning `per-source`. |
 | `sessionId` | string | yes | Unique per dial, so a redial after a bridge reconnect is distinguishable from a new session. |
 | `agentId` | string | no | The agent being dialed, as provisioned. Lets one server host many bots. Absent only on the dev `?endpoint=` path. |
 | `conference` | string | no | The room the agent was invited to, spelled as in the meeting URL (lower-case, percent-encoded): `<room>`, or `<tenant>/<room>` on a multi-tenant deployment. Never an internal XMPP address. |
@@ -98,6 +102,24 @@ deployment asks for consent), and, when the bridge routes only the loudest speak
 few at any moment. A tag can go silent (mute, or no longer among the loudest) and resume without a new
 `start`. A `tag` is a source name (`<endpointId>-a0`); it does not identify the person, and v1 carries
 no display names.
+
+**Fan-in** (v1.1). An agent invited with `fanIn: "dominant"` hears one person at a time: the gateway
+forwards only the audio of the first `tag` in the bridge's speaker order (below), and switches tags as
+the order changes. The frames still carry each speaker's own `tag`, so a serializer that demultiplexes
+by `tag` needs no change; it simply never sees two tags active at once. Selection is the bridge's
+dominant-speaker ranking, the one the meeting UI highlights, so the first few hundred milliseconds of
+a new speaker are not forwarded until the bridge promotes them. The default, `per-source`, forwards
+every exported tag.
+
+### `speakers` (v1.1, speaker order)
+```json
+{ "event": "speakers", "speakers": ["3f2a9c-a0", "b71e04-a0"], "silence": false, "sequenceNumber": 57 }
+```
+The exported sources in the bridge's recent-speaker order, the dominant speaker first; sent whenever
+the order changes and once after the connection opens, in every fan-in. Empty until someone has
+spoken. `silence` is true while nobody is speaking (the order then still holds who spoke last). A hint
+for turn taking and speaker labels; with `fanIn: "dominant"` it also names the one `tag` whose audio
+currently arrives. Older gateways never send it.
 
 ### Opus
 
@@ -183,9 +205,10 @@ the agent socket opens, `failed` with the reason above when the dial fails or th
 
 1. **No mixing on the gateway; the agent demultiplexes.** Inbound audio is *always* per-source,
    keyed by `tag` (see **Multi-speaker**). An agent that wants a single stream mixes or selects in
-   its own code or serializer. If a gateway-side mixed stream is ever offered, it will be an invite
-   option that arrives as one more `tag` in the same envelope, so a serializer that handles
-   per-`tag` `media` needs no change.
+   its own code or serializer, or asks for the `dominant` fan-in (v1.1), which selects rather than
+   mixes and still delivers per-`tag` `media`, one tag at a time. If a gateway-side mixed stream is
+   ever offered, it will be a further `fanIn` value whose audio arrives as one more `tag` in the same
+   envelope, so a serializer that handles per-`tag` `media` needs no change.
 
 2. **Teardown is the `end` event** (above), reserved/defined now so the contract never has to grow
    a breaking teardown path later.
@@ -203,6 +226,8 @@ the agent socket opens, `failed` with the reason above when the dial fails or th
 - `mediaFormat.encoding` / `sampleRate` — chosen per agent at invite; `audio/opus` (passthrough)
   is the first addition, and further encodings are additive the same way.
 - `customParameters` — free-form provisioning passthrough.
+- `fanIn` — chosen per agent at invite; `per-source` and `dominant` exist, further policies (e.g. a
+  gateway-side mix) are additive the same way.
 
 ## Conformance
 

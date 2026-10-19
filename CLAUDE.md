@@ -183,6 +183,14 @@ contract violation closes the customer socket with 1008 and fails the session (`
 encoding in the dial config the relay doesn't know fails the dial (`failed` reported) rather than falling back to PCM.
 The pacer holds at most 60 s of agent audio, and customer messages are capped at 1 MiB (`maxPayload`).
 
+The bridge sends agent connects a `speakers` event (the exported sources in its recent-speaker order, the dominant
+speaker first, plus `silence`) whenever the order changes and once on connect; the relay passes it on to the customer
+as a hint in every fan-in. An agent invited with `fanIn: "dominant"` (dial config `fanIn`, `agent/fanIn.ts`; default
+`per-source`) hears only the first listed source: `AgentProxy.fansIn` drops the other sources' media (PCM and Opus
+alike), the frames keep their own tags, and the selection is the bridge's, so the relay measures no levels itself. An
+empty order (nobody has spoken) forwards nothing; no order at all (an older bridge) forwards every source with one
+warning. `info.fanIn` announces the policy and the protocol version is `1.1` (additive on `1.0`).
+
 Agent-specific control events on the customer leg: `clear` (barge-in — drops the pacer's queued,
 not-yet-released audio; only the ≤ AGENT_PACE_LEAD_MS already released can still play out) and
 `mark` (playback checkpoint, echoed back when the pacer releases past it — approximates "played",

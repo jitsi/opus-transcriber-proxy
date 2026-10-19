@@ -69,6 +69,15 @@ describe('ProvisioningClient', () => {
 			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toBeUndefined();
 		});
 
+		it('carries the requested fan-in as given, dropping a non-string', async () => {
+			const { c } = client([
+				{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' }, fanIn: 'dominant' }) },
+				{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' }, fanIn: 3 }) },
+			]);
+			expect((await c.dialConfig('room@muc', 'agent-1'))?.fanIn).toBe('dominant');
+			expect((await c.dialConfig('room@muc', 'agent-1'))?.fanIn).toBeUndefined();
+		});
+
 		it('never passes on a room name that is an XMPP address', async () => {
 			const { c } = client([{ status: 200, body: JSON.stringify({ conference: 'room1@conference.example.com', endpoint: { url: 'wss://bot.example.com/ws' } }) }]);
 			expect((await c.dialConfig('room1@conference.example.com', 'agent-1'))?.conference).toBeUndefined();

@@ -11,6 +11,7 @@
  * - mark is echoed back after the audio ahead of it is released
  * - endpoint failure closes the bridge socket (session retry via the bridge's reconnect)
  * - audio/opus: no transcoding in either direction; the agent's 20 ms packets carry a decoded audio level
+ * - speakers: the bridge's speaker order is passed on; the dominant fan-in forwards only the first source's audio
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -436,6 +437,89 @@ describe('AgentProxy', () => {
 
 			expect(runtime.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/frames queued/));
 			proxy.close();
+		});
+	});
+
+	describe('speakers and fan-in', () => {
+		const media = (tag: string, chunk: number) => ({ event: 'media', media: { tag, chunk, timestamp: 100 + chunk * 960, payload: OPUS_B64 } });
+		const forwarded = () => endpointWs.sentJson().filter((m) => m.event === 'media').map((m) => `${m.media.tag}#${m.media.chunk}`);
+		const started = () => endpointWs.sentJson().filter((m) => m.event === 'start').map((m) => m.start.tag);
+
+		async function openProxy(extra: Record<string, unknown> = {}) {
+			const proxy = createProxy(extra);
+			await settle();
+			endpointWs.fire('open', {});
+			bridgeWs.receive({ event: 'sources', exports: ['u1-a0', 'u2-a0'], requests: ['agent1-a0'] });
+			await settle();
+			return proxy;
+		}
+
+		it('announces the per-source fan-in by default and passes the speaker order on without gating', async () => {
+			await openProxy();
+			bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
+			bridgeWs.receive(media('u1-a0', 0));
+			bridgeWs.receive(media('u2-a0', 0));
+			await settle();
+
+			const messages = endpointWs.sentJson();
+			expect(messages.find((m) => m.event === 'info').fanIn).toBe('per-source');
+			expect(messages.find((m) => m.event === 'info').version).toBe('1.1');
+			const speakers = messages.find((m) => m.event === 'speakers');
+			expect(speakers.speakers).toEqual(['u2-a0', 'u1-a0']);
+			expect(speakers.silence).toBe(false);
+			expect(forwarded()).toEqual(['u1-a0#0', 'u2-a0#0']);
+		});
+
+		it('dominant: forwards only the first listed source, following each new order', async () => {
+			await openProxy({ fanIn: 'dominant' });
+			bridgeWs.receive({ event: 'speakers', speakers: ['u1-a0', 'u2-a0'], silence: false });
+			bridgeWs.receive(media('u1-a0', 0));
+			bridgeWs.receive(media('u2-a0', 0));
+			bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
+			bridgeWs.receive(media('u1-a0', 1));
+			bridgeWs.receive(media('u2-a0', 1));
+			await settle();
+
+			expect(endpointWs.sentJson().find((m) => m.event === 'info').fanIn).toBe('dominant');
+			expect(started()).toEqual(['u1-a0', 'u2-a0']);
+			expect(forwarded()).toEqual(['u1-a0#0', 'u2-a0#0']);
+			expect(runtime.logger.info).toHaveBeenCalledWith(expect.stringContaining('dominant speaker is now u2-a0'));
+		});
+
+		it('dominant: forwards nothing while nobody has spoken, and never the agent itself', async () => {
+			await openProxy({ fanIn: 'dominant' });
+			bridgeWs.receive({ event: 'speakers', speakers: [], silence: true });
+			bridgeWs.receive(media('u1-a0', 0));
+			bridgeWs.receive({ event: 'speakers', speakers: ['agent1-a0', 'u2-a0'], silence: false });
+			bridgeWs.receive(media('u1-a0', 1));
+			bridgeWs.receive(media('u2-a0', 0));
+			await settle();
+
+			expect(forwarded()).toEqual(['u2-a0#0']);
+			const hints = endpointWs.sentJson().filter((m) => m.event === 'speakers').map((m) => m.speakers);
+			expect(hints).toEqual([[], ['u2-a0']]);
+		});
+
+		it('dominant: forwards every source, warning once, when the bridge sends no speaker order', async () => {
+			await openProxy({ fanIn: 'dominant' });
+			bridgeWs.receive(media('u1-a0', 0));
+			bridgeWs.receive(media('u2-a0', 0));
+			await settle();
+
+			expect(forwarded()).toEqual(['u1-a0#0', 'u2-a0#0']);
+			const warnings = runtime.logger.warn.mock.calls.filter((c: string[]) => /speaker order/.test(c[0]));
+			expect(warnings).toHaveLength(1);
+		});
+
+		it('dominant: gates the Opus passthrough the same way', async () => {
+			await openProxy({ fanIn: 'dominant', encoding: 'audio/opus' });
+			bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
+			bridgeWs.receive(media('u1-a0', 0));
+			bridgeWs.receive(media('u2-a0', 7));
+			await settle();
+
+			expect(started()).toEqual(['u2-a0']);
+			expect(forwarded()).toEqual(['u2-a0#7']);
 		});
 	});
 

@@ -77,7 +77,8 @@ Request:
   "endpoint": { "url": "wss://bot.example.com/ws", "authorization": "Bearer <secret>" },
   "customParameters": { "campaign": "42" },
   "callbackUrl": "https://app.example.com/jaas/agent-events",
-  "mediaFormat": { "encoding": "audio/opus" }
+  "mediaFormat": { "encoding": "audio/opus" },
+  "fanIn": "dominant"
 }
 ```
 
@@ -91,13 +92,14 @@ Request:
 | `customParameters` | object(string→string) | no | Opaque; bounded, control chars rejected; echoed to the agent in the media `info`/`start` (`customParameters`). |
 | `callbackUrl` | string | no | HTTPS webhook for this agent's lifecycle events (see **Webhooks**). |
 | `mediaFormat.encoding` | string | no | Audio on the agent's media socket: `audio/l16` (PCM16 24 kHz, default) or `audio/opus` (relayed without transcoding; see the media contract's **Opus** section). Other `mediaFormat` fields are rejected in v1. |
+| `fanIn` | string | no | Which participants' audio the agent hears: `per-source` (every participant as its own stream, default) or `dominant` (only the dominant speaker's, as the bridge ranks them; see the media contract's **Multi-speaker** section). |
 
 Response `200`:
 ```json
 { "agentId": "agent-support", "sourceName": "agent-support-a0" }
 ```
 
-Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / missing or non-`wss` endpoint),
+Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / fanIn / missing or non-`wss` endpoint),
 `401`/`403`, `404` (room not found), `409` (per-room agent cap reached, `agentId` conflict, or end-to-end
 encryption is on in the meeting: `{ "error": "End-to-end encryption is on in this meeting" }`; the agent's media goes
 through the bridge, which cannot decrypt it).
@@ -152,7 +154,7 @@ which reporters take as done.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
-**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat }`
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn }`
 (`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
 passes to the agent in the media `info`; the internal identifiers on the dial URL never reach the agent. On JaaS the
 gateway serves it from its own store.

@@ -1,4 +1,5 @@
 import { AgentPacer } from './agent/AgentPacer';
+import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
 import { computeAudioLevel } from './OpusEncoder/audioLevel';
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
@@ -28,7 +29,7 @@ const OPUS_SILENCE_LEVEL = 95;
 
 // Wire-protocol identity in `info`; bump major only on a breaking change (see AGENT_PROTOCOL.md).
 export const AGENT_PROTOCOL = 'jitsi-agent-media';
-export const AGENT_PROTOCOL_VERSION = '1.0';
+export const AGENT_PROTOCOL_VERSION = '1.1';
 
 /** Application close code on the bridge leg after the agent's `end`: the session is over, not to be redialed. */
 export const CLOSE_CODE_AGENT_ENDED = 4001;
@@ -71,6 +72,8 @@ export interface AgentProxyOptions {
 	paceLeadMs?: number;
 	/** The customer-leg encoding the invite asked for. Default `audio/l16`. */
 	encoding?: AgentEncoding;
+	/** Which participants' audio the agent hears (see [AgentFanIn]). Default `per-source`. */
+	fanIn?: AgentFanIn;
 }
 
 /** Per-participant-source state: decodes the bridge's Opus into PCM for the customer leg. */
@@ -100,6 +103,9 @@ interface SourceState {
  *  - With `audio/opus` neither direction is transcoded: participant packets go out as exported, and the
  *    agent's 20 ms packets are paced and returned as sent. Only the agent's single stream is decoded,
  *    for the audio level the bridge's speaker detection needs.
+ *  - The bridge's `speakers` events (exported sources in recent-speaker order, the dominant speaker first)
+ *    are passed on to the customer. With the `dominant` fan-in only the first listed source's audio is
+ *    forwarded, so the agent hears one speaker at a time without measuring levels itself.
  *
  * A failure on the customer leg closes the bridge socket: the bridge's Exporter reconnects with
  * backoff, which re-dials the customer endpoint (session-level retry for free).
@@ -116,6 +122,10 @@ export class AgentProxy extends Emitter {
 
 	/** Opus on the customer leg (no transcoding); otherwise PCM16. */
 	private readonly opus: boolean;
+	private readonly fanIn: AgentFanIn;
+	/** Exported sources in recent-speaker order as the bridge last reported them; undefined until it has. */
+	private speakers?: string[];
+	private warnedNoSpeakers = false;
 	private readonly mediaFormat: Record<string, unknown>;
 	/** Opus mode: decodes the agent's packets for their audio level only. */
 	private levelDecoder?: IOpusDecoder<typeof AGENT_PCM_SAMPLE_RATE>;
@@ -159,6 +169,7 @@ export class AgentProxy extends Emitter {
 		this.runtime = runtime;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
 		this.opus = options.encoding === 'audio/opus';
+		this.fanIn = options.fanIn ?? DEFAULT_AGENT_FAN_IN;
 		this.mediaFormat = this.opus ? AGENT_OPUS_MEDIA_FORMAT : AGENT_MEDIA_FORMAT;
 		this.pacer = new AgentPacer({ leadMs: options.paceLeadMs });
 		this.pacer.onFrame = (payload, audioLevel) => this.sendAgentFrame(payload, audioLevel);
@@ -246,6 +257,9 @@ export class AgentProxy extends Emitter {
 			case 'sources':
 				this.handleSources(message.requests ?? []);
 				break;
+			case 'speakers':
+				this.handleSpeakers(message);
+				break;
 			case 'start':
 				// Per-source stream announcement from the bridge. The exported audio is always Opus 48k;
 				// the customer-leg start is sent when the source's first media arrives (ensureSource).
@@ -279,6 +293,38 @@ export class AgentProxy extends Emitter {
 		this.agentTag = requestList[0];
 	}
 
+	/**
+	 * The bridge's speaker order: the exported sources, the dominant speaker first. Passed on to the customer as a
+	 * hint in every fan-in, and the selector for the `dominant` one.
+	 */
+	private handleSpeakers(message: any): void {
+		const speakers: string[] = Array.isArray(message.speakers)
+			? message.speakers.filter((s: unknown): s is string => typeof s === 'string' && s !== this.agentTag)
+			: [];
+		const silence = message.silence === true;
+		if (this.fanIn === 'dominant' && speakers[0] !== this.speakers?.[0]) {
+			this.runtime.logger.info(`agent: dominant speaker is now ${speakers[0] ?? 'nobody'}`);
+		}
+		this.speakers = speakers;
+		this.sendToEndpoint({ event: 'speakers', speakers, silence });
+	}
+
+	/** Whether this source's audio goes to the agent under the fan-in policy. */
+	private fansIn(tag: string): boolean {
+		if (this.fanIn !== 'dominant') {
+			return true;
+		}
+		if (this.speakers === undefined) {
+			// A bridge from before speaker orders: every exported source, as per-source would.
+			if (!this.warnedNoSpeakers) {
+				this.warnedNoSpeakers = true;
+				this.runtime.logger.warn('agent: dominant fan-in but the bridge sends no speaker order; forwarding every source');
+			}
+			return true;
+		}
+		return tag === this.speakers[0];
+	}
+
 	private handleBridgeMedia(message: any): void {
 		const tag = message.media?.tag;
 		const payload = message.media?.payload;
@@ -287,7 +333,7 @@ export class AgentProxy extends Emitter {
 		}
 		// Don't feed the agent its own (or another agent's) audio back. The bridge already excludes
 		// synthetic sources from exports; this is a local safety net.
-		if (tag === this.agentTag) {
+		if (tag === this.agentTag || !this.fansIn(tag)) {
 			return;
 		}
 		if (this.opus) {
@@ -443,6 +489,7 @@ export class AgentProxy extends Emitter {
 				version: AGENT_PROTOCOL_VERSION,
 				application: 'opus-transcriber-proxy',
 				mediaFormat: { ...this.mediaFormat },
+				fanIn: this.fanIn,
 				sessionId: this.sessionId,
 				...(this.options.agentId !== undefined ? { agentId: this.options.agentId } : {}),
 				...(this.options.conference !== undefined ? { conference: this.options.conference } : {}),

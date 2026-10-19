@@ -13,6 +13,8 @@ export interface AgentDialConfig {
 	conference?: string;
 	/** The encoding the invite asked for on the customer leg, unchecked: the caller fails a dial it cannot speak. */
 	mediaFormat?: { encoding: string };
+	/** The fan-in the invite asked for, unchecked likewise. */
+	fanIn?: string;
 }
 
 export interface ProvisioningResponse {
@@ -78,6 +80,7 @@ export class ProvisioningClient {
 			customParameters?: unknown;
 			conference?: unknown;
 			mediaFormat?: { encoding?: unknown };
+			fanIn?: unknown;
 		};
 		try {
 			parsed = JSON.parse(response.body);
@@ -94,6 +97,7 @@ export class ProvisioningClient {
 		const customParameters = parsed.customParameters;
 		const publicConference = parsed.conference;
 		const encoding = parsed.mediaFormat?.encoding;
+		const fanIn = parsed.fanIn;
 		return {
 			endpoint: { url, ...(typeof authorization === 'string' ? { authorization } : {}) },
 			// The agent must never see an internal XMPP address, whatever the API returns.
@@ -101,6 +105,7 @@ export class ProvisioningClient {
 				? { conference: publicConference }
 				: {}),
 			...(typeof encoding === 'string' ? { mediaFormat: { encoding } } : {}),
+			...(typeof fanIn === 'string' ? { fanIn } : {}),
 			...(customParameters !== null && typeof customParameters === 'object' && !Array.isArray(customParameters)
 				? { customParameters: customParameters as Record<string, unknown> }
 				: {}),
