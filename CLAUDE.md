@@ -174,6 +174,20 @@ AgentProxy (agentproxy.ts) - one per connection
        to the bridge (the tag is the agent's synthetic source from `sources.requests`)
 ```
 
+The upgrade is gated by `AGENT_SHARED_SECRET` (the bridge sends it as `X-Agent-Token`); without it `/agent` refuses every
+upgrade with 503 unless `AGENT_ALLOW_UNAUTHENTICATED=true` (dev only), and either way this is logged once at startup, not per
+upgrade. The dial config is resolved by `agent/dial.ts` into a `DialResolution`: a transient failure (the provisioning API
+unreachable or 5xx) refuses the upgrade with HTTP 400, which the bridge retries; a permanent one (the agent gone, a dial config
+the relay cannot act on: no JSON, no URL, a non-wss URL, an unknown encoding or fan-in, or the SSRF guard) accepts the upgrade,
+reports `failed` once (not for a gone agent) and closes with 4002, so the bridge stops redialing instead of retrying for
+minutes with nothing reported. The SSRF guard classifies addresses with `ipaddr.js` (private, loopback, link-local, CGNAT,
+multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-public) and the outbound socket uses a
+`request-filtering-agent`, which checks the address actually connected to, closing the DNS-rebinding gap of the pre-dial
+lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Lifecycle reports for one session are chained so they post in order, a
+session reports a terminal state (`failed` or `ended`) once, and `AgentProxy` ignores customer messages once closed.
+Status reports retry five times with doubling backoff, with a hard deadline and a 64 KiB body cap per request, and count a
+give-up in `otp_agent_status_reports_given_up_total`; permanent dial failures count in `otp_agent_dial_failures_total`.
+
 An agent invited with `mediaFormat.encoding: "audio/opus"` (dial config `mediaFormat`, `agent/mediaFormat.ts`)
 skips both codecs: participant packets go to the customer as exported (the bridge's `chunk`/`timestamp` kept), and the
 customer's packets, which must be one 20 ms Opus packet of ≤ 1275 bytes per `media` (TOC-checked), go straight to the
@@ -181,7 +195,12 @@ pacer. Only the agent's single stream is decoded: to reject packets that don't d
 packets and anything quieter than level 95) and for the RFC 6464 level the bridge's speaker detection reads. A
 contract violation closes the customer socket with 1008 and fails the session (`failed`, bridge close 4002); an
 encoding in the dial config the relay doesn't know fails the dial (`failed` reported) rather than falling back to PCM.
-The pacer holds at most 60 s of agent audio, and customer messages are capped at 1 MiB (`maxPayload`).
+The pacer holds at most 60 s of agent audio, and customer messages are capped at 1 MiB (`maxPayload`). Close reasons are
+cut by UTF-8 bytes (`agent/closeReason.ts`): `ws` throws above 123 bytes, which would have lost the terminal code on a
+non-ASCII error text. A participant decoder that fails to initialise sends the customer a `stop` for that tag, counts
+`agent_decoder_failure` and drops the tag's media with one warning. Messages queued while the customer socket opens keep
+every control message (`start`, `speakers`, ...) and evict the oldest media when the queue is full; media dropped there or
+by the per-source and return-path buffers counts `agent_media_dropped` and warns once.
 
 The bridge sends agent connects a `speakers` event (the exported sources in its recent-speaker order, the dominant
 speaker first, plus `silence`) whenever the order changes and once on connect; the relay passes it on to the customer
@@ -756,7 +775,8 @@ See README.md for complete list. Key ones:
 - `ENABLE_AGENT` - Enable the /agent voice-agent endpoint (default: **false** — it dials out to arbitrary customer WebSocket endpoints, so enabling is an explicit deployment decision). The CF Worker forwards it and the `AGENT_*` vars below to the container when set
 - `AGENT_REQUIRE_WSS` - Require wss:// for the customer agent endpoint (default: true; false allows ws:// for dev)
 - `AGENT_PACE_LEAD_MS` - How much agent audio (ms) may be released ahead of real time by the pacer (default: 200); bounds how much audio can still play out after a barge-in `clear`
-- `AGENT_SHARED_SECRET` - Shared secret gating the /agent WS upgrade; when set the caller (the bridge) must send a matching `X-Agent-Token`. Unset = unauthenticated upgrade (keep the proxy bridge-only)
+- `AGENT_SHARED_SECRET` - Shared secret gating the /agent WS upgrade; the caller (the bridge, via jicofo's `agent.http-headers`) must send a matching `X-Agent-Token`. Unset, `/agent` refuses every upgrade (503) unless `AGENT_ALLOW_UNAUTHENTICATED=true`
+- `AGENT_ALLOW_UNAUTHENTICATED` - Dev opt-in to serve /agent with no shared secret (default: false). An open /agent lets anyone reaching the proxy dial any agent with the customer's credentials and drive its lifecycle reports; never enable it outside a bridge-only network
 - `AGENT_ALLOWED_HOSTS` - Comma-separated allowlist of customer endpoint hosts (exact or `.suffix`). Empty = allow any public host (private ranges blocked)
 - `AGENT_ALLOW_PRIVATE_ENDPOINTS` - Dev/same-host opt-in that skips the private/internal-address SSRF denylist so the agent endpoint may be on localhost or an internal IP (default: false). Removes SSRF protection — never enable where untrusted callers can reach `/agent`
 - `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of fetching the dial config from the provisioning API (default: false)

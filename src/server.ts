@@ -1,15 +1,16 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { AgentDialConfig, AgentLifecycleState, ProvisioningClient } from './agent/ProvisioningClient';
-import { AgentFanIn, isAgentFanIn } from './agent/fanIn';
-import { AgentEncoding, isAgentEncoding } from './agent/mediaFormat';
+import { AgentLifecycleState, DialConfigResult, ProvisioningClient } from './agent/ProvisioningClient';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
 import { extractSessionParameters, type ISessionParameters } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
-import { AgentProxy } from './agentproxy';
+import { AgentProxy, CLOSE_CODE_ENDPOINT_UNREACHABLE } from './agentproxy';
+import { closeReason } from './agent/closeReason';
+import { DialResolution, ResolvedDial, resolveDial } from './agent/dial';
 import { assertPublicEndpointHost } from './agent/endpointGuard';
+import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-filtering-agent';
 import { normalizeTargetLanguage } from './TranslatorConnection';
 import { createNodeTranslationRuntime } from './translate/nodeRuntime';
 import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage, type TranslationTalkStartData, type TranslationTalkStopData } from './translate/messages';
@@ -76,22 +77,15 @@ const activeAgentSessions = new Set<AgentProxy>();
 const AGENT_ENDPOINT_MAX_MESSAGE_BYTES = 1 << 20;
 
 /** The customer endpoint an /agent connection should dial, resolved from the connect's header/params. */
-interface AgentEndpoint {
-	url: string;
-	headers: Record<string, string>;
-	/** Query params other than the gateway's own (jicofo's urlParams), echoed to the customer as customParameters. */
-	customParameters?: Record<string, unknown>;
-	/** The room JID and agent id jicofo puts on the dial URL, for lifecycle reports to the provisioning API. */
+/** What the bridge named on the dial URL: the agent and its conference (an internal JID) and the meeting. */
+interface AgentIds {
 	conference?: string;
 	agentId?: string;
 	meetingId?: string;
-	/** The room as the customer names it, from the dial config; the only form the agent ever sees. */
-	publicConference?: string;
-	/** The customer-leg encoding from the dial config; absent means PCM16. */
-	encoding?: AgentEncoding;
-	/** The fan-in from the dial config; absent means per-source. */
-	fanIn?: AgentFanIn;
 }
+
+/** The customer endpoint an /agent connection dials, plus the ids the connection reports under. */
+type AgentEndpoint = ResolvedDial & AgentIds & { headers: Record<string, string> };
 
 /** Built on first use, so importing this module needs no agent config (tests mock a partial config). */
 let provisioningClient: ProvisioningClient | undefined;
@@ -101,6 +95,7 @@ function provisioning(): ProvisioningClient {
 		token: config.agent.provisioningToken,
 		host: config.agent.provisioningHost,
 		logger,
+		onReportGivenUp: (state) => getInstruments().agentStatusReportsGivenUpTotal.add(1, { state }),
 	});
 
 	return provisioningClient;
@@ -114,66 +109,68 @@ function secretsEqual(a: string, b: string): boolean {
 /**
  * Resolves the customer endpoint for an /agent connection. The bridge's dial URL only identifies the agent
  * (`conference`, `agentId`); the dial config is fetched from the provisioning API, so the customer's endpoint
- * and secret never travel through room metadata, jicofo or the bridge. Returns an error string (for the 400
- * response) when missing or invalid.
+ * and secret never travel through room metadata, jicofo or the bridge. The resolution says whether a failure is
+ * worth the bridge retrying (see DialResolution).
  */
-async function resolveAgentEndpoint(url: URL): Promise<AgentEndpoint | string> {
-	const conference = url.searchParams.get('conference') ?? undefined;
-	const agentId = url.searchParams.get('agentId') ?? undefined;
-	const meetingId = url.searchParams.get('meeting') ?? undefined;
+async function resolveAgentEndpoint(url: URL): Promise<{ ids: AgentIds; resolution: DialResolution }> {
+	const ids: AgentIds = {
+		...(url.searchParams.has('conference') ? { conference: url.searchParams.get('conference')! } : {}),
+		...(url.searchParams.has('agentId') ? { agentId: url.searchParams.get('agentId')! } : {}),
+		...(url.searchParams.has('meeting') ? { meetingId: url.searchParams.get('meeting')! } : {}),
+	};
 
 	// The ?endpoint= query param is a dev convenience only: it would let anyone reaching the proxy pick the
 	// dial-out target, so it is honored solely when explicitly enabled (AGENT_ALLOW_ENDPOINT_PARAM=true).
 	const devEndpoint = config.agent.allowEndpointParam ? url.searchParams.get('endpoint') : null;
-	let dial: AgentDialConfig | undefined;
+	let result: DialConfigResult;
 	if (devEndpoint) {
-		dial = { endpoint: { url: devEndpoint } };
-	} else if (conference !== undefined && agentId !== undefined && provisioning().enabled) {
-		dial = await provisioning().dialConfig(conference, agentId);
-		if (dial === undefined) {
-			return `No dial config for agent ${agentId}`;
-		}
+		result = { status: 'ok', config: { endpoint: { url: devEndpoint } } };
+	} else if (ids.conference !== undefined && ids.agentId !== undefined && provisioning().enabled) {
+		result = await provisioning().fetchDialConfig(ids.conference, ids.agentId);
 	} else {
-		return provisioning().enabled
-			? 'Missing conference and agentId query parameters'
-			: 'No provisioning API configured (AGENT_PROVISIONING_URL)';
+		// Nothing to dial, and nothing a retry would change.
+		const reason = provisioning().enabled
+			? 'missing conference and agentId query parameters'
+			: 'no provisioning API configured (AGENT_PROVISIONING_URL)';
+		return { ids, resolution: { kind: 'permanent', reason, report: false } };
 	}
-	const encoding = dial.mediaFormat?.encoding;
-	if (encoding !== undefined && !isAgentEncoding(encoding)) {
-		// Speaking another format than the agent asked for would play noise to the meeting; fail it visibly instead.
-		if (conference !== undefined && agentId !== undefined) {
-			void provisioning().report(conference, agentId, 'failed', `unsupported media format ${encoding}`.slice(0, 120));
-		}
-		return `Agent ${agentId} asks for an unsupported media format`;
-	}
-	const fanIn = dial.fanIn;
-	if (fanIn !== undefined && !isAgentFanIn(fanIn)) {
-		if (conference !== undefined && agentId !== undefined) {
-			void provisioning().report(conference, agentId, 'failed', `unsupported fan-in ${fanIn}`.slice(0, 120));
-		}
-		return `Agent ${agentId} asks for an unsupported fan-in`;
-	}
-	let parsed: URL;
-	try {
-		parsed = new URL(dial.endpoint.url);
-	} catch {
-		return 'Invalid agent endpoint URL';
-	}
-	if (parsed.protocol !== 'wss:' && !(parsed.protocol === 'ws:' && !config.agent.requireWss)) {
-		return 'Agent endpoint must be wss:// (set AGENT_REQUIRE_WSS=false to allow ws:// in dev)';
-	}
+	return { ids, resolution: resolveDial(result, config.agent.requireWss) };
+}
 
-	return {
-		url: parsed.toString(),
-		headers: dial.endpoint.authorization !== undefined ? { Authorization: dial.endpoint.authorization } : {},
-		...(dial.customParameters !== undefined ? { customParameters: dial.customParameters } : {}),
-		...(conference !== undefined ? { conference } : {}),
-		...(agentId !== undefined ? { agentId } : {}),
-		...(meetingId !== undefined ? { meetingId } : {}),
-		...(dial.conference !== undefined ? { publicConference: dial.conference } : {}),
-		...(encoding !== undefined ? { encoding } : {}),
-		...(fanIn !== undefined ? { fanIn } : {}),
+/**
+ * An outbound agent that checks the address actually connected to against the private ranges: the pre-dial lookup
+ * in endpointGuard can be answered differently at connect time (DNS rebinding). Private addresses are allowed only
+ * with the same dev opt-in as the pre-dial check.
+ */
+function filteringAgent(url: string) {
+	const options = {
+		allowPrivateIPAddress: config.agent.allowPrivateEndpoints,
+		allowMetaIPAddress: config.agent.allowPrivateEndpoints,
 	};
+	return url.startsWith('wss:') ? new RequestFilteringHttpsAgent(options) : new RequestFilteringHttpAgent(options);
+}
+
+/**
+ * A dial that can never succeed: accept the upgrade so the bridge sees the terminal close (4002) rather than an HTTP
+ * error it would retry for minutes, and report the agent `failed` once when it is the agent's own config the relay
+ * cannot act on (not when the agent no longer exists).
+ */
+function failAgentPermanently(
+		request: http.IncomingMessage,
+		socket: import('stream').Duplex,
+		head: Buffer,
+		ids: AgentIds,
+		reason: string,
+		report: boolean,
+		metricReason: 'config' | 'ssrf'): void {
+	logger.warn(`Failing /agent connection for agent ${ids.agentId ?? '?'} permanently: ${reason}`);
+	getInstruments().agentDialFailuresTotal.add(1, { reason: metricReason });
+	if (report && ids.conference !== undefined && ids.agentId !== undefined) {
+		void provisioning().report(ids.conference, ids.agentId, 'failed', reason);
+	}
+	wss.handleUpgrade(request, socket, head, ws => {
+		ws.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, closeReason(reason));
+	});
 }
 
 /**
@@ -210,29 +207,44 @@ async function handleAgentUpgrade(
 
 			return;
 		}
-	} else {
-		logger.warn('AGENT_SHARED_SECRET is not set: the /agent upgrade is unauthenticated. Keep the proxy '
-			+ 'reachable only from the bridge.');
-	}
-
-	const endpoint = await resolveAgentEndpoint(parameters.url);
-
-	if (typeof endpoint === 'string') {
-		reject('400 Bad Request', endpoint, endpoint);
+	} else if (!config.agent.allowUnauthenticated) {
+		// Said once at startup too: an open /agent dials any agent with the customer's credentials.
+		reject('503 Service Unavailable', 'Agent endpoint requires AGENT_SHARED_SECRET', 'AGENT_SHARED_SECRET is not set');
 
 		return;
 	}
+
+	const { ids, resolution } = await resolveAgentEndpoint(parameters.url);
+
+	if (resolution.kind === 'transient') {
+		// The bridge retries a refused upgrade, which is what a provisioning hiccup deserves.
+		reject('400 Bad Request', resolution.reason, resolution.reason);
+
+		return;
+	}
+	if (resolution.kind === 'permanent') {
+		failAgentPermanently(request, socket, head, ids, resolution.reason, resolution.report, 'config');
+
+		return;
+	}
+	const dial = resolution.dial;
+	const host = new URL(dial.url).hostname;
 
 	// SSRF guard: reject endpoints that resolve to private/internal addresses (and enforce the optional host
-	// allowlist) before dialing out.
-	const ssrfError = await assertPublicEndpointHost(new URL(endpoint.url).hostname, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
+	// allowlist) before dialing out. The outbound agent checks the connected address again (filteringAgent).
+	const ssrfError = await assertPublicEndpointHost(host, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
 
 	if (ssrfError) {
-		reject('400 Bad Request', ssrfError, `${ssrfError} (host=${new URL(endpoint.url).hostname})`);
+		failAgentPermanently(request, socket, head, ids, `${ssrfError} (host=${host})`, true, 'ssrf');
 
 		return;
 	}
 
+	const endpoint: AgentEndpoint = {
+		...dial,
+		...ids,
+		headers: dial.authorization !== undefined ? { Authorization: dial.authorization } : {},
+	};
 	wss.handleUpgrade(request, socket, head, ws => {
 		handleAgentConnection(ws, endpoint);
 	});
@@ -248,7 +260,11 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 			// The `ws` client here (not the runtime's OpenAI-shaped factory) so the forwarded
 			// Authorization header reaches the customer endpoint on the handshake.
 			createEndpointWebSocket: (url) =>
-				new WebSocket(url, { headers: endpoint.headers, maxPayload: AGENT_ENDPOINT_MAX_MESSAGE_BYTES }) as unknown as IWebSocket,
+				new WebSocket(url, {
+					headers: endpoint.headers,
+					maxPayload: AGENT_ENDPOINT_MAX_MESSAGE_BYTES,
+					agent: filteringAgent(url),
+				}) as unknown as IWebSocket,
 			customParameters: endpoint.customParameters,
 			agentId: endpoint.agentId,
 			// The customer-facing room name only; the JID stays internal (status reports use it).
@@ -273,10 +289,13 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 		logger.error(`Agent session error (endpoint host=${new URL(endpoint.url).hostname}): ${message}`);
 	});
 
-	// The gateway is the only component that sees the customer leg, so it reports its lifecycle itself.
+	// The gateway is the only component that sees the customer leg, so it reports its lifecycle itself. Reports are
+	// chained, so a retried `active` cannot land after a quick `ended`.
+	let reports: Promise<void> = Promise.resolve();
 	agentSession.on('lifecycle', ({ state, reason }: { state: AgentLifecycleState; reason?: string }) => {
-		if (endpoint.conference && endpoint.agentId) {
-			void provisioning().report(endpoint.conference, endpoint.agentId, state, reason);
+		const { conference, agentId } = endpoint;
+		if (conference !== undefined && agentId !== undefined) {
+			reports = reports.then(() => provisioning().report(conference, agentId, state, reason));
 		} else if (provisioning().enabled) {
 			logger.warn(`Agent lifecycle ${state} not reported: the dial URL carries no conference/agentId`);
 		}
@@ -824,6 +843,13 @@ const HOST = config.server.host;
 server.listen(PORT, HOST, () => {
 	if (config.enableAgent && !provisioning().enabled) {
 		logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');
+	}
+	if (config.enableAgent && !config.agent.sharedSecret) {
+		if (config.agent.allowUnauthenticated) {
+			logger.warn('AGENT_SHARED_SECRET is not set and AGENT_ALLOW_UNAUTHENTICATED=true: the /agent upgrade is unauthenticated. Dev only; keep the proxy reachable from the bridge alone.');
+		} else {
+			logger.error('AGENT_SHARED_SECRET is not set: /agent refuses every upgrade until it is set (or AGENT_ALLOW_UNAUTHENTICATED=true, dev only).');
+		}
 	}
 	logger.info('='.repeat(60));
 	logger.info('opus-transcriber-proxy started');

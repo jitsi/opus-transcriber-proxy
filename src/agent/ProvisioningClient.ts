@@ -17,6 +17,16 @@ export interface AgentDialConfig {
 	fanIn?: string;
 }
 
+/** The outcome of fetching a dial config, so the caller can tell a retryable failure from a permanent one. */
+export type DialConfigResult =
+	| { status: 'ok'; config: AgentDialConfig }
+	/** 404: the agent no longer exists. */
+	| { status: 'gone' }
+	/** The API answered, but not with a dial config the relay can act on. */
+	| { status: 'invalid'; reason: string }
+	/** The API could not be reached or answered with an error other than 404; worth retrying. */
+	| { status: 'unavailable'; reason: string };
+
 export interface ProvisioningResponse {
 	status: number;
 	body: string;
@@ -34,6 +44,12 @@ export interface ProvisioningClientOptions {
 	request?: (method: 'GET' | 'POST', path: string, body?: string) => Promise<ProvisioningResponse>;
 	retryDelayMs?: number;
 	timeoutMs?: number;
+	/** Attempts per status report (default 5), spaced by retryDelayMs doubling each time. */
+	maxAttempts?: number;
+	/** Called when a status report gave up, so the condition is visible beyond the log. */
+	onReportGivenUp?: (state: AgentLifecycleState) => void;
+	/** The most response body read from the API (default 64 KiB); a dial config is small. */
+	maxBodyBytes?: number;
 }
 
 /**
@@ -55,25 +71,32 @@ export class ProvisioningClient {
 	}
 
 	/** The dial config for an agent, or undefined when the API is not configured, the agent is gone, or the fetch failed. */
+	/** The dial config, or undefined when there is none to act on (see [fetchDialConfig] for why). */
 	async dialConfig(conference: string, agentId: string): Promise<AgentDialConfig | undefined> {
+		const result = await this.fetchDialConfig(conference, agentId);
+		return result.status === 'ok' ? result.config : undefined;
+	}
+
+	async fetchDialConfig(conference: string, agentId: string): Promise<DialConfigResult> {
 		if (!this.enabled) {
-			return undefined;
+			return { status: 'unavailable', reason: 'no provisioning API configured' };
 		}
 		const label = `agent ${agentId}`;
 		let response: ProvisioningResponse;
 		try {
 			response = await this.request('GET', `dial?conference=${encodeURIComponent(conference)}&agentId=${encodeURIComponent(agentId)}`);
 		} catch (error) {
-			this.options.logger.warn(`Dial config fetch for ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
-			return undefined;
+			const reason = error instanceof Error ? error.message : String(error);
+			this.options.logger.warn(`Dial config fetch for ${label} failed: ${reason}`);
+			return { status: 'unavailable', reason: `provisioning API unreachable: ${reason}` };
 		}
 		if (response.status === 404) {
 			this.options.logger.info(`Dial config fetch for ${label}: agent no longer exists`);
-			return undefined;
+			return { status: 'gone' };
 		}
 		if (response.status < 200 || response.status >= 300) {
 			this.options.logger.warn(`Dial config fetch for ${label} failed with status ${response.status}`);
-			return undefined;
+			return { status: 'unavailable', reason: `provisioning API answered ${response.status}` };
 		}
 		let parsed: {
 			endpoint?: { url?: unknown; authorization?: unknown };
@@ -86,19 +109,19 @@ export class ProvisioningClient {
 			parsed = JSON.parse(response.body);
 		} catch {
 			this.options.logger.warn(`Dial config for ${label} is not JSON`);
-			return undefined;
+			return { status: 'invalid', reason: 'not JSON' };
 		}
 		const url = parsed?.endpoint?.url;
 		if (typeof url !== 'string') {
 			this.options.logger.warn(`Dial config for ${label} has no endpoint.url`);
-			return undefined;
+			return { status: 'invalid', reason: 'no endpoint.url' };
 		}
 		const authorization = parsed.endpoint?.authorization;
 		const customParameters = parsed.customParameters;
 		const publicConference = parsed.conference;
 		const encoding = parsed.mediaFormat?.encoding;
 		const fanIn = parsed.fanIn;
-		return {
+		const config: AgentDialConfig = {
 			endpoint: { url, ...(typeof authorization === 'string' ? { authorization } : {}) },
 			// The agent must never see an internal XMPP address, whatever the API returns.
 			...(typeof publicConference === 'string' && publicConference !== '' && !publicConference.includes('@')
@@ -110,6 +133,7 @@ export class ProvisioningClient {
 				? { customParameters: customParameters as Record<string, unknown> }
 				: {}),
 		};
+		return { status: 'ok', config };
 	}
 
 	async report(conference: string, agentId: string, state: AgentLifecycleState, reason?: string): Promise<void> {
@@ -117,8 +141,12 @@ export class ProvisioningClient {
 			return;
 		}
 		const body = JSON.stringify({ conference, agentId, state, ...(reason ? { reason } : {}) });
-		const label = `agent ${agentId} (${state})`;
-		for (let attempt = 1; attempt <= 2; attempt++) {
+		const label = `agent ${agentId} in ${conference} (${state})`;
+		// The route is idempotent and forward-only, so retrying is safe; a report that gives up leaves the agent in
+		// the wrong state for good (connecting with media flowing, or active after it ended), so try for a while.
+		const maxAttempts = this.options.maxAttempts ?? 5;
+		const baseDelayMs = this.options.retryDelayMs ?? 1000;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			let status: number;
 			try {
 				status = (await this.request('POST', 'status', body)).status;
@@ -133,10 +161,11 @@ export class ProvisioningClient {
 				this.options.logger.info(`Status report for ${label}: agent no longer exists`);
 				return;
 			}
-			if (attempt === 1) {
-				await new Promise((resolve) => setTimeout(resolve, this.options.retryDelayMs ?? 1000));
+			if (attempt < maxAttempts) {
+				await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** (attempt - 1)));
 			} else {
-				this.options.logger.warn(`Status report for ${label} gave up, last status ${status}`);
+				this.options.logger.warn(`Status report for ${label} gave up after ${maxAttempts} attempts, last status ${status}`);
+				this.options.onReportGivenUp?.(state);
 			}
 		}
 	}
@@ -144,10 +173,13 @@ export class ProvisioningClient {
 	private send(method: 'GET' | 'POST', path: string, body?: string): Promise<ProvisioningResponse> {
 		const url = new URL(path, this.options.url.replace(/\/+$/, '') + '/');
 		const transport = url.protocol === 'https:' ? https : http;
+		const timeoutMs = this.options.timeoutMs ?? 5000;
+		const maxBodyBytes = this.options.maxBodyBytes ?? 64 * 1024;
 		return new Promise((resolve, reject) => {
 			const request = transport.request(url, {
 				method,
-				timeout: this.options.timeoutMs ?? 5000,
+				// Node's own timeout is an idle timeout; the deadline below bounds the whole exchange.
+				timeout: timeoutMs,
 				headers: {
 					Accept: 'application/json',
 					...(body !== undefined ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {}),
@@ -156,12 +188,22 @@ export class ProvisioningClient {
 				},
 			}, (response) => {
 				const chunks: Buffer[] = [];
-				response.on('data', (chunk: Buffer) => chunks.push(chunk));
+				let bytes = 0;
+				response.on('data', (chunk: Buffer) => {
+					bytes += chunk.length;
+					if (bytes > maxBodyBytes) {
+						request.destroy(new Error(`response larger than ${maxBodyBytes} bytes`));
+						return;
+					}
+					chunks.push(chunk);
+				});
 				response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
 				response.on('error', reject);
 			});
+			const deadline = setTimeout(() => request.destroy(new Error('timeout')), timeoutMs);
 			request.on('timeout', () => request.destroy(new Error('timeout')));
 			request.on('error', reject);
+			request.on('close', () => clearTimeout(deadline));
 			request.end(body);
 		});
 	}

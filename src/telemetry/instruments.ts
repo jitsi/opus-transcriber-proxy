@@ -27,6 +27,8 @@ interface Instruments {
 	backendAudioSentBytesTotal: Counter;
 	backendErrorsTotal: Counter;
 	backendHandshakeFailuresTotal: Counter;
+	agentDialFailuresTotal: Counter;
+	agentStatusReportsGivenUpTotal: Counter;
 	transcriptionsReceivedTotal: Counter;
 	transcriptionsDeliveredTotal: Counter;
 	dispatcherMessagesSentTotal: Counter;
@@ -112,6 +114,18 @@ function createInstruments(): Instruments {
 		backendHandshakeFailuresTotal: meter.createCounter('otp_backend_handshake_failures_total', {
 			description: 'Backend WebSocket handshake attempts that failed (before any retry)',
 			unit: '{attempts}',
+		}),
+
+		// Labels: reason (config | ssrf). Permanent failures only: the bridge is told not to redial.
+		agentDialFailuresTotal: meter.createCounter('otp_agent_dial_failures_total', {
+			description: '/agent connections failed permanently before dialing (bad or unsupported dial config, SSRF guard)',
+			unit: '{connections}',
+		}),
+
+		// Labels: state. A report that gave up leaves the agent in a wrong state at the provisioning API.
+		agentStatusReportsGivenUpTotal: meter.createCounter('otp_agent_status_reports_given_up_total', {
+			description: 'Agent lifecycle reports to the provisioning API that gave up after all retries',
+			unit: '{reports}',
 		}),
 
 		transcriptionsReceivedTotal: meter.createCounter('otp_transcriptions_received_total', {

@@ -205,6 +205,77 @@ describe('AgentProxy', () => {
 		expect(closed).toHaveBeenCalledTimes(1);
 	});
 
+	it('reports a session over once: an end after a failed dial, or a second end, changes nothing', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+		endpointWs.fire('error', { message: 'Unexpected server response: 401' });
+		// `ws` still delivers messages while closing.
+		endpointWs.receive({ event: 'end' });
+		endpointWs.receive({ event: 'end' });
+		await settle();
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint refused: HTTP 401' } ]);
+	});
+
+	it('reports ended once for repeated ends', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		await settle();
+		endpointWs.fire('open', {});
+		endpointWs.receive({ event: 'end' });
+		endpointWs.receive({ event: 'end' });
+		await settle();
+
+		expect(lifecycle).toEqual([ { state: 'active' }, { state: 'ended', reason: 'agent ended' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_AGENT_ENDED);
+	});
+
+	it('a decoder that fails to initialise ends the stream for the customer and drops its media, saying so once', async () => {
+		decoder.ready = Promise.reject(new Error('no codec'));
+		runtime = mockRuntime(decoder, encoder);
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		bridgeWs.receive({ event: 'sources', exports: ['u1-a0'], requests: ['agent1-a0'] });
+		bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		await settle();
+		bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: 1, timestamp: 1060, payload: OPUS_B64 } });
+		bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: 2, timestamp: 2020, payload: OPUS_B64 } });
+		await settle();
+
+		const events = endpointWs.sentJson().map((m) => m.event);
+		expect(events).toContain('start');
+		expect(events).toContain('stop');
+		expect(events).not.toContain('media');
+		expect(endpointWs.sentJson().find((m) => m.event === 'stop').stop.tag).toBe('u1-a0');
+		expect(runtime.writeMetric).toHaveBeenCalledWith(expect.objectContaining({ name: 'agent_decoder_failure' }));
+		expect(runtime.logger.warn.mock.calls.filter((c: string[]) => /decoder failed/.test(c[0]))).toHaveLength(1);
+	});
+
+	it('keeps control messages while the customer socket is pending, dropping the oldest media instead', async () => {
+		createProxy();
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: ['u1-a0', 'u2-a0'], requests: ['agent1-a0'] });
+		// Fills the shared queue with one source's media (plus info and its start), then a second source arrives.
+		for (let chunk = 0; chunk < 1000; chunk++) {
+			bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk, timestamp: 100 + chunk * 960, payload: OPUS_B64 } });
+		}
+		bridgeWs.receive({ event: 'media', media: { tag: 'u2-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
+		endpointWs.fire('open', {});
+		await settle();
+
+		const messages = endpointWs.sentJson();
+		expect(messages.filter((m) => m.event === 'start').map((m) => m.start.tag)).toEqual(['u1-a0', 'u2-a0']);
+		expect(messages.some((m) => m.event === 'speakers')).toBe(true);
+		expect(messages.filter((m) => m.event === 'media').length).toBeLessThan(1001);
+		expect(runtime.writeMetric).toHaveBeenCalledWith(expect.objectContaining({ name: 'agent_media_dropped' }));
+	});
+
 	it('dials the endpoint and flushes queued messages once it opens', async () => {
 		createProxy();
 		await settle();

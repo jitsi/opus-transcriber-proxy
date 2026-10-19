@@ -35,7 +35,9 @@ export type MetricName =
 	| 'openai_api_error'
 	| 'gemini_api_error'
 	| 'deepgram_api_error'
-	| 'xai_api_error';
+	| 'xai_api_error'
+	| 'agent_decoder_failure'
+	| 'agent_media_dropped';
 
 export interface MetricEvent {
 	name: MetricName;

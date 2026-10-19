@@ -165,6 +165,10 @@ export const config = {
 		// matching X-Agent-Token header, so a network peer that reaches the proxy can't trigger a dial-out.
 		// Unset disables the check (a warning is logged) — only safe when the proxy is strictly bridge-only.
 		sharedSecret: process.env.AGENT_SHARED_SECRET || '',
+		// Dev opt-in to serve /agent with no shared secret. Without it, an unset AGENT_SHARED_SECRET refuses every
+		// upgrade: an unauthenticated /agent lets anyone reaching the proxy dial any agent with the customer's
+		// credentials and drive its lifecycle reports.
+		allowUnauthenticated: process.env.AGENT_ALLOW_UNAUTHENTICATED === 'true',
 		// Optional allowlist of customer endpoint hosts (comma-separated, exact host or ".suffix" match). When
 		// non-empty, the endpoint host must match. Empty = allow any PUBLIC host (private ranges always blocked).
 		allowedHosts: (process.env.AGENT_ALLOWED_HOSTS || '').split(',').map(h => h.trim().toLowerCase())

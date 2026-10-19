@@ -14,8 +14,9 @@ function client(replies: Reply[]) {
 		return next ?? { status: 200, body: '' };
 	});
 	const logger = { info: vi.fn(), warn: vi.fn() };
-	const c = new ProvisioningClient({ url: 'http://prosody:5280/voice-agent', token: 't', logger, request, retryDelayMs: 0 });
-	return { c, request, calls, logger };
+	const onReportGivenUp = vi.fn();
+	const c = new ProvisioningClient({ url: 'http://prosody:5280/voice-agent', token: 't', logger, request, retryDelayMs: 0, onReportGivenUp });
+	return { c, request, calls, logger, onReportGivenUp };
 }
 
 describe('ProvisioningClient', () => {
@@ -29,11 +30,19 @@ describe('ProvisioningClient', () => {
 			expect(JSON.parse(calls[0].body!)).toEqual({ conference: 'room@muc', agentId: 'agent-1', state: 'failed', reason: 'endpoint refused: HTTP 401' });
 		});
 
-		it('retries once on a transport error or 5xx, then gives up', async () => {
-			const { c, request, logger } = client([new Error('ECONNREFUSED'), { status: 503, body: '' }]);
+		it('retries a transport error or 5xx with backoff, and gives up after five attempts with the conference in the log', async () => {
+			const { c, request, logger, onReportGivenUp } = client([new Error('ECONNREFUSED'), { status: 503, body: '' }, { status: 502, body: '' }, { status: 503, body: '' }, { status: 503, body: '' }]);
 			await c.report('room@muc', 'agent-1', 'active');
-			expect(request).toHaveBeenCalledTimes(2);
-			expect(logger.warn).toHaveBeenCalledTimes(2);
+			expect(request).toHaveBeenCalledTimes(5);
+			expect(logger.warn.mock.calls.at(-1)?.[0]).toMatch(/agent-1 in room@muc \(active\) gave up after 5 attempts/);
+			expect(onReportGivenUp).toHaveBeenCalledWith('active');
+		});
+
+		it('succeeds on a later attempt without giving up', async () => {
+			const { c, request, onReportGivenUp } = client([{ status: 503, body: '' }, { status: 503, body: '' }, { status: 200, body: '' }]);
+			await c.report('room@muc', 'agent-1', 'ended');
+			expect(request).toHaveBeenCalledTimes(3);
+			expect(onReportGivenUp).not.toHaveBeenCalled();
 		});
 
 		it('treats 404 as the agent being gone and does not retry', async () => {
@@ -67,6 +76,23 @@ describe('ProvisioningClient', () => {
 			]);
 			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toEqual({ encoding: 'audio/pcmu' });
 			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toBeUndefined();
+		});
+
+		it('tells a gone agent, an unusable answer and an unavailable API apart', async () => {
+			const { c } = client([
+				{ status: 404, body: '' },
+				{ status: 503, body: '' },
+				new Error('ETIMEDOUT'),
+				{ status: 200, body: 'not json' },
+				{ status: 200, body: JSON.stringify({ endpoint: {} }) },
+				{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example.com/ws' } }) },
+			]);
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'gone' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API answered 503' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API unreachable: ETIMEDOUT' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'invalid', reason: 'not JSON' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'invalid', reason: 'no endpoint.url' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'ok', config: { endpoint: { url: 'wss://bot.example.com/ws' } } });
 		});
 
 		it('carries the requested fan-in as given, dropping a non-string', async () => {

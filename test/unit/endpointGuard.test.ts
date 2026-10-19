@@ -16,7 +16,8 @@ describe('endpointGuard.isPrivateAddress', () => {
 	});
 
 	it('allows IPv4 public addresses', () => {
-		for (const ip of [ '8.8.8.8', '1.1.1.1', '203.0.113.10', '172.32.0.1', '192.169.0.1' ]) {
+		// 203.0.113.0/24 (documentation) is reserved, hence non-public, like the other IANA special-purpose blocks.
+		for (const ip of [ '8.8.8.8', '1.1.1.1', '93.184.216.34', '172.32.0.1', '192.169.0.1' ]) {
 			expect(isPrivateAddress(ip)).toBe(false);
 		}
 	});
@@ -31,7 +32,7 @@ describe('endpointGuard.isPrivateAddress', () => {
 		for (const ip of [ '::ffff:a00:1', '::FFFF:7f00:1', '0:0:0:0:0:ffff:c0a8:101', '::ffff:a9fe:a9fe' ]) {
 			expect(isPrivateAddress(ip)).toBe(true);
 		}
-		for (const ip of [ '::ffff:808:808', '0:0:0:0:0:ffff:cb00:710a' ]) {
+		for (const ip of [ '::ffff:808:808', '0:0:0:0:0:ffff:5db8:d822' ]) {
 			expect(isPrivateAddress(ip)).toBe(false);
 		}
 	});
@@ -43,6 +44,16 @@ describe('endpointGuard.isPrivateAddress', () => {
 
 	it('allows IPv6 public addresses', () => {
 		expect(isPrivateAddress('2606:4700:4700::1111')).toBe(false);
+	});
+
+	it('flags IPv4 embedded in IPv6 (NAT64, 6to4, Teredo) and the reserved IPv4 blocks', () => {
+		expect(isPrivateAddress('64:ff9b::7f00:1')).toBe(true); // NAT64 of 127.0.0.1
+		expect(isPrivateAddress('64:ff9b::808:808')).toBe(true); // NAT64 of 8.8.8.8: not a plain public host either
+		expect(isPrivateAddress('2002:7f00:1::1')).toBe(true); // 6to4
+		expect(isPrivateAddress('2001:0:4136:e378:8000:63bf:3fff:fdd2')).toBe(true); // Teredo
+		expect(isPrivateAddress('192.0.0.1')).toBe(true);
+		expect(isPrivateAddress('198.18.0.1')).toBe(true);
+		expect(isPrivateAddress('192.0.2.1')).toBe(true); // documentation
 	});
 
 	it('treats non-IP input as unsafe', () => {

@@ -1,4 +1,5 @@
 import { AgentPacer } from './agent/AgentPacer';
+import { closeReason } from './agent/closeReason';
 import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
 import { computeAudioLevel } from './OpusEncoder/audioLevel';
@@ -39,10 +40,10 @@ export const CLOSE_CODE_AGENT_ENDED = 4001;
  */
 export const CLOSE_CODE_ENDPOINT_UNREACHABLE = 4002;
 
-/** A short, stable reason for a failed dial; the WebSocket close reason is capped at 123 bytes. */
+/** A short, stable reason for a failed dial, fitting the 123-byte WebSocket close reason. */
 export function dialFailureReason(message: string): string {
 	const refused = /Unexpected server response: (\d+)/.exec(message);
-	return (refused ? `endpoint refused: HTTP ${refused[1]}` : `endpoint unreachable: ${message}`).slice(0, 120);
+	return closeReason(refused ? `endpoint refused: HTTP ${refused[1]}` : `endpoint unreachable: ${message}`);
 }
 
 // Bounds on buffering while the codecs / customer socket initialise (mirrors TranslatorConnection).
@@ -85,6 +86,15 @@ interface SourceState {
 	chunk: number;
 	/** The last timestamp seen from the bridge, passed through to the customer leg. */
 	lastTimestamp: number;
+	/** Once-only warnings for this source. */
+	warnedDroppingFailed?: boolean;
+	warnedPendingFull?: boolean;
+}
+
+/** A message queued for the customer until its socket opens; control messages are never dropped, media is. */
+interface PendingEndpointMessage {
+	control: boolean;
+	serialized: string;
 }
 
 /**
@@ -139,7 +149,11 @@ export class AgentProxy extends Emitter {
 
 	private endpointWs?: IWebSocket;
 	private endpointStatus: 'pending' | 'connected' | 'failed' | 'closed' = 'pending';
-	private pendingEndpointMessages: string[] = [];
+	private pendingEndpointMessages: PendingEndpointMessage[] = [];
+	private warnedPendingEndpointFull = false;
+	private warnedReturnPcmFull = false;
+	/** A session ends once: `failed` or `ended`, whichever comes first; later terminal events are not reported. */
+	private terminalReported = false;
 
 	private encoder?: IOpusEncoder;
 	private encoderStatus: 'pending' | 'ready' | 'failed' = 'pending';
@@ -358,7 +372,15 @@ export class AgentProxy extends Emitter {
 		} else if (state.decoderStatus === 'pending') {
 			if (state.pendingFrames.length < MAX_PENDING_OPUS_FRAMES) {
 				state.pendingFrames.push(opusFrame);
+			} else if (!state.warnedPendingFull) {
+				state.warnedPendingFull = true;
+				this.runtime.logger.warn(`agent: dropping media for tag ${tag} while its decoder initialises (${MAX_PENDING_OPUS_FRAMES} frames queued)`);
+				this.runtime.writeMetric({ name: 'agent_media_dropped', worker: 'opus-transcriber-proxy', errorType: 'decoder_pending' });
 			}
+		} else if (!state.warnedDroppingFailed) {
+			// The customer got a `stop` for the tag when its decoder failed; say once that its media goes nowhere.
+			state.warnedDroppingFailed = true;
+			this.runtime.logger.warn(`agent: dropping media for tag ${tag}: its decoder failed to initialise`);
 		}
 	}
 
@@ -403,6 +425,11 @@ export class AgentProxy extends Emitter {
 				state.decoderStatus = 'failed';
 				state.pendingFrames = [];
 				this.runtime.logger.error(`agent: failed to initialise decoder for tag ${tag}:`, error);
+				this.runtime.writeMetric({ name: 'agent_decoder_failure', worker: 'opus-transcriber-proxy' });
+				// The customer was told the stream starts; tell it the stream is over rather than go silent.
+				if (!this.isClosed) {
+					this.sendToEndpoint({ event: 'stop', stop: { tag } });
+				}
 			});
 		return state;
 	}
@@ -455,7 +482,7 @@ export class AgentProxy extends Emitter {
 				const queued = this.pendingEndpointMessages;
 				this.pendingEndpointMessages = [];
 				for (const message of queued) {
-					endpointWs.send(message);
+					endpointWs.send(message.serialized);
 				}
 				this.emit('lifecycle', { state: 'active' });
 			});
@@ -511,8 +538,19 @@ export class AgentProxy extends Emitter {
 		this.endpointStatus = 'failed';
 		const reason = dialFailureReason(message);
 		this.emit('error', message);
-		this.emit('lifecycle', { state: 'failed', reason });
+		// Close the bridge leg before reporting: the report makes jicofo drop the connect within milliseconds, and the
+		// bridge should see our terminal code rather than its own close racing it.
 		this.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, reason);
+		this.reportTerminal('failed', reason);
+	}
+
+	/** Emits the session's terminal lifecycle state, once: an `end` after a failure, or a second `end`, changes nothing. */
+	private reportTerminal(state: 'failed' | 'ended', reason: string): void {
+		if (this.terminalReported) {
+			return;
+		}
+		this.terminalReported = true;
+		this.emit('lifecycle', { state, reason });
 	}
 
 	private sendToEndpoint(message: Record<string, unknown>): void {
@@ -524,13 +562,37 @@ export class AgentProxy extends Emitter {
 				this.runtime.logger.error('agent: failed to send to endpoint:', error);
 			}
 		} else if (this.endpointStatus === 'pending') {
-			if (this.pendingEndpointMessages.length < MAX_PENDING_ENDPOINT_MESSAGES) {
-				this.pendingEndpointMessages.push(serialized);
-			}
+			this.queueEndpointMessage(message.event !== 'media', serialized);
 		}
 	}
 
+	/**
+	 * Queues a message until the customer socket opens. The queue is shared by every source, so when it is full a
+	 * control message (`start`, `speakers`, ...) evicts the oldest queued media rather than being dropped: media the
+	 * customer never gets is a gap, a `start` it never gets is a tag it was never told about.
+	 */
+	private queueEndpointMessage(control: boolean, serialized: string): void {
+		if (this.pendingEndpointMessages.length >= MAX_PENDING_ENDPOINT_MESSAGES) {
+			const oldestMedia = control ? this.pendingEndpointMessages.findIndex((m) => !m.control) : -1;
+			if (oldestMedia >= 0) {
+				this.pendingEndpointMessages.splice(oldestMedia, 1);
+			} else if (!control) {
+				if (!this.warnedPendingEndpointFull) {
+					this.warnedPendingEndpointFull = true;
+					this.runtime.logger.warn(`agent: dropping media while the endpoint connects (${MAX_PENDING_ENDPOINT_MESSAGES} messages queued)`);
+				}
+				this.runtime.writeMetric({ name: 'agent_media_dropped', worker: 'opus-transcriber-proxy', errorType: 'endpoint_pending' });
+				return;
+			}
+		}
+		this.pendingEndpointMessages.push({ control, serialized });
+	}
+
 	private handleEndpointMessage(data: unknown): void {
+		if (this.isClosed) {
+			// `ws` still delivers messages while closing; nothing said now may change what was reported.
+			return;
+		}
 		let message: any;
 		try {
 			message = JSON.parse(data as string);
@@ -565,8 +627,8 @@ export class AgentProxy extends Emitter {
 			}
 			case 'end':
 				this.runtime.logger.info('agent: end (agent-initiated teardown)');
-				this.emit('lifecycle', { state: 'ended', reason: 'agent ended' });
 				this.close(CLOSE_CODE_AGENT_ENDED, 'agent ended');
+				this.reportTerminal('ended', 'agent ended');
 				break;
 			case 'pong':
 			case 'info':
@@ -647,6 +709,10 @@ export class AgentProxy extends Emitter {
 				merged.set(this.pendingReturnPcm);
 				merged.set(pcm, this.pendingReturnPcm.length);
 				this.pendingReturnPcm = merged;
+			} else if (!this.warnedReturnPcmFull) {
+				this.warnedReturnPcmFull = true;
+				this.runtime.logger.warn(`agent: dropping agent audio while the encoder initialises (${MAX_PENDING_PCM_BYTES} bytes queued)`);
+				this.runtime.writeMetric({ name: 'agent_media_dropped', worker: 'opus-transcriber-proxy', errorType: 'encoder_pending' });
 			}
 		}
 	}
@@ -744,10 +810,10 @@ export class AgentProxy extends Emitter {
 			return;
 		}
 		this.runtime.logger.warn(`agent: ${reason}`);
-		this.endpointClose = { code: CLOSE_CODE_POLICY_VIOLATION, reason };
+		this.endpointClose = { code: CLOSE_CODE_POLICY_VIOLATION, reason: closeReason(reason) };
 		this.endpointStatus = 'failed';
-		this.emit('lifecycle', { state: 'failed', reason });
-		this.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, reason);
+		this.close(CLOSE_CODE_ENDPOINT_UNREACHABLE, closeReason(reason));
+		this.reportTerminal('failed', reason);
 	}
 
 	/** Called by the pacer as each frame becomes due: stamp RTP timing and emit toward the bridge. */

@@ -41,6 +41,8 @@
 		"@opentelemetry/semantic-conventions": "^1.28.0",
 		"@opentelemetry/winston-transport": "^0.8.0",
 		"dotenv": "^16.4.5",
+		"ipaddr.js": "^2.5.0",
+		"request-filtering-agent": "^3.2.1",
 		"winston": "^3.19.0",
 		"ws": "^8.18.0"
 	},

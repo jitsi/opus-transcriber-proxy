@@ -1,113 +1,36 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import ipaddr from 'ipaddr.js';
 
 /**
- * SSRF protection for the customer endpoint the /agent proxy dials out to. The endpoint URL is
- * caller-supplied (from the bridge, ultimately from the provisioning API), so it must be prevented
- * from targeting internal/link-local/loopback addresses (cloud metadata, internal services, etc.)
- * while still allowing arbitrary PUBLIC customer hosts — the whole point of the feature.
+ * SSRF protection for the customer endpoint the /agent proxy dials out to. The endpoint URL comes from the
+ * provisioning API (ultimately the customer), so it must be prevented from targeting internal/link-local/loopback
+ * addresses (cloud metadata, internal services, etc.) while still allowing arbitrary PUBLIC customer hosts, the
+ * whole point of the feature.
  *
- * Residual risk: DNS rebinding. We resolve the host and reject if it maps to a private address, but a
- * name that resolves public here and private at connect time (TOCTOU) is not fully closed — the
- * complete fix is to connect to the pinned, vetted IP. Tracked as a GA-hardening item.
+ * This is the pre-dial check, which fails fast with a clear reason. The address actually connected to is checked
+ * again by the request-filtering agent on the outbound socket (server.ts), which closes the DNS-rebinding gap: a
+ * name that resolves public here and private at connect time.
  */
 
 /**
- * Whether an IP address literal is in a non-public range (IPv4 and IPv6, including IPv4-mapped IPv6):
- * loopback, unspecified, RFC1918 private, link-local (incl. 169.254.169.254 metadata), CGNAT,
- * unique-local, site-local, multicast/reserved.
+ * Whether an IP address literal is in a non-public range. Classified by ipaddr.js, which unwraps IPv4-mapped IPv6
+ * and knows the private, loopback, link-local, CGNAT, multicast and reserved blocks of both families, plus the
+ * IPv4 embeddings (NAT64, 6to4, Teredo), all of which are treated as non-public.
  *
  * @param {string} ip - The IP address to classify.
  * @returns {boolean}
  */
 export function isPrivateAddress(ip: string): boolean {
-	const family = isIP(ip);
-
-	if (family === 4) {
-		return isPrivateV4(ip);
-	}
-	if (family === 6) {
-		const lower = canonicalIPv6(ip);
-
-		// Unique-local (fc00::/7 → fc/fd) and link-local + deprecated site-local (fe80::/9 → fe8..fef).
-		const isUniqueLocal = lower.startsWith('fc') || lower.startsWith('fd');
-		const isLinkOrSiteLocal = lower.startsWith('fe') && '89abcdef'.includes(lower[2]);
-
-		if (lower === '::1' || lower === '::' || isUniqueLocal || isLinkOrSiteLocal) {
-			return true;
-		}
-
-		// IPv4-mapped: the canonical form is two hex groups; the dotted form is kept for callers that skip
-		// canonicalisation. Either way the embedded IPv4 address decides.
-		const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-
-		if (mappedHex) {
-			const hi = parseInt(mappedHex[1], 16);
-			const lo = parseInt(mappedHex[2], 16);
-
-			return isPrivateV4(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
-		}
-		const mappedDotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-
-		if (mappedDotted) {
-			return isPrivateV4(mappedDotted[1]);
-		}
-
-		return false;
-	}
-
-	// Not a valid IP literal — treat as unsafe (callers resolve hostnames before calling this).
-	return true;
-}
-
-/**
- * The WHATWG-canonical spelling of an IPv6 literal (lowercase, compressed, mapped addresses as hex groups), so
- * every spelling of the same address classifies the same way.
- *
- * @param {string} ip - The IPv6 literal.
- * @returns {string}
- */
-function canonicalIPv6(ip: string): string {
+	let address: ipaddr.IPv4 | ipaddr.IPv6;
 	try {
-		const host = new URL(`http://[${ip}]`).hostname;
-
-		return host.startsWith('[') ? host.slice(1, -1) : host;
+		address = ipaddr.process(ip);
 	} catch {
-		return ip.toLowerCase();
-	}
-}
-
-/**
- * Whether an IPv4 literal is in a non-public range.
- *
- * @param {string} ip - The IPv4 address.
- * @returns {boolean}
- */
-function isPrivateV4(ip: string): boolean {
-	const parts = ip.split('.').map(Number);
-
-	if (parts.length !== 4 || parts.some(p => !Number.isInteger(p) || p < 0 || p > 255)) {
+		// Not a valid IP literal: unsafe (callers resolve hostnames before calling this).
 		return true;
 	}
-	const [ a, b ] = parts;
-
-	return a === 10 || a === 127 || a === 0
-		|| (a === 169 && b === 254)
-		|| (a === 172 && b >= 16 && b <= 31)
-		|| (a === 192 && b === 168)
-		|| (a === 100 && b >= 64 && b <= 127)
-		|| a >= 224;
+	return address.range() !== 'unicast';
 }
 
-/**
- * Whether a host matches an allowlist entry. An entry matches its exact host and any subdomain of it;
- * a leading dot on the entry is ignored ("example.com" and ".example.com" behave identically). The
- * subdomain check requires a dot boundary, so "example.com" does NOT match "evilexample.com".
- *
- * @param {string} host - The lowercased host.
- * @param {Array<string>} allowedHosts - The allowlist entries (lowercased).
- * @returns {boolean}
- */
 export function hostAllowed(host: string, allowedHosts: string[]): boolean {
 	if (allowedHosts.length === 0) {
 		return true;
@@ -120,18 +43,6 @@ export function hostAllowed(host: string, allowedHosts: string[]): boolean {
 	});
 }
 
-/**
- * Validates that a customer endpoint host is safe to dial: it must pass the optional allowlist and must not
- * resolve to a private/internal address. Returns null when safe, or an error message.
- *
- * @param {string} host - The endpoint host (from the parsed URL).
- * @param {Array<string>} allowedHosts - Optional allowlist; empty means allow any public host.
- * @param {boolean} allowPrivate - When true, the private/internal-address denylist is skipped. This is an
- * explicit operator opt-in (AGENT_ALLOW_PRIVATE_ENDPOINTS) for dev / same-host deployments where the agent
- * server is on localhost or an internal address; it must stay off in any deployment exposed to untrusted
- * callers, since it removes the SSRF protection. The allowlist (if set) still applies.
- * @returns {Promise<string | null>}
- */
 export async function assertPublicEndpointHost(
 		host: string,
 		allowedHosts: string[],
@@ -146,7 +57,7 @@ export async function assertPublicEndpointHost(
 		return null;
 	}
 
-	if (isIP(lower)) {
+	if (ipaddr.isValid(lower)) {
 		return isPrivateAddress(lower) ? 'Agent endpoint resolves to a non-public address' : null;
 	}
 
