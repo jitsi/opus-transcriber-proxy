@@ -162,8 +162,7 @@ gateway serves it from its own store.
 ## Webhooks *(v1 addition)*
 
 When `callbackUrl` is set on `invite` (or a tenant/operator default is configured), the control
-plane POSTs lifecycle events so the customer backend need not poll `list`. This is the analog of
-Twilio's status callbacks.
+plane POSTs lifecycle events so the customer backend need not poll `list`.
 
 ```json
 { "event": "agent.connected", "agentId": "agent-support", "conference": "acme/room1",

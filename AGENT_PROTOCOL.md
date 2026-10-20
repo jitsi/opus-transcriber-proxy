@@ -11,7 +11,7 @@ see **Versioning** below.
 ## Roles and transport
 
 - The **gateway** is the opus proxy `/agent` endpoint. It dials **out** to the **agent** server
-  (the customer's WebSocket), exactly as Twilio Media Streams dials a customer's route.
+  (the customer's WebSocket).
 - Transport is a single **WebSocket**. Every message is one **JSON text frame** (`event`-tagged).
 - Audio is **L16 PCM, signed 16-bit little-endian, mono**, base64-encoded in `payload`. The sample
   rate is announced per stream in `mediaFormat.sampleRate` (default **24000**); consumers read it
