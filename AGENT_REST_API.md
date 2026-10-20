@@ -179,6 +179,23 @@ A failed agent already had its terminal event and gets no `agent.ended`, even wh
 - **Delivery:** at-least-once with bounded retries/backoff; consumers dedupe on `(agentId, event,
   timestamp)`. Non-2xx or timeout → retried; persistent failure is logged, never blocks the call.
 
+## Event stream *(v1 addition)*
+
+`GET <base>/events[?conference=<room>]` with `Accept: text/event-stream` is the pull alternative to webhooks: one
+outbound connection from the customer backend, no public endpoint, no signing. Authenticated like the provisioning
+routes. Without `conference` the stream covers every room the credential can see (on JaaS, the tenant).
+
+Each event is one SSE message: `id: <opaque id>`, `event: agent.connected | agent.failed | agent.ended`, `data: <the
+webhook payload above>`. A new stream first receives `event: snapshot` with
+`{ "conference"?: "<room>", "agents": [ { "agentId", "conference", "displayName", "sourceName", "state" } ] }`, every
+agent in scope with its current state, unless its `Last-Event-ID` header names an event still in the server's replay
+buffer, in which case it receives the events it missed instead and no snapshot. A comment line (`: keepalive`) arrives
+every 15 s. The server closes a stream after a configured age (OSS: `voice_agent_event_stream_max_age`, default 3600 s)
+and the client reconnects with `Last-Event-ID`; too many open streams answer `503`. Clients ignore unknown event types.
+
+Webhooks and the stream carry the same events from the same producer; a backend may use either or both. The reference
+client, `@jitsi/voice-agent-client`, wraps the REST routes and this stream with reconnection and `Last-Event-ID`.
+
 ## Error model
 
 JSON body `{ "error": "<message>" }` with the status codes above. Unknown fields in any response or
