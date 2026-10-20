@@ -172,7 +172,7 @@ Twilio's status callbacks.
 Event types (v1): `agent.connected`, `agent.ended`, `agent.failed` (with a short, stable `reason` such as `no bridge available`; bridge error detail stays in operator logs, and any internal address left in a reason is masked as `<internal>`). `agent.ended`
 fires for **both** a REST `dismiss` and the media-protocol `end` event, so teardown is observable
 regardless of who initiated it, and for each agent still in the meeting when it ends (`reason: room-destroyed`).
-A failed agent already had its terminal event, so it gets `agent.ended` only if it is dismissed.
+A failed agent already had its terminal event and gets no `agent.ended`, even when it is dismissed or the meeting ends.
 
 - **Signing:** `X-Agent-Signature: sha256=<hmac>` over the raw body, keyed by the per-tenant
   (OSS: per-deployment) webhook secret, so the customer can verify authenticity.
