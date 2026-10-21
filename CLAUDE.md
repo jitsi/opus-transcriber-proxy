@@ -177,8 +177,9 @@ AgentProxy (agentproxy.ts) - one per connection
 The upgrade is gated by `AGENT_SHARED_SECRET` (the bridge sends it as `X-Agent-Token`); without it `/agent` refuses every
 upgrade with 503 unless `AGENT_ALLOW_UNAUTHENTICATED=true` (dev only), and either way this is logged once at startup, not per
 upgrade. The dial config is resolved by `agent/dial.ts` into a `DialResolution`: a transient failure (the provisioning API
-unreachable or 5xx) refuses the upgrade with HTTP 400, which the bridge retries; a permanent one (the agent gone, a dial config
-the relay cannot act on: no JSON, no URL, a non-wss URL, an unknown encoding or fan-in, or the SSRF guard) accepts the upgrade,
+unreachable, 5xx, or answering without JSON or `endpoint.url`, all the API's problem rather than the agent's) refuses the upgrade
+with HTTP 400, which the bridge retries up to its agent reconnect cap; a permanent one (the agent gone, an agent config the relay
+cannot act on: a non-wss URL, an unknown encoding or fan-in, or the SSRF guard) accepts the upgrade,
 reports `failed` once (not for a gone agent) and closes with 4002, so the bridge stops redialing instead of retrying for
 minutes with nothing reported. The SSRF guard classifies addresses with `ipaddr.js` (private, loopback, link-local, CGNAT,
 multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-public) and the outbound socket uses a
@@ -199,7 +200,8 @@ The pacer holds at most 60 s of agent audio, and customer messages are capped at
 cut by UTF-8 bytes (`agent/closeReason.ts`): `ws` throws above 123 bytes, which would have lost the terminal code on a
 non-ASCII error text. A participant decoder that fails to initialise sends the customer a `stop` for that tag, counts
 `agent_decoder_failure` and drops the tag's media with one warning. Messages queued while the customer socket opens keep
-every control message (`start`, `speakers`, ...) and evict the oldest media when the queue is full; media dropped there or
+every control message (`start`, `speakers`, ...) and evict the oldest media when the queue is full, and a new `speakers`
+replaces a queued one, since only the latest matters and it fires on every speaker change; media dropped there or
 by the per-source and return-path buffers counts `agent_media_dropped` and warns once.
 
 The bridge sends agent connects a `speakers` event (the exported sources in its recent-speaker order, the dominant

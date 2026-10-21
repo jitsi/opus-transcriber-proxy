@@ -38,7 +38,7 @@ see **Versioning** below.
 
 ### `info` (first message)
 ```json
-{ "event": "info", "protocol": "jitsi-agent-media", "version": "1.0",
+{ "event": "info", "protocol": "jitsi-agent-media", "version": "1.1",
   "application": "opus-transcriber-proxy",
   "mediaFormat": { "encoding": "audio/l16", "sampleRate": 24000, "channels": 1 },
   "fanIn": "per-source",
@@ -191,7 +191,7 @@ which the bridge treats as terminal: no redial.
 | other | transport loss mid-session | the bridge redials; the agent sees a fresh `info`/`start` |
 
 A refused upgrade (HTTP 400) is reserved for transient failures on the gateway's side (its provisioning API
-unavailable), which the bridge retries. Close reasons are cut to 123 bytes of UTF-8.
+unavailable, or answering with something that is not a dial config), which the bridge retries. Close reasons are cut to 123 bytes of UTF-8.
 
 The gateway also reports these transitions to the provisioning API (see `AGENT_REST_API.md`): `active` when
 the agent socket opens, `failed` with the reason above when the dial fails or the agent breaks the contract,

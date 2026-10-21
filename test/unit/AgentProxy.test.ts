@@ -276,6 +276,24 @@ describe('AgentProxy', () => {
 		expect(runtime.writeMetric).toHaveBeenCalledWith(expect.objectContaining({ name: 'agent_media_dropped' }));
 	});
 
+	it('queues only the latest speakers while the customer socket is pending', async () => {
+		createProxy();
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: ['u1-a0', 'u2-a0'], requests: ['agent1-a0'] });
+		for (let i = 0; i < 1500; i++) {
+			bridgeWs.receive({ event: 'speakers', speakers: i % 2 ? ['u2-a0', 'u1-a0'] : ['u1-a0', 'u2-a0'], silence: false });
+		}
+		bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: 0, timestamp: 100, payload: OPUS_B64 } });
+		await settle();
+		endpointWs.fire('open', {});
+
+		const messages = endpointWs.sentJson();
+		expect(messages.map((m) => m.event)).toEqual(['info', 'speakers', 'start', 'media']);
+		expect(messages[1].speakers).toEqual(['u2-a0', 'u1-a0']);
+		const sequence = messages.map((m) => m.sequenceNumber);
+		expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
+	});
+
 	it('dials the endpoint and flushes queued messages once it opens', async () => {
 		createProxy();
 		await settle();

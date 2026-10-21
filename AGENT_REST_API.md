@@ -154,8 +154,8 @@ which reporters take as done.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
-**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a non-`wss` or private endpoint) is reported as `failed` once, with the reason, and the bridge stops redialing
-(`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a non-`wss` or private endpoint) is reported as `failed` once, with the reason, and the bridge stops redialing; an answer that is not a dial config at all
+(not JSON, no `endpoint.url`) counts as the API being unavailable, and the bridge retries (`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
 passes to the agent in the media `info`; the internal identifiers on the dial URL never reach the agent. On JaaS the
 gateway serves it from its own store.
 

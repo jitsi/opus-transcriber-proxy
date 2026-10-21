@@ -93,7 +93,7 @@ interface SourceState {
 
 /** A message queued for the customer until its socket opens; control messages are never dropped, media is. */
 interface PendingEndpointMessage {
-	control: boolean;
+	event: string;
 	serialized: string;
 }
 
@@ -562,18 +562,24 @@ export class AgentProxy extends Emitter {
 				this.runtime.logger.error('agent: failed to send to endpoint:', error);
 			}
 		} else if (this.endpointStatus === 'pending') {
-			this.queueEndpointMessage(message.event !== 'media', serialized);
+			this.queueEndpointMessage(String(message.event), serialized);
 		}
 	}
 
 	/**
 	 * Queues a message until the customer socket opens. The queue is shared by every source, so when it is full a
 	 * control message (`start`, `speakers`, ...) evicts the oldest queued media rather than being dropped: media the
-	 * customer never gets is a gap, a `start` it never gets is a tag it was never told about.
+	 * customer never gets is a gap, a `start` it never gets is a tag it was never told about. Only the latest
+	 * `speakers` matters, and it fires on every speaker change, so it replaces a queued one to keep the queue bounded.
 	 */
-	private queueEndpointMessage(control: boolean, serialized: string): void {
+	private queueEndpointMessage(event: string, serialized: string): void {
+		const control = event !== 'media';
+		if (event === 'speakers') {
+			// Appended rather than replaced in place, so sequence numbers still rise in send order.
+			this.pendingEndpointMessages = this.pendingEndpointMessages.filter((m) => m.event !== 'speakers');
+		}
 		if (this.pendingEndpointMessages.length >= MAX_PENDING_ENDPOINT_MESSAGES) {
-			const oldestMedia = control ? this.pendingEndpointMessages.findIndex((m) => !m.control) : -1;
+			const oldestMedia = control ? this.pendingEndpointMessages.findIndex((m) => m.event === 'media') : -1;
 			if (oldestMedia >= 0) {
 				this.pendingEndpointMessages.splice(oldestMedia, 1);
 			} else if (!control) {
@@ -585,7 +591,7 @@ export class AgentProxy extends Emitter {
 				return;
 			}
 		}
-		this.pendingEndpointMessages.push({ control, serialized });
+		this.pendingEndpointMessages.push({ event, serialized });
 	}
 
 	private handleEndpointMessage(data: unknown): void {

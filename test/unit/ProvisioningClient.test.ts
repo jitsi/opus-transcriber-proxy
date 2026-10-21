@@ -78,7 +78,7 @@ describe('ProvisioningClient', () => {
 			expect((await c.dialConfig('room@muc', 'agent-1'))?.mediaFormat).toBeUndefined();
 		});
 
-		it('tells a gone agent, an unusable answer and an unavailable API apart', async () => {
+		it('tells a gone agent from an unavailable API, counting an unusable answer as unavailable', async () => {
 			const { c } = client([
 				{ status: 404, body: '' },
 				{ status: 503, body: '' },
@@ -90,8 +90,8 @@ describe('ProvisioningClient', () => {
 			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'gone' });
 			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API answered 503' });
 			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API unreachable: ETIMEDOUT' });
-			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'invalid', reason: 'not JSON' });
-			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'invalid', reason: 'no endpoint.url' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API answered without JSON' });
+			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'unavailable', reason: 'provisioning API answered without endpoint.url' });
 			expect(await c.fetchDialConfig('room@muc', 'agent-1')).toEqual({ status: 'ok', config: { endpoint: { url: 'wss://bot.example.com/ws' } } });
 		});
 

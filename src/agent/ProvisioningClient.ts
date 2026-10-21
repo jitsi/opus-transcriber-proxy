@@ -22,9 +22,10 @@ export type DialConfigResult =
 	| { status: 'ok'; config: AgentDialConfig }
 	/** 404: the agent no longer exists. */
 	| { status: 'gone' }
-	/** The API answered, but not with a dial config the relay can act on. */
-	| { status: 'invalid'; reason: string }
-	/** The API could not be reached or answered with an error other than 404; worth retrying. */
+	/**
+	 * The API could not be reached, answered with an error other than 404, or answered with something that is not a
+	 * dial config. All are the API's problem rather than the agent's, so worth retrying.
+	 */
 	| { status: 'unavailable'; reason: string };
 
 export interface ProvisioningResponse {
@@ -109,12 +110,12 @@ export class ProvisioningClient {
 			parsed = JSON.parse(response.body);
 		} catch {
 			this.options.logger.warn(`Dial config for ${label} is not JSON`);
-			return { status: 'invalid', reason: 'not JSON' };
+			return { status: 'unavailable', reason: 'provisioning API answered without JSON' };
 		}
 		const url = parsed?.endpoint?.url;
 		if (typeof url !== 'string') {
 			this.options.logger.warn(`Dial config for ${label} has no endpoint.url`);
-			return { status: 'invalid', reason: 'no endpoint.url' };
+			return { status: 'unavailable', reason: 'provisioning API answered without endpoint.url' };
 		}
 		const authorization = parsed.endpoint?.authorization;
 		const customParameters = parsed.customParameters;

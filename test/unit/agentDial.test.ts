@@ -11,16 +11,16 @@ describe('agent dial resolution', () => {
 		});
 	});
 
-	it('is transient when the provisioning API is unavailable, so the bridge retries', () => {
+	it('is transient when the provisioning API is unavailable or answers garbage, so the bridge retries', () => {
 		expect(resolveDial({ status: 'unavailable', reason: 'provisioning API answered 503' }, true)).toEqual({ kind: 'transient', reason: 'provisioning API answered 503' });
+		expect(resolveDial({ status: 'unavailable', reason: 'provisioning API answered without JSON' }, true)).toMatchObject({ kind: 'transient' });
 	});
 
 	it('is permanent without a report when the agent no longer exists', () => {
 		expect(resolveDial({ status: 'gone' }, true)).toEqual({ kind: 'permanent', reason: 'agent no longer exists', report: false });
 	});
 
-	it('is permanent with a report for a dial config the relay cannot act on', () => {
-		expect(resolveDial({ status: 'invalid', reason: 'no endpoint.url' }, true)).toMatchObject({ kind: 'permanent', report: true });
+	it('is permanent with a report for an agent config the relay cannot act on', () => {
 		expect(resolveDialConfig({ ...ok, mediaFormat: { encoding: 'audio/pcmu' } }, true)).toEqual({ kind: 'permanent', reason: 'unsupported media format audio/pcmu', report: true });
 		expect(resolveDialConfig({ ...ok, fanIn: 'loudest' }, true)).toEqual({ kind: 'permanent', reason: 'unsupported fan-in loudest', report: true });
 		expect(resolveDialConfig({ endpoint: { url: 'not a url' } }, true)).toMatchObject({ kind: 'permanent', reason: 'invalid agent endpoint URL', report: true });
