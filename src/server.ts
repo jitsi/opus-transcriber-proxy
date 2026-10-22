@@ -3,7 +3,7 @@ import { AgentLifecycleState, DialConfigResult, ProvisioningClient } from './age
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
-import { extractSessionParameters, type ISessionParameters, redactHeaders } from './utils';
+import { extractSessionParameters, type ISessionParameters, redactCredentials } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
 import { AgentProxy, CLOSE_CODE_ENDPOINT_UNREACHABLE } from './agentproxy';
@@ -43,7 +43,7 @@ const server = http.createServer((req, res) => {
 	// Log all incoming requests for debugging
 	logger.debug(`HTTP ${req.method} ${req.url}`);
 	// One string: the log format prints only the message, so a second argument would be dropped.
-	logger.debug(`Headers: ${JSON.stringify(redactHeaders(req.headers))}`);
+	logger.debug(`Headers: ${JSON.stringify(redactCredentials(req.headers))}`);
 
 	if (req.url === '/health') {
 		res.writeHead(200);
@@ -341,7 +341,7 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 server.on('upgrade', (request, socket, head) => {
 	logger.debug('UPGRADE EVENT TRIGGERED!');
 	logger.debug(`Upgrade ${request.method} ${request.url}`);
-	logger.debug(`Upgrade Headers: ${JSON.stringify(redactHeaders(request.headers))}`);
+	logger.debug(`Upgrade Headers: ${JSON.stringify(redactCredentials(request.headers))}`);
 
 	const url = `http://${request.headers.host}${request.url}`;
 	let parameters: ISessionParameters;
@@ -354,7 +354,7 @@ server.on('upgrade', (request, socket, head) => {
 		return;
 	}
 
-	logger.debug('Session parameters:', JSON.stringify(parameters));
+	logger.debug(`Session parameters: ${JSON.stringify(redactCredentials({ ...parameters }))}`);
 
 	// Validate path
 	if (

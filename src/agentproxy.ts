@@ -91,7 +91,6 @@ interface SourceState {
 	warnedPendingFull?: boolean;
 }
 
-/** A message queued for the customer until its socket opens; control messages are never dropped, media is. */
 /** The endpoint by host only: its path and query may carry the customer's credentials. */
 function endpointHost(url: string): string {
 	try {
@@ -101,6 +100,7 @@ function endpointHost(url: string): string {
 	}
 }
 
+/** A message queued for the customer until its socket opens; control messages are never dropped, media is. */
 interface PendingEndpointMessage {
 	event: string;
 	serialized: string;

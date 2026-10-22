@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractSessionParameters, redactHeaders, validateTags } from '../../src/utils';
+import { extractSessionParameters, redactCredentials, validateTags } from '../../src/utils';
 
 describe('extractSessionParameters', () => {
 	describe('tag parameter', () => {
@@ -260,10 +260,10 @@ describe('extractSessionParameters', () => {
 	});
 });
 
-describe('redactHeaders', () => {
+describe('redactCredentials', () => {
 	it('masks credential headers and keeps the rest', () => {
 		expect(
-			redactHeaders({
+			redactCredentials({
 				host: 'proxy.example.com',
 				authorization: 'Bearer abc',
 				'x-agent-token': 'shared-secret',
@@ -286,7 +286,17 @@ describe('redactHeaders', () => {
 		});
 	});
 
-	it('leaves an absent header absent', () => {
-		expect(redactHeaders({ authorization: undefined })).toEqual({ authorization: undefined });
+	it('keeps an undefined value undefined', () => {
+		expect(redactCredentials({ authorization: undefined })).toEqual({ authorization: undefined });
+	});
+
+	it('masks the credential fields of session parameters, keeping the rest', () => {
+		expect(redactCredentials({ sessionId: 's1', provider: 'openai', openaiCustomApiKey: 'sk-1', agentToken: 't', url: 'ws://x/y' })).toEqual({
+			sessionId: 's1',
+			provider: 'openai',
+			openaiCustomApiKey: '[redacted]',
+			agentToken: '[redacted]',
+			url: 'ws://x/y',
+		});
 	});
 });
