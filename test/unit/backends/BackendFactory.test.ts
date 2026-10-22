@@ -29,6 +29,14 @@ vi.mock('../../../src/backends/DeepgramBackend', () => ({
 	})),
 }));
 
+vi.mock('../../../src/backends/MistralBackend', () => ({
+	MistralBackend: vi.fn().mockImplementation((tag, participantInfo) => ({
+		tag,
+		participantInfo,
+		type: 'MistralBackend',
+	})),
+}));
+
 vi.mock('../../../src/backends/DummyBackend', () => ({
 	DummyBackend: vi.fn().mockImplementation((tag, participantInfo) => ({
 		tag,
@@ -99,6 +107,16 @@ describe('BackendFactory', () => {
 			const backend = createBackend('test-tag', { id: 'participant-3' }, 'deepgram');
 
 			expect(DeepgramBackend).toHaveBeenCalledWith('test-tag', { id: 'participant-3' });
+			expect(backend).toBeDefined();
+		});
+
+		it('should create MistralBackend when provider is mistral', async () => {
+			const { createBackend } = await import('../../../src/backends/BackendFactory');
+			const { MistralBackend } = await import('../../../src/backends/MistralBackend');
+
+			const backend = createBackend('test-tag', { id: 'participant-5' }, 'mistral');
+
+			expect(MistralBackend).toHaveBeenCalledWith('test-tag', { id: 'participant-5' });
 			expect(backend).toBeDefined();
 		});
 
@@ -185,6 +203,20 @@ describe('BackendFactory', () => {
 				language: undefined,
 				prompt: undefined, // Deepgram doesn't support prompts
 				model: 'nova-2',
+			});
+		});
+
+		it('should return Mistral config', async () => {
+			vi.stubEnv('MISTRAL_MODEL', 'voxtral-test-model');
+
+			const { getBackendConfig } = await import('../../../src/backends/BackendFactory');
+
+			const config = getBackendConfig('mistral');
+
+			expect(config).toEqual({
+				language: undefined,
+				prompt: undefined,
+				model: 'voxtral-test-model',
 			});
 		});
 
