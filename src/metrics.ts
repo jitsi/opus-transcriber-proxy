@@ -52,6 +52,7 @@ export type MetricName =
 	| 'gemini_api_error'
 	| 'deepgram_api_error'
 	| 'xai_api_error'
+	| 'mistral_api_error'
 	| 'agent_decoder_failure'
 	| 'agent_media_dropped';
 
