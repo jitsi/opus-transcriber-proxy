@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      # write: the review is posted as the action's own tracking comment (track_progress)
+      pull-requests: write
       issues: read
       id-token: write
 
@@ -36,6 +37,12 @@ jobs:
         uses: anthropics/claude-code-action@5fb899572b81d2bb648d4d187173a2f423a9677c  # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Tracking-comment mode: the action creates one comment per run and gives Claude
+          # Read/Glob/Grep plus mcp__github_comment__update_claude_comment to fill it in.
+          # Without it (plain agent mode) the only tools are the --allowedTools list below,
+          # so Claude could not read CLAUDE.md or any source file and had no way to post
+          # except `gh pr comment` — which is how PR #141 got CLAUDE.md posted verbatim twice.
+          track_progress: true
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -48,10 +55,10 @@ jobs:
             - Test coverage
 
             Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
-
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            Read the files with the Read/Grep/Glob tools. Post the finished review by updating your tracking comment
+            (mcp__github_comment__update_claude_comment); do not post additional comments.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
 
