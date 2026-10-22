@@ -2,9 +2,11 @@
  * Mistral Voxtral realtime backend for transcription
  *
  * Uses Mistral's WebSocket realtime transcription API. Audio is sent as 16 kHz PCM
- * and the server streams text deltas, which are emitted as interim transcriptions.
+ * and the server streams text deltas. Mistral has no per-utterance final event, so the
+ * deltas are emitted as interim transcriptions and as a final at each sentence end.
  * forceCommit() sends input_audio.flush, which makes Mistral finish the pending text
- * and answer with transcription.done. The session stays open.
+ * and answer with transcription.done; the text not emitted yet becomes a final then.
+ * The session stays open.
  */
 
 import { randomUUID } from 'crypto';
@@ -14,6 +16,7 @@ import { writeMetric } from '../metrics';
 import logger from '../logger';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
+import { endsSentence } from './sentenceEnd';
 
 const MISTRAL_WS_URL = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
 const MISTRAL_SAMPLE_RATE = 16000;
@@ -27,9 +30,11 @@ export class MistralBackend implements TranscriptionBackend {
 	private backendConfig?: BackendConfig;
 	private participantInfo: any;
 	private tag: string;
-	// Text received so far, and the message id it is reported under.
+	// Text received since the last final, the message id it is reported under and
+	// when its first delta arrived.
 	private pendingText = '';
 	private messageId = randomUUID();
+	private pendingTime?: number;
 
 	onInterimTranscription?: (message: TranscriptionMessage) => void;
 	onCompleteTranscription?: (message: TranscriptionMessage, midUtterance?: boolean) => void;
@@ -182,12 +187,20 @@ export class MistralBackend implements TranscriptionBackend {
 		}
 
 		if (parsedMessage.type === 'transcription.text.delta') {
+			if (this.pendingTime === undefined) {
+				this.pendingTime = Date.now();
+			}
 			this.pendingText += parsedMessage.text ?? '';
-			if (this.pendingText.trim()) {
+
+			if (endsSentence(this.pendingText)) {
+				// Mistral is still transcribing the utterance, so keep the idle flush armed
+				this.emitFinal(true);
+			} else if (this.pendingText.trim()) {
 				this.onInterimTranscription?.(this.createTranscriptionMessage(this.pendingText.trim(), Date.now(), true));
 			}
 		} else if (parsedMessage.type === 'transcription.done') {
-			logger.debug(`Received transcription.done for tag ${this.tag}`);
+			// Answer to input_audio.flush: the deltas before it carried all of its text
+			this.emitFinal(false);
 		} else if (parsedMessage.type === 'session.created') {
 			logger.debug(`Received session.created for tag ${this.tag}:`, data);
 		} else if (parsedMessage.type === 'session.updated') {
@@ -208,6 +221,18 @@ export class MistralBackend implements TranscriptionBackend {
 			// Log unexpected message types
 			logger.warn(`Unhandled Mistral message type for ${this.tag}: ${parsedMessage.type}`);
 		}
+	}
+
+	private emitFinal(midUtterance: boolean): void {
+		const text = this.pendingText.trim();
+		if (text) {
+			const transcription = this.createTranscriptionMessage(text, this.pendingTime ?? Date.now(), false);
+			this.onCompleteTranscription?.(transcription, midUtterance);
+		}
+
+		this.pendingText = '';
+		this.pendingTime = undefined;
+		this.messageId = randomUUID();
 	}
 
 	private createTranscriptionMessage(transcript: string, timestamp: number, isInterim: boolean): TranscriptionMessage {

@@ -195,6 +195,55 @@ describe('MistralBackend', () => {
 			expect(onInterim.mock.calls[2][0].transcript[0].text).toBe('The Birch');
 			expect(onInterim.mock.calls[2][0].is_interim).toBe(true);
 		});
+
+		it('emits a mid-utterance final at a sentence end and starts a new message', async () => {
+			const { backend, ws } = await connectBackend();
+			const onInterim = vi.fn();
+			const onComplete = vi.fn();
+			backend.onInterimTranscription = onInterim;
+			backend.onCompleteTranscription = onComplete;
+
+			delta(ws, 'Hello');
+			delta(ws, ' world');
+			delta(ws, '.');
+			delta(ws, ' Next');
+
+			expect(onComplete).toHaveBeenCalledTimes(1);
+			const [final, midUtterance] = onComplete.mock.calls[0];
+			expect(final.transcript[0].text).toBe('Hello world.');
+			expect(final.is_interim).toBe(false);
+			expect(final.message_id).toBe(onInterim.mock.calls[0][0].message_id);
+			expect(midUtterance).toBe(true);
+
+			const next = onInterim.mock.calls[2][0];
+			expect(next.transcript[0].text).toBe('Next');
+			expect(next.message_id).not.toBe(final.message_id);
+		});
+
+		it('emits the rest as a final on transcription.done', async () => {
+			const { backend, ws } = await connectBackend();
+			const onComplete = vi.fn();
+			backend.onCompleteTranscription = onComplete;
+
+			delta(ws, 'First.');
+			delta(ws, ' And the rest');
+			ws.simulateMessage({ type: 'transcription.done', text: 'First. And the rest' });
+
+			expect(onComplete).toHaveBeenCalledTimes(2);
+			expect(onComplete.mock.calls[1][0].transcript[0].text).toBe('And the rest');
+			expect(onComplete.mock.calls[1][1]).toBe(false);
+		});
+
+		it('emits nothing on transcription.done when everything was already emitted', async () => {
+			const { backend, ws } = await connectBackend();
+			const onComplete = vi.fn();
+			backend.onCompleteTranscription = onComplete;
+
+			delta(ws, 'Done.');
+			ws.simulateMessage({ type: 'transcription.done', text: 'Done.' });
+
+			expect(onComplete).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe('errors and close', () => {
