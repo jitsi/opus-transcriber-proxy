@@ -189,6 +189,12 @@ export const config = {
 		tags: parseAndValidateTags(process.env.DEEPGRAM_TAGS),
 	},
 
+	// Mistral (Voxtral realtime) configuration
+	mistral: {
+		apiKey: process.env.MISTRAL_API_KEY || '',
+		model: process.env.MISTRAL_MODEL || 'voxtral-mini-transcribe-realtime-3',
+	},
+
 	// Endpoint enablement (per container/worker). Transcribe/translate default true. The agent
 	// endpoint defaults FALSE: it dials out to arbitrary customer WebSocket endpoints, so it must
 	// be an explicit deployment decision (ENABLE_AGENT=true).
