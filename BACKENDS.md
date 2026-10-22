@@ -225,6 +225,34 @@ PROVIDERS_PRIORITY=xai,openai,deepgram,gemini
 - No model selection for the STT endpoint (model is inherent to the service), and no region is pinned
 - **Handshake failure handling:** a rejected upgrade (xAI answers the WS handshake with an HTTP response when its STT backend is unavailable — fleet-wide `503`s observed 2026-09-10) is caught via `ws`' `unexpected-response` event, which logs the `status`, `requestId` (`x-request-id`/`x-requestid`/`request-id`/`x-amzn-requestid`/`cf-ray`), `retryAfter`, the full response headers, the response body (bounded by a 1s read timeout so a hung read can't stall the retry) and the request URL. The request id of a *successful* handshake is also captured (`upgrade` event) and appended to every later failure log for that stream, so a mid-stream error can be traced in xAI's logs too. `connect()` then retries up to `XAI_CONNECT_ATTEMPTS` (4) times for **every** rejection except an auth failure (`XAI_FATAL_UPGRADE_STATUSES` = 401/403) and for pre-open transport errors; a malformed `XAI_STT_URL` still fails fast at construction. The retryable set is a denylist rather than an allowlist because the allowlist was twice too narrow — it needed the Cloudflare origin-failure codes 521-526/530 added (`api.x.ai` is behind Cloudflare, whose edge returns these when xAI's origin is down/timing out/failing TLS), and then on 2026-09-22 xAI answered **404** to every upgrade for 7 minutes fleet-wide while 404 was on the fail-fast list as a presumed misconfiguration. An xAI rejection carries no body and nothing that separates "your request is wrong" from "our backend is missing", so the status cannot decide it. The delay is `XAI_CONNECT_BACKOFF_MS` (250ms base, doubling, ±25% jitter, capped 4s), or the rejection's `Retry-After` when it sent one (delay-seconds or HTTP-date), capped at the same 4s — a participant's audio buffers behind `connect()`, so we never hold it longer however long xAI asks (not retrying at all would not honour the header either: the next media frame would open a fresh connection immediately). When the attempts are exhausted on a transient failure, the delay we would have waited is left as a **process-wide cooldown** that the next `connect()` in the process (the fresh backend the next media frame creates, or a recovery reconnect) waits out first, so an outage doesn't degrade into a per-participant hammer loop. Each attempt carries a 5s `handshakeTimeout` (`ws` has none by default) so a silent endpoint can't hang `connect()`, and `close()` interrupts any wait rather than letting it run out — a `close()` mid-handshake is logged at info as an abandonment, not as a provider failure. Attempts that will be retried log at `warn` (full headers/body only on the first and final attempt, to bound log volume during an outage); each failed attempt increments `otp_backend_handshake_failures_total{provider="xai", reason}`. Only after the last attempt does it report `onError('websocket_error', …)` (errorType unchanged; the status + request id are carried in the message) and close — previously the first rejection was fatal, so the participant was dropped and the next media event immediately reconnected with no backoff
 
+### Mistral
+Uses Mistral's Voxtral realtime WebSocket API for transcription.
+
+**Features:**
+- WebSocket-based streaming
+- Interim and final transcriptions
+- Multilingual with language switching inside one stream (auto-detect, or a fixed `language`)
+- One WebSocket connection per participant
+
+**Configuration:**
+```bash
+MISTRAL_API_KEY=your-key-here
+MISTRAL_MODEL=voxtral-mini-transcribe-realtime-3
+
+# Make Mistral the default provider
+PROVIDERS_PRIORITY=mistral,openai,deepgram,gemini
+```
+
+**Technical Details:**
+- Uses WebSocket API: `wss://api.mistral.ai/v1/audio/transcriptions/realtime?model=<model>`
+- Authentication via `Authorization: Bearer` header (the `ws` package, as for xAI)
+- `session.update` is sent on open with `pcm_s16le` at 16 kHz and, when the connection has one, `language`. Mistral rejects session changes after audio has started, so `updatePrompt()` only logs a warning
+- Audio is sent as base64 `input_audio.append` messages of 16 kHz PCM decoded from the client's Opus
+- Mistral streams `transcription.text.delta` events and has no per-utterance final event. Its turn detection is not enabled: measured turns were about 20 s long, too long for captions. Instead the backend collects the deltas, emits the text so far as an interim, and emits a final at each sentence end (`endsSentence`, shared with xAI). These finals are `midUtterance`, so the owner's idle force-commit stays armed
+- `forceCommit()` sends `input_audio.flush`. Mistral finishes the pending text and answers with `transcription.done`; the text not yet emitted becomes a final. The session stays open, and an idle session after a flush is not timed out (measured 60 s) and is not billed
+- Without a flush, Mistral ends a session about 30 s after the last audio with error code `3804` ("Timeout waiting for response from streaming transcription.") and close code 1013. That error is reported as recoverable, so the owner reopens the stream in place; every other error event is fatal
+- Mistral does not report the detected language, so finals carry no `language` field
+
 ## Architecture
 
 ### Backend Interface
