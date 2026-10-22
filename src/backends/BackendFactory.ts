@@ -10,6 +10,7 @@ import { GeminiBackend } from './GeminiBackend';
 import { DeepgramBackend } from './DeepgramBackend';
 import { DummyBackend } from './DummyBackend';
 import { XAIBackend } from './XAIBackend';
+import { MistralBackend } from './MistralBackend';
 
 export interface OpenAICustomOptions {
 	openaiCustomUrl?: string;
@@ -32,6 +33,8 @@ export function createBackend(tag: string, participantInfo: any, provider?: Prov
 			return new DeepgramBackend(tag, participantInfo);
 		case 'xai':
 			return new XAIBackend(tag, participantInfo);
+		case 'mistral':
+			return new MistralBackend(tag, participantInfo);
 		case 'dummy':
 			return new DummyBackend(tag, participantInfo);
 		default:
@@ -67,6 +70,12 @@ export function getBackendConfig(provider?: Provider): BackendConfig {
 				language: undefined,
 				prompt: undefined,
 				model: undefined,
+			};
+		case 'mistral':
+			return {
+				language: undefined,
+				prompt: undefined,
+				model: config.mistral.model,
 			};
 		case 'dummy':
 			return {

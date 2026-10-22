@@ -51,7 +51,7 @@ function parseAndValidateTags(value: string | undefined): string[] {
 	return tags;
 }
 
-export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'dummy';
+export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'mistral' | 'dummy';
 
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
@@ -396,6 +396,8 @@ export function isProviderAvailable(provider: Provider): boolean {
 			return !!config.deepgram.apiKey;
 		case 'xai':
 			return !!config.xai.apiKey;
+		case 'mistral':
+			return !!config.mistral.apiKey;
 		case 'dummy':
 			return config.enableDummyProvider; // Dummy only available if explicitly enabled
 		default:
@@ -407,7 +409,7 @@ export function isProviderAvailable(provider: Provider): boolean {
  * Get all available providers
  */
 export function getAvailableProviders(): Provider[] {
-	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'xai', 'dummy'];
+	const allProviders: Provider[] = ['openai', 'openai_custom', 'gemini', 'deepgram', 'xai', 'mistral', 'dummy'];
 	return allProviders.filter(isProviderAvailable);
 }
 
@@ -428,5 +430,5 @@ export function getDefaultProvider(): Provider | null {
  * Validate that a provider name is valid
  */
 export function isValidProvider(provider: string): provider is Provider {
-	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'xai' || provider === 'dummy';
+	return provider === 'openai' || provider === 'openai_custom' || provider === 'gemini' || provider === 'deepgram' || provider === 'xai' || provider === 'mistral' || provider === 'dummy';
 }
