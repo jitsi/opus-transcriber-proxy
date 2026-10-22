@@ -46,8 +46,9 @@ but not authorized for the target room/tenant.
   server (`kid`→JWKS, `iss`/`aud`/`exp`), exactly as other Jitsi service components authenticate.
   The operator issues it to whatever backend calls the API. `Host` selects the MUC domain. The token's
   `room` and `sub` claims scope it the way a meeting token's do: `room` names the one room it may act on
-  (`*` for every room), `sub` the tenant (`*` for every tenant); a request for another room is `403`. An
-  event stream opened for every room, or for a room that does not exist yet, needs the wildcard claims.
+  (`*` for every room), `sub` the tenant (`*` for every tenant); a request for another room is `403`. A
+  `room` claim is required, a breakout room counts as its main room, and an event stream carries only the
+  rooms the token may act on.
 - **JaaS** — the token is a **tenant credential** (a JaaS JWT, or an API key exchanged for one).
   The gateway authenticates the tenant, authorizes that the target room belongs to the tenant, then
   calls the OSS route server-to-server with a **minted system ASAP token**. The tenant never sees
