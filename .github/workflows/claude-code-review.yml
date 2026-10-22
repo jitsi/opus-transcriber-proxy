@@ -54,9 +54,6 @@ jobs:
           # so Claude could not read CLAUDE.md or any source file and had no way to post
           # except `gh pr comment` — which is how PR #141 got CLAUDE.md posted verbatim twice.
           track_progress: true
-          # One comment per PR, rewritten on each push, instead of one per run. (Applies to
-          # pull_request events; a `/review` run adds a comment of its own.)
-          use_sticky_comment: true
           # Set the CLAUDE_REVIEW_DEBUG repository variable to 'true' to keep the full
           # transcript in the (public) job log while debugging the bot itself.
           show_full_output: ${{ vars.CLAUDE_REVIEW_DEBUG == 'true' }}
@@ -93,3 +90,37 @@ jobs:
             --model claude-sonnet-5-5
             --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git diff:*),Bash(git log:*)"
             --disallowed-tools "Edit,MultiEdit,Write,NotebookEdit,Bash(git add:*),Bash(git commit:*),Bash(git rm:*),Bash(git push:*)"
+
+      # One tracking comment per run, so a PR with several pushes accumulates several
+      # reviews. Collapse the earlier ones as outdated, keeping only the newest open; they
+      # stay readable behind "Show comment", so what the bot said about an earlier revision
+      # is not lost (use_sticky_comment would overwrite it instead). Runs only after a
+      # successful review, so a failed run never hides the only review the PR has, and a
+      # failed mutation fails the step visibly rather than being swallowed.
+      - name: Hide previous review comments
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api graphql -f query='
+            query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  comments(last: 100) { nodes { id createdAt isMinimized author { login } } }
+                }
+              }
+            }' -F owner="${GITHUB_REPOSITORY%/*}" -F repo="${GITHUB_REPOSITORY#*/}" -F pr="$PR" \
+          | jq -r '[.data.repository.pullRequest.comments.nodes[]
+                    | select(.isMinimized == false and .author.login == "claude")]
+                   | sort_by(.createdAt) | .[:-1][] | .id' \
+          | while read -r id; do
+              echo "Hiding $id"
+              gh api graphql -f query='
+                mutation($id: ID!) {
+                  minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) {
+                    minimizedComment { isMinimized }
+                  }
+                }' -F id="$id"
+            done
