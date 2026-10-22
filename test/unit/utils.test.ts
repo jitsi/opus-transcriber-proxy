@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractSessionParameters, validateTags } from '../../src/utils';
+import { extractSessionParameters, redactHeaders, validateTags } from '../../src/utils';
 
 describe('extractSessionParameters', () => {
 	describe('tag parameter', () => {
@@ -257,5 +257,36 @@ describe('extractSessionParameters', () => {
 			expect(params.url).toBeInstanceOf(URL);
 			expect(params.url.toString()).toBe(url);
 		});
+	});
+});
+
+describe('redactHeaders', () => {
+	it('masks credential headers and keeps the rest', () => {
+		expect(
+			redactHeaders({
+				host: 'proxy.example.com',
+				authorization: 'Bearer abc',
+				'x-agent-token': 'shared-secret',
+				'x-translation-token': 't',
+				'x-custom-openai-api-key': 'sk-1',
+				cookie: 'a=b',
+				'sec-websocket-key': 'k',
+				upgrade: 'websocket',
+			}),
+		).toEqual({
+			host: 'proxy.example.com',
+			authorization: '[redacted]',
+			'x-agent-token': '[redacted]',
+			'x-translation-token': '[redacted]',
+			'x-custom-openai-api-key': '[redacted]',
+			cookie: '[redacted]',
+			// A handshake nonce, not a credential.
+			'sec-websocket-key': 'k',
+			upgrade: 'websocket',
+		});
+	});
+
+	it('leaves an absent header absent', () => {
+		expect(redactHeaders({ authorization: undefined })).toEqual({ authorization: undefined });
 	});
 });

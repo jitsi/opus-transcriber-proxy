@@ -307,6 +307,8 @@ describe('AgentProxy', () => {
 		const events = endpointWs.sentJson().map((m) => m.event);
 		// info + per-source start + the media for it, in order.
 		expect(events).toEqual(['info', 'start', 'media']);
+		// The endpoint URL's path and query may carry the customer's credentials: logged by host only.
+		expect(runtime.logger.info).toHaveBeenCalledWith('agent: connected to endpoint agents.example.com');
 	});
 
 	it('announces each source with the agent PCM format and forwards decoded media', async () => {

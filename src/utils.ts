@@ -132,3 +132,12 @@ export function getTurnDetectionConfig() {
 	const { config } = require('./config');
 	return config.openai.turnDetection;
 }
+
+const SENSITIVE_HEADER = /authorization|token|secret|api-key|cookie/i;
+
+/** The headers with credential values masked, for debug logging: bearer tokens, shared secrets, API keys, cookies. */
+export function redactHeaders(headers: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(headers).map(([name, value]) => [name, SENSITIVE_HEADER.test(name) && value !== undefined ? '[redacted]' : value]),
+	);
+}

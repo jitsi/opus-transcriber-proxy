@@ -184,7 +184,7 @@ reports `failed` once (not for a gone agent) and closes with 4002, so the bridge
 minutes with nothing reported. The SSRF guard classifies addresses with `ipaddr.js` (private, loopback, link-local, CGNAT,
 multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-public) and the outbound socket uses a
 `request-filtering-agent`, which checks the address actually connected to, closing the DNS-rebinding gap of the pre-dial
-lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Lifecycle reports for one session are chained so they post in order, a
+lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Logs name the customer endpoint by host only, and the debug header dumps mask credential headers (`redactHeaders`). Lifecycle reports for one session are chained so they post in order, a
 session reports a terminal state (`failed` or `ended`) once, and `AgentProxy` ignores customer messages once closed.
 Status reports retry five times with doubling backoff, with a hard deadline and a 64 KiB body cap per request, and count a
 give-up in `otp_agent_status_reports_given_up_total`; permanent dial failures count in `otp_agent_dial_failures_total`.
