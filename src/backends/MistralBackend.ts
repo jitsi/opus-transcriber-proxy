@@ -172,7 +172,8 @@ export class MistralBackend implements TranscriptionBackend {
 		};
 
 		if (this.backendConfig.language) {
-			session.language = this.backendConfig.language;
+			// Mistral accepts only a two-letter code and rejects the session for e.g. en-US
+			session.language = this.backendConfig.language.split('-')[0];
 		}
 
 		const message = JSON.stringify({ type: 'session.update', session });

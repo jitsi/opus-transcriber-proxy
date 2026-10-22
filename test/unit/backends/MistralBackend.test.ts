@@ -137,6 +137,12 @@ describe('MistralBackend', () => {
 			expect(ws.getSentMessages()[0].session.language).toBe('de');
 		});
 
+		it('sends only the primary subtag of a regional language code', async () => {
+			const { ws } = await connectBackend({ ...backendConfig, language: 'en-US' });
+
+			expect(ws.getSentMessages()[0].session.language).toBe('en');
+		});
+
 		it('rejects and reports an error when the socket fails before opening', async () => {
 			const backend = new MistralBackend('tag-1', participantInfo);
 			const onError = vi.fn();
