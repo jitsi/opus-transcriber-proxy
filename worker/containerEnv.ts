@@ -123,6 +123,10 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.XAI_IDLE_TURN_END_GRACE_MS && { XAI_IDLE_TURN_END_GRACE_MS: env.XAI_IDLE_TURN_END_GRACE_MS }),
 		...(env.XAI_ENCODING && { XAI_ENCODING: env.XAI_ENCODING }),
 		...(env.XAI_IDLE_FLUSH && { XAI_IDLE_FLUSH: env.XAI_IDLE_FLUSH }),
+		// MISTRAL_API_KEY is forwarded as '' when unset so the container treats Mistral as
+		// unconfigured (provider disabled). MISTRAL_MODEL is only forwarded when set.
+		MISTRAL_API_KEY: env.MISTRAL_API_KEY || '',
+		...(env.MISTRAL_MODEL && { MISTRAL_MODEL: env.MISTRAL_MODEL }),
 		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',
 		ENABLE_OPENAI_CUSTOM_PROVIDER: env.ENABLE_OPENAI_CUSTOM_PROVIDER || 'false',
 		OPENAI_CUSTOM_REQUIRE_WSS: env.OPENAI_CUSTOM_REQUIRE_WSS || 'true',
