@@ -273,6 +273,30 @@ describe('MistralBackend', () => {
 			expect(backend.getStatus()).toBe('closed');
 		});
 
+		it('emits the pending text as a final before reporting an error', async () => {
+			const { backend, ws } = await connectBackend();
+			const calls: string[] = [];
+			backend.onCompleteTranscription = (message) => calls.push(`final:${message.transcript[0].text}`);
+			backend.onError = () => calls.push('error');
+
+			delta(ws, 'Not finished');
+			ws.simulateMessage({ type: 'error', error: { message: 'Invalid model', code: 1000 } });
+
+			expect(calls).toEqual(['final:Not finished', 'error']);
+		});
+
+		it('emits the pending text as a final before reporting a remote close', async () => {
+			const { backend, ws } = await connectBackend();
+			const calls: string[] = [];
+			backend.onCompleteTranscription = (message) => calls.push(`final:${message.transcript[0].text}`);
+			backend.onClosed = () => calls.push('closed');
+
+			delta(ws, 'Not finished');
+			ws.simulateClose(1013, 'Upstream session closed', true);
+
+			expect(calls).toEqual(['final:Not finished', 'closed']);
+		});
+
 		it('notifies onClosed when the server closes the socket', async () => {
 			const { backend, ws } = await connectBackend();
 			const onClosed = vi.fn();

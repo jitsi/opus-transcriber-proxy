@@ -86,6 +86,8 @@ export class MistralBackend implements TranscriptionBackend {
 						worker: 'opus-transcriber-proxy',
 						errorType: 'websocket_error',
 					});
+					// The text already received would be lost with the stream, so emit it first
+					this.emitFinal(false);
 					this.onError?.('websocket_error', 'WebSocket connection error');
 					this.status = 'failed';
 					this.close();
@@ -98,6 +100,7 @@ export class MistralBackend implements TranscriptionBackend {
 					);
 					this.status = 'failed';
 					this.close();
+					this.emitFinal(false);
 					// Notify OutgoingConnection that the backend has closed
 					this.onClosed?.();
 				});
@@ -215,6 +218,8 @@ export class MistralBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: recoverable ? 'stream_timeout' : 'api_error',
 			});
+			// The text already received would be lost with the stream, so emit it first
+			this.emitFinal(false);
 			this.onError?.('api_error', message, recoverable);
 			this.close();
 		} else {
