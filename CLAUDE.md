@@ -423,6 +423,7 @@ Live-translation audio duration is metered so it can be billed downstream. It's 
 - Sends 16 kHz PCM as base64 `input_audio.append`; `session.update` on open carries the audio format and the connection's `language` if any. Mistral rejects session changes after audio has started, so `updatePrompt()` only warns
 - No per-utterance final event: deltas are collected, sent as interims, and emitted as a `midUtterance` final at each sentence end (`endsSentence`). `forceCommit()` sends `input_audio.flush`; the answering `transcription.done` turns the rest into a final (not `midUtterance`) and the session stays open
 - Error code `3804` (idle timeout, ~30 s after unflushed audio) is recoverable; other errors are fatal. See BACKENDS.md for measured behaviour
+- The CF Worker forwards `MISTRAL_API_KEY` (as `''` when unset -> provider disabled) and, when set, `MISTRAL_MODEL` to the container via `buildContainerEnvVars`
 
 ### Configuration System (`src/config.ts`)
 
