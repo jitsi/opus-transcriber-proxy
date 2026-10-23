@@ -4,7 +4,11 @@
 	"compatibility_date": "2025-01-09",
 	// nodejs_compat: the Worker-hosted /translate path runs the Emscripten Opus glue, which expects
 	// some Node globals.
-	"compatibility_flags": ["nodejs_compat"],
+	// enable_ctx_exports: @cloudflare/containers (0.2+) reaches its ContainerProxy entrypoint through
+	// `ctx.exports` whenever a container Durable Object is rebuilt around an already-running container,
+	// even with outbound interception unused; without the flag (default on only from compatibility
+	// date 2025-11-17) that is an unhandled rejection logged on every deploy and eviction.
+	"compatibility_flags": ["nodejs_compat", "enable_ctx_exports"],
 	"observability": {
 		"enabled": true
 	},

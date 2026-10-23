@@ -136,6 +136,10 @@ Three things to know about the Worker's use of the SDK:
   the SDK's activity timer never sees audio, so keeping a live call's container awake is done by the
   Worker's renewal loop and the `/status` probe in `onActivityExpired`. Do not remove those on the
   assumption that the SDK renews on WebSocket traffic.
+- **`ContainerProxy` is exported and `enable_ctx_exports` is on** although outbound interception is
+  not used: since 0.2 the SDK's Container constructor looks up `ctx.exports.ContainerProxy` whenever
+  the Durable Object is rebuilt around an already-running container, and logs an unhandled rejection
+  if either is missing. Keep both when touching `worker/index.ts` or `wrangler.jsonc`.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must

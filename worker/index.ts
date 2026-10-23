@@ -1,4 +1,10 @@
 import { Container, getContainer } from '@cloudflare/containers';
+
+// The SDK's outbound-interception entrypoint. Not used for interception here, but since 0.2 the
+// Container constructor looks it up via `ctx.exports.ContainerProxy` whenever the Durable Object is
+// rebuilt around an already-running container (a deploy, an isolate eviction) and logs an unhandled
+// rejection if it is missing; exporting it keeps those rebuilds quiet. Needs `enable_ctx_exports`.
+export { ContainerProxy } from '@cloudflare/containers';
 import type { Env } from './env';
 import { handleTranslate } from './handleTranslate';
 
@@ -285,12 +291,13 @@ export class TranscriberContainer extends Container<Env> {
 	 * `handleWebSocketWithDispatcher` and the `/status` probe in `onActivityExpired` below).
 	 *
 	 * The Worker always calls `startAndWaitForPorts()` before `fetch()`, so the start here is
-	 * only a safety net for a container that stopped in between. It is gated on
-	 * `container.running` alone, as 0.0.31 was: the SDK's own `containerFetch` also consults a
-	 * private health flag, which a subclass cannot read, and calling `startAndWaitForPorts()`
-	 * unconditionally would cost a port probe, a storage write and an `onStart` per upgrade.
-	 * The gap is a second upgrade arriving while a restart is between `start()` and the port
-	 * coming up: it gets a 500 and the bridge redials a second later.
+	 * only a safety net for a container that stopped in between. It is gated the way
+	 * `containerFetch` gates its own start, on the container not running or the SDK's persisted
+	 * state not being healthy (`getState()` is a cached storage read), so an upgrade that lands
+	 * while a restart is between `start()` and the port coming up joins that start instead of
+	 * failing against a port that is not listening yet. Calling `startAndWaitForPorts()`
+	 * unconditionally would instead cost a port probe, a storage write and an `onStart` per
+	 * upgrade.
 	 *
 	 * Failures are returned as responses, not thrown, with the status `containerFetch` would
 	 * give them (503 when no container instance is available, 429 when rate limited, 500
@@ -309,7 +316,7 @@ export class TranscriberContainer extends Container<Env> {
 		if (!container) {
 			return new Response('Durable Object has no container binding', { status: 500 });
 		}
-		if (!container.running) {
+		if (!container.running || (await this.getState()).status !== 'healthy') {
 			try {
 				await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
 			} catch (e) {
