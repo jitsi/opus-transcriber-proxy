@@ -1,0 +1,38 @@
+# Copyright @ 2026 - present 8x8, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CLA
+
+# pull_request_target runs this file from the base branch with access to the
+# secrets, also for PRs from forks. The called workflow never checks out PR code.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: cla-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cla:
+    if: github.repository_owner == 'jitsi'
+    uses: jitsi/.github/.github/workflows/cla-check.yml@main
+    permissions:
+      pull-requests: write
+    secrets:
+      CLA_HASH_KEY: ${{ secrets.CLA_HASH_KEY }}
+      CLA_APP_CLIENT_ID: ${{ secrets.CLA_APP_CLIENT_ID }}
+      CLA_APP_PRIVATE_KEY: ${{ secrets.CLA_APP_PRIVATE_KEY }}
