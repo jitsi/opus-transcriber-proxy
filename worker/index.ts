@@ -37,9 +37,10 @@ interface TranscriptionMessage {
 }
 
 /**
- * Build the container env vars from the worker env bindings.
- * Shared between the class-level default and startAndWaitForPorts() override
- * (which adds CONTAINER_INSTANCE_NAME — not available at class init time).
+ * Build the container env vars from the worker env bindings. `TranscriberContainer.envVars`
+ * adds CONTAINER_INSTANCE_NAME on top, so every start path (the Worker's explicit
+ * `startAndWaitForPorts`, the SDK's start-on-fetch, the passthrough override's safety net)
+ * gives the container the same identity.
  */
 function buildContainerEnvVars(env: Env): Record<string, string> {
 	return {
@@ -196,8 +197,14 @@ export class TranscriberContainer extends Container<Env> {
 	// the container reclaims ~sleepAfter after the last renewal.
 	sleepAfter = this.env.SLEEP_AFTER || '7m';
 
-	// Pass environment variables to the container (default, without instance name)
-	envVars: Record<string, string> = buildContainerEnvVars(this.env);
+	// Environment for the container. The instance name is the name this Durable Object was
+	// looked up by (`getContainer(binding, name)` → `idFromName`), which is the session or pool
+	// slot id the Worker uses everywhere else; `ctx.id.name` is unset only for ids not created
+	// from a name, which this Worker never does.
+	envVars: Record<string, string> = {
+		...buildContainerEnvVars(this.env),
+		...(this.ctx.id.name ? { CONTAINER_INSTANCE_NAME: this.ctx.id.name } : {}),
+	};
 
 	override onStart() {
 		console.log('Transcriber container started');
@@ -227,8 +234,8 @@ export class TranscriberContainer extends Container<Env> {
 	 * Object, creates a second WebSocketPair, and relays every message between the two in JS,
 	 * calling `renewActivityTimeout()` per message. For this workload that would put every
 	 * 20 ms audio frame of every participant through this DO's isolate (a 20-participant
-	 * meeting is ~1000 messages/s), bill each incoming frame as a DO request, add a hop of
-	 * latency, and remap a 1006 abnormal close from the container to a clean 1000, hiding a
+	 * meeting is ~1000 messages/s), bill the incoming frames as DO requests (20 messages per
+	 * billable request), add a hop of latency, and remap a 1006 abnormal close from the container to a clean 1000, hiding a
 	 * container crash from the bridge and from our logs. The pre-0.2.1 behaviour (what this
 	 * deployment ran on, at 0.0.31, before this upgrade) was a plain passthrough: the response from the
 	 * container's TCP port is returned as-is and workerd pipes the socket with no per-message
@@ -240,7 +247,15 @@ export class TranscriberContainer extends Container<Env> {
 	 * `handleWebSocketWithDispatcher` and the `/status` probe in `onActivityExpired` below).
 	 *
 	 * The Worker always calls `startAndWaitForPorts()` before `fetch()`, so the start here is
-	 * only a safety net for a container that stopped in between.
+	 * only a safety net for a container that stopped in between. It is gated on
+	 * `container.running` alone, as 0.0.31 was: the SDK's own `containerFetch` also consults a
+	 * private health flag, which a subclass cannot read, and calling `startAndWaitForPorts()`
+	 * unconditionally would cost a port probe, a storage write and an `onStart` per upgrade.
+	 * The gap is a second upgrade arriving while a restart is between `start()` and the port
+	 * coming up: it gets a 500 and the bridge redials a second later.
+	 *
+	 * Failures are returned as the same 500 responses `containerFetch` produces, not thrown,
+	 * so the Worker's `status !== 101` handling and its log lines are unchanged from 0.0.31.
 	 */
 	override async fetch(request: Request): Promise<Response> {
 		if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -252,11 +267,26 @@ export class TranscriberContainer extends Container<Env> {
 			throw new Error('Durable Object has no container binding');
 		}
 		if (!container.running) {
-			await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
+			try {
+				await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
+			} catch (e) {
+				return new Response(`Failed to start container: ${e instanceof Error ? e.message : String(e)}`, { status: 500 });
+			}
 		}
 		this.renewActivityTimeout();
-		// Same URL rewrite the SDK applies: the container's port speaks plain HTTP.
-		return container.getTcpPort(port).fetch(request.url.replace('https:', 'http:'), request);
+		try {
+			// Same URL rewrite the SDK applies: the container's port speaks plain HTTP.
+			return await container.getTcpPort(port).fetch(request.url.replace('https:', 'http:'), request);
+		} catch (e) {
+			if (!(e instanceof Error)) {
+				throw e;
+			}
+			if (e.message.includes('Network connection lost.')) {
+				return new Response('Container suddenly disconnected, try again', { status: 500 });
+			}
+			console.error(`Error proxying WebSocket upgrade to container ${this.ctx.id}:`, e);
+			return new Response(`Error proxying request to container: ${e.message}`, { status: 500 });
+		}
 	}
 
 	/**
@@ -293,6 +323,11 @@ export class TranscriberContainer extends Container<Env> {
 				// Non-2xx from /status: can't trust session state, so allow the default stop —
 				// but log it, otherwise a recurring 4xx/5xx that sleeps live calls is invisible.
 				console.error(`onActivityExpired: /status returned ${res.status}, allowing container to sleep`);
+				// Drain the body. Since SDK 0.2.1 `containerFetch` counts a request as in flight
+				// until its body is consumed, and `isActivityExpired()` is permanently false while
+				// anything is in flight — an unread error body here would keep this DO's next
+				// container alive until the isolate is evicted.
+				await res.text().catch(() => undefined);
 			}
 		} catch (error) {
 			// Can't determine session state — fall through to the default stop. If the
@@ -741,10 +776,8 @@ export default {
 		// Start the container and wait for ports to be ready
 		// This is required for the fetch to work properly
 		try {
+			// envVars come from the class-level default (which includes CONTAINER_INSTANCE_NAME).
 			await container.startAndWaitForPorts({
-				startOptions: {
-					envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
-				},
 				cancellationOptions: {
 					waitInterval: 100, // Poll every 100ms (default: 1000ms)
 				},
