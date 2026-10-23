@@ -300,6 +300,73 @@ describe('handleWebSocketWithDispatcher: dispatching', () => {
 		expect(second.sentJson()).toHaveLength(1);
 	});
 
+	it('waits for an in-flight reconnect dial instead of dialling again when the session ends during it', async () => {
+		vi.useFakeTimers();
+		const first = new FakeWs();
+		const second = new FakeWs();
+		let resolveSecond!: (v: unknown) => void;
+		let attempts = 0;
+		const { serverWs, containerWs, doFetch, ctx } = await setup({
+			dispatcherFetch: () => (attempts++ === 0 ? Promise.resolve({ webSocket: first }) : new Promise((resolve) => (resolveSecond = resolve))),
+		});
+		first.remoteClose(1012, 'dispatcher restarting');
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(doFetch).toHaveBeenCalledTimes(2);
+		containerWs.emit('message', { data: finalTranscript() });
+		serverWs.remoteClose(1000, 'bye');
+		expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+		resolveSecond({ webSocket: second });
+		await vi.advanceTimersByTimeAsync(0);
+		await ctx.waitUntil.mock.calls[0][0];
+		expect(doFetch).toHaveBeenCalledTimes(2);
+		expect(second.sentJson()).toHaveLength(1);
+		expect(second.closed).toEqual({ code: 1000, reason: 'Session ended' });
+	});
+
+	it('cancels a pending reconnect backoff when the session ends', async () => {
+		vi.useFakeTimers();
+		const { serverWs, dispatcherWs, doFetch } = await setup();
+		dispatcherWs.remoteClose(1012, 'dispatcher restarting');
+		serverWs.remoteClose(1000, 'bye');
+		expect(vi.getTimerCount()).toBe(0);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(doFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('bounds the queue while the dispatcher is away, dropping the oldest finals', async () => {
+		vi.useFakeTimers();
+		const later = new FakeWs();
+		let attempts = 0;
+		const { containerWs } = await setup({
+			dispatcherFetch: async () => (attempts++ === 0 ? { webSocket: undefined } : { webSocket: later }),
+		});
+		for (let i = 0; i < 105; i++) {
+			containerWs.emit('message', { data: finalTranscript({ timestamp: i }) });
+		}
+		await vi.advanceTimersByTimeAsync(1000);
+		const sent = later.sentJson().map((m) => m.timestamp);
+		expect(sent).toHaveLength(100);
+		expect(sent[0]).toBe(5);
+		expect(sent[99]).toBe(104);
+	});
+
+	it('still closes the other side and flushes when one close() throws', async () => {
+		let attempts = 0;
+		const laterWs = new FakeWs();
+		const { containerWs, serverWs, ctx } = await setup({
+			dispatcherFetch: async () => (attempts++ === 0 ? { webSocket: undefined } : { webSocket: laterWs }),
+		});
+		containerWs.emit('message', { data: finalTranscript() });
+		vi.spyOn(serverWs, 'close').mockImplementation(() => {
+			throw new Error('unexpected state');
+		});
+		serverWs.remoteClose(1000, 'bye');
+		expect(containerWs.closed).toEqual({ code: 1000, reason: 'bye' });
+		expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+		await ctx.waitUntil.mock.calls[0][0];
+		expect(laterWs.sentJson()).toHaveLength(1);
+	});
+
 	it('flushes queued finals when the client errors out, via waitUntil', async () => {
 		let attempts = 0;
 		const laterWs = new FakeWs();

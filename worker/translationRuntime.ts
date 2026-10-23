@@ -63,7 +63,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 		},
 		buildServerInfo() {
 			// The Worker-hosted /translate path never touches the container, so the container's info
-			// (and the index.ts in-place augmentation of it) does not apply here — build the equivalent
+			// (and sessionProxy.ts's in-place augmentation of it) does not apply here — build the equivalent
 			// message directly. Mirrors src/serverInfo.ts, with a `worker` block for the Worker runtime.
 			const info: Record<string, unknown> = {
 				event: 'info',

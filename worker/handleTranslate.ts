@@ -115,7 +115,7 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 				// client disconnected mid-flight; 'closed' will fire and tear down the proxy
 			}
 		}
-		// Forward finals to the dispatcher (mirrors the container path in index.ts, where non-interim
+		// Forward finals to the dispatcher (mirrors the container path in sessionProxy.ts, where non-interim
 		// realtime-translation-result messages are dispatched to the per-session DO).
 		if (dispatcher && !data.isInterim) {
 			dispatcher.forward({

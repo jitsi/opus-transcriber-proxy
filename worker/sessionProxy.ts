@@ -3,6 +3,7 @@ import type { TranscriberContainer } from './TranscriberContainer';
 import type { DispatcherTranscriptionMessage, TranscriptionMessage } from './types';
 import { buildWorkerInfo } from './containerEnv';
 import { closeReason } from '../src/agent/closeReason';
+import { DISPATCHER_QUEUE_LIMIT } from './dispatcherForwarder';
 
 /**
  * A close code workerd will put in a close frame: 1000-1003, 1007-1014 and 3000-4999. Its `close()`
@@ -72,10 +73,13 @@ export async function handleWebSocketWithDispatcher(
 	const messageQueue: DispatcherTranscriptionMessage[] = [];
 	let reconnectAttempts = 0;
 	let isReconnecting = false;
-	// The initial connect while it is in flight, so a queued final does not also start a reconnect
-	// and a flush-on-close waits for it instead of dialling a second socket.
-	let initialConnect: Promise<WebSocket | null> | null = null;
+	// The backoff timer before a reconnect dial, cleared when the session ends.
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	// Whichever dispatcher dial is in flight (the initial connect or a reconnect), so a queued final
+	// does not start another one and a flush-on-close waits for it instead of dialling a second socket.
+	let pendingConnect: Promise<WebSocket | null> | null = null;
 	let sessionClosed = false;
+	let queueOverflowLogged = false;
 
 	// Function to connect/reconnect to dispatcher DO
 	async function connectToDispatcher(allowDuringClose = false): Promise<WebSocket | null> {
@@ -124,13 +128,16 @@ export async function handleWebSocketWithDispatcher(
 
 		console.log(`Scheduling dispatcher reconnect in ${delay}ms (attempt ${reconnectAttempts}), sessionId=${sessionId}, queued=${messageQueue.length}`);
 
-		setTimeout(async () => {
+		reconnectTimer = setTimeout(async () => {
+			reconnectTimer = null;
 			if (sessionClosed) {
 				isReconnecting = false;
 				return;
 			}
 			// Stays set across the await so a final arriving meanwhile does not open a second socket.
-			const newWs = await connectToDispatcher();
+			pendingConnect = connectToDispatcher();
+			const newWs = await pendingConnect;
+			pendingConnect = null;
 			isReconnecting = false;
 			if (sessionClosed) {
 				// The session ended during the connect: use the socket for what is still queued, then
@@ -174,10 +181,10 @@ export async function handleWebSocketWithDispatcher(
 
 		console.log(`Flushing ${messageQueue.length} queued messages before session close, sessionId=${sessionId}`);
 
-		// If the session ended while the initial connect was still in flight, let that connect finish
-		// and flush (it does both when it finds the session closed) rather than dial a second socket.
-		if (initialConnect) {
-			await initialConnect;
+		// If the session ended while a dial (the initial connect or a reconnect) was in flight, let it
+		// finish and flush (it does both when it finds the session closed) rather than dial again.
+		if (pendingConnect) {
+			await pendingConnect;
 			if (messageQueue.length === 0) return;
 		}
 
@@ -251,12 +258,20 @@ export async function handleWebSocketWithDispatcher(
 				if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
 					dispatcherWs.send(JSON.stringify(dispatcherMessage));
 				} else if (env.DISPATCHER_DO) {
-					// Queue message while disconnected
+					// Queue message while disconnected, bounded like the /translate forwarder's queue so
+					// a long outage of the session's Dispatcher DO cannot grow it without limit.
 					messageQueue.push(dispatcherMessage);
+					if (messageQueue.length > DISPATCHER_QUEUE_LIMIT) {
+						messageQueue.shift();
+						if (!queueOverflowLogged) {
+							queueOverflowLogged = true;
+							console.warn(`Dispatcher queue full (${DISPATCHER_QUEUE_LIMIT}), dropping oldest, sessionId=${sessionId}`);
+						}
+					}
 					if (messageQueue.length === 1) {
 						console.log(`Dispatcher not connected, queueing messages, sessionId=${sessionId}`);
 					}
-					if (!isReconnecting && !initialConnect) {
+					if (!isReconnecting && !pendingConnect) {
 						scheduleReconnect();
 					}
 				}
@@ -310,24 +325,41 @@ export async function handleWebSocketWithDispatcher(
 	 * - delivers what is still queued for the dispatcher (reconnecting if needed) and closes it.
 	 */
 	let tornDown = false;
+	// Each close is attempted independently: this is the only teardown path, so one close() that
+	// throws (a state or value workerd rejects that the checks above did not foresee) must not leave
+	// the other socket open or the queued finals undelivered.
+	function safeClose(ws: WebSocket, code: number, reason: string, which: string) {
+		try {
+			ws.close(code, closeReason(reason));
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`Closing the ${which} WebSocket failed (code=${code}): ${msg}, sessionId=${sessionId}`);
+		}
+	}
 	function endSession(from: 'client' | 'container', code: number, reason: string, errored = false) {
 		if (tornDown) return;
 		tornDown = true;
 		sessionClosed = true;
 		clearInterval(keepAliveInterval);
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+			isReconnecting = false;
+		}
 
 		const [closedWs, otherWs] = from === 'client' ? [serverWs, containerWs] : [containerWs, serverWs];
-		// Reasons are capped at 123 UTF-8 bytes (RFC 6455); a longer one makes close() throw.
+		const other = from === 'client' ? 'container' : 'client';
+		// Reasons are capped at 123 UTF-8 bytes (RFC 6455) inside safeClose; a longer one would throw.
 		if (!errored && OPEN_OR_CLOSING(closedWs)) {
-			closedWs.close(sendableCloseCode(code, 1000), closeReason(reason));
+			safeClose(closedWs, sendableCloseCode(code, 1000), reason, from);
 		}
 		if (OPEN_OR_CLOSING(otherWs)) {
 			if (errored) {
-				otherWs.close(1011, closeReason(reason));
+				safeClose(otherWs, 1011, reason, other);
 			} else if (from === 'container') {
-				otherWs.close(sendableCloseCode(code, 1011), closeReason(reason || 'Container connection closed'));
+				safeClose(otherWs, sendableCloseCode(code, 1011), reason || 'Container connection closed', other);
 			} else {
-				otherWs.close(sendableCloseCode(code, 1000), closeReason(reason));
+				safeClose(otherWs, sendableCloseCode(code, 1000), reason, other);
 			}
 		}
 
@@ -336,7 +368,7 @@ export async function handleWebSocketWithDispatcher(
 			// the socket it flushes through).
 			ctx.waitUntil(flushBeforeClose());
 		} else if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
-			dispatcherWs.close(1000, from === 'client' ? 'Session ended' : 'Container disconnected');
+			safeClose(dispatcherWs, 1000, from === 'client' ? 'Session ended' : 'Container disconnected', 'dispatcher');
 		}
 	}
 
@@ -367,9 +399,9 @@ export async function handleWebSocketWithDispatcher(
 	// does meanwhile is handled: a final is queued and flushed below, and a close or error marks the
 	// session closed, in which case the socket that resolves here is closed again right away rather
 	// than left open until the Worker is torn down.
-	initialConnect = connectToDispatcher(true);
-	dispatcherWs = await initialConnect;
-	initialConnect = null;
+	pendingConnect = connectToDispatcher(true);
+	dispatcherWs = await pendingConnect;
+	pendingConnect = null;
 	if (sessionClosed) {
 		flushMessageQueue();
 		if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
