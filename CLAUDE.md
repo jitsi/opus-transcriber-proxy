@@ -150,8 +150,10 @@ Four things to know about the Worker's use of the SDK:
 - **A failed container start is retried once or twice before the 503.** `worker/startRetry.ts`
   retries `startAndWaitForPorts` only for the platform's transient failures (object overloaded or no
   longer active, storage unreachable, "internal error; reference", code-update reset, connection
-  lost), with a budget of about a second, so that the one-to-few-second recoveries seen on 2026-10-22
+  lost), with a budget of about a second, so that the one-to-few-second platform recoveries
   are absorbed in the request instead of each costing the bridge a round of exponential backoff.
+  Classification prefers the stub error's `retryable`/`overloaded` flags, with message fragments as a
+  fallback; an overloaded object waits the longest delay.
   Capacity and rate-limit failures are not retried, nor is anything unrecognised.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's

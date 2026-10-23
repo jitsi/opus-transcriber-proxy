@@ -36,6 +36,24 @@ describe('isTransientStartFailure', () => {
 	});
 });
 
+describe('isTransientStartFailure: stub error flags', () => {
+	const flagged = (message: string, flags: Record<string, boolean>) => Object.assign(new Error(message), flags);
+
+	it('retries on retryable or overloaded flags whatever the message says', () => {
+		expect(isTransientStartFailure(flagged('something new', { retryable: true }))).toBe(true);
+		expect(isTransientStartFailure(flagged('something new', { overloaded: true }))).toBe(true);
+	});
+
+	it('does not retry an error the platform marks non-retryable, even with a known message', () => {
+		expect(isTransientStartFailure(flagged('internal error; reference = x', { retryable: false }))).toBe(false);
+	});
+
+	it('never retries capacity or rate limiting, even if flagged retryable', () => {
+		expect(isTransientStartFailure(flagged(NOT_TRANSIENT[0], { retryable: true }))).toBe(false);
+		expect(isTransientStartFailure(flagged(NOT_TRANSIENT[1], { retryable: true }))).toBe(false);
+	});
+});
+
 describe('startWithRetries', () => {
 	const sleeps: number[] = [];
 	const sleep = async (ms: number) => {
@@ -54,7 +72,7 @@ describe('startWithRetries', () => {
 		sleeps.length = 0;
 		const start = vi
 			.fn<() => Promise<string>>()
-			.mockRejectedValueOnce(new Error(TRANSIENT[0]))
+			.mockRejectedValueOnce(new Error(TRANSIENT[3]))
 			.mockRejectedValueOnce(new Error(TRANSIENT[1]))
 			.mockResolvedValueOnce('ok');
 		const onRetry = vi.fn();
@@ -69,12 +87,20 @@ describe('startWithRetries', () => {
 
 	it('gives up with the last transient error once the delays are used up', async () => {
 		sleeps.length = 0;
-		const errors = [new Error(TRANSIENT[0]), new Error(TRANSIENT[2]), new Error(TRANSIENT[3])];
+		const errors = [new Error(TRANSIENT[3]), new Error(TRANSIENT[2]), new Error(TRANSIENT[1])];
 		const start = vi.fn<() => Promise<string>>();
 		for (const e of errors) start.mockRejectedValueOnce(e);
 		await expect(startWithRetries(start, { sleep })).rejects.toBe(errors[2]);
 		expect(start).toHaveBeenCalledTimes(3);
 		expect(sleeps).toEqual([250, 750]);
+	});
+
+	it('waits the longest delay before retrying an overloaded object', async () => {
+		sleeps.length = 0;
+		const overloaded = Object.assign(new Error('Durable Object is overloaded.'), { overloaded: true });
+		const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(overloaded).mockResolvedValueOnce('ok');
+		expect(await startWithRetries(start, { sleep })).toBe('ok');
+		expect(sleeps).toEqual([750]);
 	});
 
 	it('throws a non-transient failure immediately', async () => {

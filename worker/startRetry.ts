@@ -1,13 +1,13 @@
 /**
- * Retry a container start that failed for a reason the platform itself calls transient.
+ * Retry a container start that failed for a reason the platform itself calls transient: the
+ * container's Durable Object briefly unreachable or not re-instantiable while Cloudflare's own
+ * infrastructure recovers. Those clear within one to a few seconds, so a retry inside the request
+ * absorbs the short ones and turns the longer ones into a single bridge redial instead of several
+ * rounds of its exponential backoff.
  *
- * On 2026-10-22 every failed start the Worker saw (28 of them, four colos, ten hours) was one of
- * the errors below, thrown from the Durable Object stub while Cloudflare's own infrastructure
- * recovered: the object could not be reached or re-instantiated for one to a few seconds, and the
- * same session connected on the bridge's next redial. Support confirmed the cause (case 02391953)
- * and that the "overloaded" message is a routing-layer queue limit during recovery, not load on the
- * object. A retry inside the request absorbs the short recoveries entirely and turns the longer ones
- * into one bridge redial instead of several rounds of its exponential backoff.
+ * Errors thrown by a Durable Object stub carry `retryable` and `overloaded` flags, which are the
+ * platform's own answer; message fragments are a fallback for errors that arrive without them.
+ * An overloaded object is retried only after the longest delay, never the short one.
  *
  * Not retried: capacity (no container instance available) and rate limiting (too many starts per
  * second), which the SDK reports with their own messages and which a retry would only make worse,
@@ -16,7 +16,7 @@
  * second, so by the time it does we have either succeeded or stopped trying.
  */
 
-/** Message fragments the platform used for start failures that cleared within seconds. */
+/** Fallback for errors without the stub flags: messages the platform used for failures that cleared. */
 const TRANSIENT_START_FAILURES = [
 	'durable object is overloaded',
 	'is no longer active',
@@ -26,8 +26,23 @@ const TRANSIENT_START_FAILURES = [
 	'network connection lost',
 ];
 
+/** Capacity and rate limiting are never retried, whatever flags they carry. */
+const NEVER_RETRY = ['there is no container instance that can be provided', 'requesting too many containers per second'];
+
+function messageOf(error: unknown): string {
+	return (error instanceof Error ? error.message : String(error)).toLowerCase();
+}
+
+function isOverloaded(error: unknown): boolean {
+	return (error as { overloaded?: unknown } | null)?.overloaded === true || messageOf(error).includes('durable object is overloaded');
+}
+
 export function isTransientStartFailure(error: unknown): boolean {
-	const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+	const message = messageOf(error);
+	if (NEVER_RETRY.some((fragment) => message.includes(fragment))) return false;
+	const flags = error as { retryable?: unknown; overloaded?: unknown } | null;
+	if (flags?.retryable === true || flags?.overloaded === true) return true;
+	if (flags?.retryable === false) return false;
 	return TRANSIENT_START_FAILURES.some((fragment) => message.includes(fragment));
 }
 
@@ -54,9 +69,12 @@ export async function startWithRetries<T>(start: () => Promise<T>, options: Star
 		try {
 			return await start();
 		} catch (error) {
-			const delay = delays[attempt - 1];
+			let delay = delays[attempt - 1];
 			if (delay === undefined || !isTransientStartFailure(error)) {
 				throw error;
+			}
+			if (isOverloaded(error)) {
+				delay = Math.max(...delays);
 			}
 			options.onRetry?.(attempt, error, delay);
 			await sleep(delay);
