@@ -1,0 +1,382 @@
+import type { Env } from './env';
+import type { TranscriberContainer } from './TranscriberContainer';
+import type { DispatcherTranscriptionMessage, TranscriptionMessage } from './types';
+import { buildWorkerInfo } from './containerEnv';
+
+/**
+ * A close code workerd will put in a close frame: 1000-1003, 1007-1014 and 3000-4999. Its `close()`
+ * throws on anything else, notably 1005 (no status received) and 1006 (abnormal closure), which are
+ * exactly what a socket *reports* when the peer sent no code or vanished. Forwarding one of those
+ * unchanged turned a plain client disconnect into an error cascade that closed the container side
+ * with 1011. `fallback` is what a peer's unsendable code should mean to the other side: a container
+ * that vanished (1006) is reported to the bridge as 1011 so a crash stays visible, a client that
+ * sent no code is reported to the container as 1000. Application codes (the agent protocol's 4xxx)
+ * pass through.
+ */
+export function sendableCloseCode(code: number, fallback: number): number {
+	const sendable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
+	return sendable ? code : fallback;
+}
+
+const OPEN_OR_CLOSING = (ws: WebSocket) =>
+	ws.readyState === WebSocket.READY_STATE_OPEN || ws.readyState === WebSocket.READY_STATE_CLOSING;
+
+/**
+ * Handle WebSocket connection with dispatcher interception.
+ * Creates a proxy between client and container, dispatching transcriptions asynchronously.
+ */
+export async function handleWebSocketWithDispatcher(
+	request: Request,
+	container: DurableObjectStub<TranscriberContainer>,
+	env: Env,
+	ctx: ExecutionContext,
+	sessionId: string,
+): Promise<Response> {
+	// Create WebSocket pair for the client
+	const clientPair = new WebSocketPair();
+	const [clientWs, serverWs] = Object.values(clientPair);
+
+	// Accept the server side of the client connection
+	serverWs.accept();
+
+	// Forward the upgrade request to the container
+	let containerResponse: Response;
+	try {
+		containerResponse = await container.fetch(request);
+	} catch (error) {
+		// Container connection failed - close client WebSocket with error
+		const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
+		console.error(`Container fetch failed during WebSocket upgrade: ${errorMsg}`);
+		serverWs.close(1011, `Container unreachable: ${errorMsg}`);
+		return new Response('Service Unavailable: Container connection failed', {
+			status: 503,
+			statusText: 'Container Unreachable',
+		});
+	}
+
+	if (containerResponse.status !== 101 || !containerResponse.webSocket) {
+		// Container didn't upgrade - return error to client
+		serverWs.close(1011, 'Container failed to upgrade WebSocket');
+		return containerResponse;
+	}
+
+	const containerWs = containerResponse.webSocket;
+	containerWs.accept();
+
+	// Dispatcher state and helpers. Declared before the container message listener below: that
+	// listener runs as soon as the container's first message arrives, which can be before the
+	// Dispatcher DO connect has resolved, so everything it references must already exist.
+	let dispatcherWs: WebSocket | null = null;
+	// Queue for messages while dispatcher is disconnected or reconnecting
+	const messageQueue: DispatcherTranscriptionMessage[] = [];
+	let reconnectAttempts = 0;
+	let isReconnecting = false;
+	// True while the initial connect is in flight, so a queued final does not also start a reconnect.
+	let connecting = false;
+	let sessionClosed = false;
+
+	// Function to connect/reconnect to dispatcher DO
+	async function connectToDispatcher(allowDuringClose = false): Promise<WebSocket | null> {
+		if (!env.DISPATCHER_DO || (sessionClosed && !allowDuringClose)) return null;
+
+		try {
+			const doId = env.DISPATCHER_DO.idFromName(sessionId);
+			const stub = env.DISPATCHER_DO.get(doId);
+
+			const upgradeRequest = new Request('http://dispatcher/websocket', {
+				headers: { 'Upgrade': 'websocket' },
+			});
+			const doResponse = await stub.fetch(upgradeRequest);
+
+			if (doResponse.webSocket) {
+				doResponse.webSocket.accept();
+				console.log(`Connected to Dispatcher DO via WebSocket for session: ${sessionId}`);
+				reconnectAttempts = 0;
+				return doResponse.webSocket;
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.error(`Failed to connect to Dispatcher DO: ${msg}, sessionId=${sessionId}`);
+		}
+		return null;
+	}
+
+	// Function to flush queued messages
+	function flushMessageQueue() {
+		if (messageQueue.length > 0 && dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+			console.log(`Flushing ${messageQueue.length} queued messages to dispatcher, sessionId=${sessionId}`);
+			while (messageQueue.length > 0) {
+				const msg = messageQueue.shift()!;
+				dispatcherWs.send(JSON.stringify(msg));
+			}
+		}
+	}
+
+	// Function to schedule reconnection with exponential backoff
+	function scheduleReconnect() {
+		if (isReconnecting || sessionClosed) return;
+		isReconnecting = true;
+
+		const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+		reconnectAttempts++;
+
+		console.log(`Scheduling dispatcher reconnect in ${delay}ms (attempt ${reconnectAttempts}), sessionId=${sessionId}, queued=${messageQueue.length}`);
+
+		setTimeout(async () => {
+			if (sessionClosed) {
+				isReconnecting = false;
+				return;
+			}
+			// Stays set across the await so a final arriving meanwhile does not open a second socket.
+			const newWs = await connectToDispatcher();
+			isReconnecting = false;
+			if (sessionClosed) {
+				// The session ended during the connect: use the socket for what is still queued, then
+				// close it rather than leave it open until the Worker is torn down.
+				if (newWs) {
+					dispatcherWs = newWs;
+					flushMessageQueue();
+					newWs.close(1000, 'Session ended');
+				}
+				return;
+			}
+			if (newWs) {
+				dispatcherWs = newWs;
+				setupDispatcherHandlers();
+				flushMessageQueue();
+			} else {
+				scheduleReconnect();
+			}
+		}, delay);
+	}
+
+	// Setup close/error handlers for dispatcher WebSocket
+	function setupDispatcherHandlers() {
+		if (!dispatcherWs) return;
+
+		dispatcherWs.addEventListener('close', (event) => {
+			console.error(`Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
+			if (!sessionClosed) {
+				scheduleReconnect();
+			}
+		});
+
+		dispatcherWs.addEventListener('error', () => {
+			console.error(`Dispatcher WebSocket error, sessionId=${sessionId}`);
+		});
+	}
+
+	// Flush remaining messages before closing session
+	async function flushBeforeClose(): Promise<void> {
+		if (messageQueue.length === 0) return;
+
+		console.log(`Flushing ${messageQueue.length} queued messages before session close, sessionId=${sessionId}`);
+
+		// Try to reconnect if not connected (allow during close)
+		if (!dispatcherWs || dispatcherWs.readyState !== WebSocket.READY_STATE_OPEN) {
+			const newWs = await connectToDispatcher(true);
+			if (newWs) {
+				dispatcherWs = newWs;
+			}
+		}
+
+		// Flush if connected, then close: the session is over and nothing else will close a socket
+		// opened by the reconnect above (the close handler's own close ran before that await).
+		if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+			while (messageQueue.length > 0) {
+				const msg = messageQueue.shift()!;
+				dispatcherWs.send(JSON.stringify(msg));
+			}
+			console.log(`Successfully flushed all queued messages, sessionId=${sessionId}`);
+			dispatcherWs.close(1000, 'Session ended');
+		} else {
+			console.error(`Failed to flush ${messageQueue.length} queued messages - dispatcher not connected, sessionId=${sessionId}`);
+		}
+	}
+
+	// Pipe: container → client (downstream, intercept for dispatcher). Attached immediately after
+	// accept() and before any `await` below (e.g. the Dispatcher DO connect) -- the container sends
+	// its `info` message the instant it accepts the connection, and a message that arrives with no
+	// listener registered yet is silently dropped (standard EventTarget semantics), not queued.
+	containerWs.addEventListener('message', (event) => {
+		// Parse text frames once; the info check and the dispatch check below share the result.
+		let parsed: Record<string, unknown> | null = null;
+		if (typeof event.data === 'string') {
+			try {
+				const p = JSON.parse(event.data);
+				if (p && typeof p === 'object') parsed = p;
+			} catch {
+				parsed = null;
+			}
+		}
+
+		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
+		// details) and forward the combined message, so the client sees the whole path in one message.
+		if (parsed && parsed.event === 'info') {
+			parsed.worker = buildWorkerInfo(request, env);
+			if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+				serverWs.send(JSON.stringify(parsed));
+			}
+			return;
+		}
+
+		// Forward to client immediately
+		if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
+			serverWs.send(event.data);
+		}
+
+		// Dispatch transcriptions via DO WebSocket. Forward both normal transcriptions and /translate
+		// transcripts (realtime-translation-result), finals only. `media` (audio) and other events have
+		// no matching `type` and are skipped.
+		if (parsed && (parsed.type === 'transcription-result' || parsed.type === 'realtime-translation-result') && !parsed.is_interim) {
+			try {
+				const data = parsed as unknown as TranscriptionMessage;
+				const dispatcherMessage: DispatcherTranscriptionMessage = {
+					sessionId,
+					endpointId: data.participant?.id || 'unknown',
+					text: data.transcript.map((t) => t.text).join(' '),
+					timestamp: data.timestamp,
+					language: data.language,
+				};
+
+				if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+					dispatcherWs.send(JSON.stringify(dispatcherMessage));
+				} else if (env.DISPATCHER_DO) {
+					// Queue message while disconnected
+					messageQueue.push(dispatcherMessage);
+					if (messageQueue.length === 1) {
+						console.log(`Dispatcher not connected, queueing messages, sessionId=${sessionId}`);
+					}
+					if (!isReconnecting && !connecting) {
+						scheduleReconnect();
+					}
+				}
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				console.error(`Failed to parse/dispatch transcription: ${msg}, sessionId=${sessionId}`);
+			}
+		}
+	});
+
+	// Keep the container alive for the life of the call by renewing its activity timeout.
+	// WebSocket audio frames bypass the SDK's activity tracking (TranscriberContainer.fetch
+	// passes upgrades straight through), so sleepAfter does NOT reset on its own — without
+	// this the container sleeps (SIGTERM) ~sleepAfter after start, mid-call.
+	// renewActivityTimeout() is the real Container method (there is no keepAlive()); each
+	// call is one Worker subrequest, so we renew infrequently (every 3m) to stay well under
+	// the 1000-subrequest-per-invocation limit on long sessions. The interval must stay
+	// below `sleepAfter` (7m) with margin for a missed renewal.
+	const keepAliveInterval = setInterval(() => {
+		container.renewActivityTimeout().catch((error) => {
+			const msg = error instanceof Error ? error.message : String(error);
+			// A renewal failure is a control-plane RPC hiccup, NOT proof the call is dead —
+			// the audio WS pipe is independent. Log and let the next tick retry; sleepAfter
+			// (7m) leaves margin for a missed 3m renewal. Genuine container death is detected
+			// and torn down by the containerWs close/error handlers below (which the client
+			// then reconnects from) — don't duplicate that here, since closing on a transient
+			// blip would force an unnecessary reconnect and drop the in-flight utterance.
+			console.error(`Container renewActivityTimeout failed (will retry next tick): ${msg}, sessionId=${sessionId}`);
+		});
+	}, 180_000); // Every 3 minutes (subrequest-light; must stay < sleepAfter)
+
+
+	// Pipe: client → container (upstream, no interception needed)
+	serverWs.addEventListener('message', (event) => {
+		if (containerWs.readyState === WebSocket.READY_STATE_OPEN) {
+			containerWs.send(event.data);
+		}
+	});
+
+	/**
+	 * End the session from whichever side went away first; the other three events that follow
+	 * (the peer's close reply, the dispatcher's close) find it already torn down. One path for all
+	 * four close/error handlers so they cannot drift:
+	 * - marks the session closed, so the dispatcher socket's own close event does not reconnect;
+	 * - stops the keepalive renewals;
+	 * - replies to the socket that closed. workerd does not answer a received close frame on our
+	 *   compatibility date (`web_socket_auto_reply_to_close` is off), so without this the peer
+	 *   waits out its close timeout and records an abnormal close. A socket that *errored* is
+	 *   already closed and gets nothing;
+	 * - closes the other side with a code workerd can send (see `sendableCloseCode`);
+	 * - delivers what is still queued for the dispatcher (reconnecting if needed) and closes it.
+	 */
+	let tornDown = false;
+	function endSession(from: 'client' | 'container', code: number, reason: string, errored = false) {
+		if (tornDown) return;
+		tornDown = true;
+		sessionClosed = true;
+		clearInterval(keepAliveInterval);
+
+		const [closedWs, otherWs] = from === 'client' ? [serverWs, containerWs] : [containerWs, serverWs];
+		if (!errored && OPEN_OR_CLOSING(closedWs)) {
+			closedWs.close(sendableCloseCode(code, 1000), reason);
+		}
+		if (OPEN_OR_CLOSING(otherWs)) {
+			if (errored) {
+				otherWs.close(1011, reason);
+			} else if (from === 'container') {
+				otherWs.close(sendableCloseCode(code, 1011), reason || 'Container connection closed');
+			} else {
+				otherWs.close(sendableCloseCode(code, 1000), reason);
+			}
+		}
+
+		if (messageQueue.length > 0) {
+			// Finals still waiting for the dispatcher: deliver them in the background (this also closes
+			// the socket it flushes through).
+			ctx.waitUntil(flushBeforeClose());
+		} else if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+			dispatcherWs.close(1000, from === 'client' ? 'Session ended' : 'Container disconnected');
+		}
+	}
+
+	serverWs.addEventListener('close', (event) => {
+		console.log(`Client WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
+		endSession('client', event.code, event.reason);
+	});
+
+	containerWs.addEventListener('close', (event) => {
+		console.log(`Container WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
+		endSession('container', event.code, event.reason);
+	});
+
+	// Errors fire when a connection fails abnormally; the socket is already closed afterwards.
+	serverWs.addEventListener('error', () => {
+		console.error(`Client WebSocket error, closing both connections, sessionId=${sessionId}`);
+		endSession('client', 1011, 'Client WebSocket error', true);
+	});
+
+	containerWs.addEventListener('error', () => {
+		console.error(`Container WebSocket error, closing client connection, sessionId=${sessionId}`);
+		endSession('container', 1011, 'Container connection error', true);
+	});
+
+	// Connect to Dispatcher DO via WebSocket (preferred - avoids subrequest limit). Each session
+	// gets its own DO instance for isolation. This is the only await after the container socket is
+	// live, and every listener above is already attached, so whatever the container or the client
+	// does meanwhile is handled: a final is queued and flushed below, and a close or error marks the
+	// session closed, in which case the socket that resolves here is closed again right away rather
+	// than left open until the Worker is torn down.
+	connecting = true;
+	dispatcherWs = await connectToDispatcher(true);
+	connecting = false;
+	if (sessionClosed) {
+		flushMessageQueue();
+		if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+			dispatcherWs.close(1000, 'Session ended');
+		}
+	} else if (dispatcherWs) {
+		setupDispatcherHandlers();
+		flushMessageQueue();
+	} else if (messageQueue.length > 0) {
+		// The first connect failed with finals already waiting: retry on the usual backoff instead
+		// of holding them until the next final or the session close.
+		scheduleReconnect();
+	}
+
+	// Return the client WebSocket
+	return new Response(null, {
+		status: 101,
+		webSocket: clientWs,
+	});
+}

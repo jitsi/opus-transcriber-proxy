@@ -3,7 +3,7 @@
 // can be unit-tested.
 
 import type { Env } from './env';
-import type { DispatcherTranscriptionMessage } from './index';
+import type { DispatcherTranscriptionMessage } from './types';
 
 /** Bound on the dispatcher forward queue: with the DO persistently unreachable, a long-lived
  * session would otherwise accumulate one entry per final transcript indefinitely. */
@@ -11,7 +11,7 @@ export const DISPATCHER_QUEUE_LIMIT = 100;
 
 /**
  * Forwards final transcripts to the per-session Dispatcher DO over a lazily-opened WebSocket,
- * mirroring the container path's dispatcher output (worker/index.ts). Deliberately simpler than
+ * mirroring the container path's dispatcher output (worker/sessionProxy.ts). Deliberately simpler than
  * that path's reconnect machinery: messages are queued (bounded, oldest dropped) while
  * (re)connecting, and a dropped socket is reopened on the next forward.
  */

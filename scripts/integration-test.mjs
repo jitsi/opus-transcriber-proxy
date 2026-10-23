@@ -17,7 +17,7 @@
  *   npm run docker:build
  *
  * runtime=worker shells out to `wrangler dev`; --opus-backend=native is rejected there because
- * worker/index.ts's buildContainerEnvVars() does not forward OPUS_BACKEND to the container, so a
+ * worker/containerEnv.ts's buildContainerEnvVars() does not forward OPUS_BACKEND to the container, so a
  * Worker-routed session always runs the image's default (wasm) backend.
  */
 
@@ -71,7 +71,7 @@ function parseArgs(argv) {
 	}
 	if (args.runtime === 'worker' && args.opusBackend === 'native') {
 		throw new Error(
-			'--runtime=worker only supports --opus-backend=wasm: worker/index.ts does not forward ' +
+			'--runtime=worker only supports --opus-backend=wasm: worker/containerEnv.ts does not forward ' +
 			'OPUS_BACKEND to the container, so a Worker-routed session always uses the image default (wasm).'
 		);
 	}

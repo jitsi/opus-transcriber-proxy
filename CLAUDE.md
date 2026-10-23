@@ -481,7 +481,11 @@ See README.md for complete configuration reference.
 ### Cloudflare Workers Integration
 
 The `worker/` directory contains:
-- `index.ts` - Cloudflare Worker entry point (routing, container path, dispatcher forwarding)
+- `index.ts` - Cloudflare Worker entry point: the fetch router, plus the Durable Object class re-exports wrangler needs
+- `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, `/status` idle probe)
+- `routing.ts` - `selectContainerInstance` (session / pool / shared / autoscale)
+- `sessionProxy.ts` - `handleWebSocketWithDispatcher`: the client<->container pipe with dispatcher forwarding and the keepalive loop
+- `containerEnv.ts` - container env vars, instance name, the `worker` info block
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
 - `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)
 - `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
@@ -597,7 +601,12 @@ native/                        # Native Opus addon (compiled by node-gyp)
 binding.gyp                    # node-gyp build: libopus + per-ISA SIMD + addon
 
 worker/
-├── index.ts                   # Cloudflare Worker entry (routing, container path, dispatcher)
+├── index.ts                   # Cloudflare Worker entry: the fetch router + DO class re-exports (untested, like server.ts)
+├── TranscriberContainer.ts    # The container Durable Object (passthrough fetch override, /status idle probe)
+├── containerEnv.ts            # Container env vars, instance name, `worker` info block (pure functions)
+├── routing.ts                 # selectContainerInstance (session / pool / shared / autoscale)
+├── sessionProxy.ts            # handleWebSocketWithDispatcher: client<->container pipe, dispatcher queue, keepalive
+├── types.ts                   # Dispatcher / transcription message shapes
 ├── ContainerCoordinator.ts    # Container routing logic
 ├── handleTranslate.ts         # Worker-hosted /translate (WebSocketPair + TranslatorProxy)
 ├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
@@ -609,6 +618,7 @@ scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker
 
 test/
 ├── setup.ts                   # Vitest setup
+├── unit/worker/               # Worker module tests (containerEnv, routing, TranscriberContainer, sessionProxy)
 ├── helpers/                   # Test utilities
 └── unit/                      # Unit tests
 ```

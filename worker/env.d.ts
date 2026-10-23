@@ -1,6 +1,7 @@
 // Environment types for the Cloudflare Worker
 
-import type { TranscriberContainer, TranscriptionDispatcher, DispatcherTranscriptionMessage } from './index';
+import type { TranscriberContainer } from './TranscriberContainer';
+import type { TranscriptionDispatcher, DispatcherTranscriptionMessage } from './types';
 import type { ContainerCoordinator } from './ContainerCoordinator';
 
 export interface Env {
