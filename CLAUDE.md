@@ -147,6 +147,12 @@ Four things to know about the Worker's use of the SDK:
   not used: since 0.2 the SDK's Container constructor looks up `ctx.exports.ContainerProxy` whenever
   the Durable Object is rebuilt around an already-running container, and logs an unhandled rejection
   if either is missing. Keep both when touching `worker/index.ts` or `wrangler.jsonc`.
+- **A failed container start is retried once or twice before the 503.** `worker/startRetry.ts`
+  retries `startAndWaitForPorts` only for the platform's transient failures (object overloaded or no
+  longer active, storage unreachable, "internal error; reference", code-update reset, connection
+  lost), with a budget of about a second, so that the one-to-few-second recoveries seen on 2026-10-22
+  are absorbed in the request instead of each costing the bridge a round of exponential backoff.
+  Capacity and rate-limit failures are not retried, nor is anything unrecognised.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
@@ -605,6 +611,7 @@ worker/
 ├── TranscriberContainer.ts    # The container Durable Object (passthrough fetch override, /status idle probe)
 ├── containerEnv.ts            # Container env vars, instance name, `worker` info block (pure functions)
 ├── routing.ts                 # selectContainerInstance (session / pool / shared / autoscale)
+├── startRetry.ts              # Retry a container start that failed for a transient platform reason
 ├── sessionProxy.ts            # handleWebSocketWithDispatcher: client<->container pipe, dispatcher queue, keepalive
 ├── types.ts                   # Dispatcher / transcription message shapes
 ├── ContainerCoordinator.ts    # Container routing logic

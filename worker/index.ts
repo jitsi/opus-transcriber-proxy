@@ -5,6 +5,7 @@ import { TranscriberContainer } from './TranscriberContainer';
 import { buildContainerEnvVars } from './containerEnv';
 import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
+import { startWithRetries } from './startRetry';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -59,20 +60,31 @@ export default {
 		// Get the container instance
 		const container = getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
 
-		// Start the container and wait for ports to be ready
-		// This is required for the fetch to work properly
+		// Start the container and wait for ports to be ready. A start that fails for one of the
+		// platform's transient reasons (the Durable Object briefly unreachable while Cloudflare
+		// recovers; see startRetry.ts) is retried a couple of times within about a second before the
+		// bridge is told to come back.
 		try {
-			await container.startAndWaitForPorts({
-				// The class-level envVars already carry the instance name from ctx.id.name; passing it
-				// explicitly with the name the Worker routed by keeps a request-driven start independent
-				// of whether the Durable Object's id arrived with its name.
-				startOptions: {
-					envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+			await startWithRetries(
+				() =>
+					container.startAndWaitForPorts({
+						// The class-level envVars already carry the instance name from ctx.id.name; passing
+						// it explicitly with the name the Worker routed by keeps a request-driven start
+						// independent of whether the Durable Object's id arrived with its name.
+						startOptions: {
+							envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+						},
+						cancellationOptions: {
+							waitInterval: 100, // Poll every 100ms (default: 1000ms)
+						},
+					}),
+				{
+					onRetry: (attempt, error, delayMs) => {
+						const msg = error instanceof Error ? error.message : String(error);
+						console.warn(`Container start attempt ${attempt} failed transiently, retrying in ${delayMs}ms: ${msg}, container=${containerInstanceId}`);
+					},
 				},
-				cancellationOptions: {
-					waitInterval: 100, // Poll every 100ms (default: 1000ms)
-				},
-			});
+			);
 			console.log(`Container started and ready: ${containerInstanceId}`);
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
