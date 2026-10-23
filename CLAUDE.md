@@ -615,6 +615,7 @@ worker/
 └── env.d.ts                   # Worker Env types
 
 scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
+scripts/check-license-headers.mjs  # CI guard: every source file carries the copyright notice
 
 test/
 ├── setup.ts                   # Vitest setup
@@ -853,14 +854,16 @@ Both the Node server and the Worker handler build these messages via the shared 
 
 ## Copyright notice
 
-Every source file starts with the Apache 2.0 copyright notice used across Jitsi projects
-(`Copyright @ 2025 - Present, 8x8 Inc`; copy the block from any `.ts` file, or the `#` form from the
-`Makefile`). A shebang or the Dockerfile's `# syntax=` line stays first; the notice follows. When you
-add a file, add the notice; `npm run check:license-headers` (run in CI) fails on any tracked `.ts`,
-`.mts`, `.mjs`, `.cjs`, `.js`, `.c`, `.cc`, `.h`, `.jsonc`, `.yml`, `Dockerfile`, `Makefile` or
-`binding.gyp` without one. Generated files (`worker-configuration.d.ts`), the libopus submodule and
-`test/fixtures/` are exempt. Code adapted from elsewhere keeps its upstream attribution under the
-notice and is listed in `NOTICE`.
+Every source file starts with the Apache 2.0 copyright notice used across Jitsi projects,
+`Copyright @ <year> - present 8x8, Inc.`, where the year is the one the file was created (the files
+that predate the notice carry 2025, the repository's first year). Copy the block from any `.ts` file,
+or the `#` form from the `Makefile`. A shebang or the Dockerfile's `# syntax=` line stays first; the
+notice follows. When you add a file, add the notice: `npm run check:license-headers` (run in CI)
+fails on any tracked `.ts`, `.mts`, `.mjs`, `.cjs`, `.js`, `.c`, `.cc`, `.h`, `.jsonc`, `.yml`,
+`.yaml`, `Dockerfile`, `Makefile` or `binding.gyp` whose leading comment block lacks one. Only the
+generated `worker-configuration.d.ts` and the libopus submodule are exempt. Code adapted from
+elsewhere keeps its upstream attribution under the notice and is listed in `NOTICE`, which the
+Docker image ships under `licenses/` together with `LICENSE` and libopus's `COPYING`.
 
 ## Keeping Documentation Current
 

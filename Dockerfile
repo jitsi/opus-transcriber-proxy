@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Copyright @ 2025 - Present, 8x8 Inc
+# Copyright @ 2025 - present 8x8, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,6 +72,12 @@ COPY resources/sample.jsonl ./resources/sample.jsonl
 
 # Prebuilt, architecture-independent WASM artifacts (from the build context; built by build:wasm).
 COPY dist/opus-decoder.cjs dist/opus-decoder.wasm dist/opus-encoder.cjs dist/opus-encoder.wasm ./dist/
+
+# Licences for what the image redistributes: this project (Apache 2.0, with NOTICE listing the
+# MIT-licensed wasm-audio-decoders portions) and libopus (BSD), which is compiled into the native
+# addon and the WASM codec. Binary redistribution requires their notices to travel with it.
+COPY LICENSE NOTICE ./licenses/
+COPY src/OpusDecoder/opus/COPYING ./licenses/libopus-COPYING
 
 # Expose the port
 EXPOSE 8080

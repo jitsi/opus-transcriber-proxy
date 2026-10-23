@@ -1,4 +1,4 @@
-# Copyright @ 2025 - Present, 8x8 Inc
+# Copyright @ 2025 - present 8x8, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Portions adapted from wasm-audio-decoders (https://github.com/eshaz/wasm-audio-decoders),
+# Copyright (c) Ethan Halsall, whose original source is released under the MIT License. The 8x8
+# notice above covers the modifications made in this repository; the MIT permission notice is
+# reproduced in NOTICE at the repository root.
 
 default: dist
 

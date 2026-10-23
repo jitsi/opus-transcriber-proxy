@@ -1,13 +1,13 @@
 opus-transcriber-proxy
-Copyright @ 2025 - Present, 8x8 Inc
+Copyright @ 2025 - present 8x8, Inc.
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components
 ----------------------
 
-Portions of src/OpusDecoder/OpusDecoderWasm.ts, src/OpusDecoder/opus_frame_decoder.c and
-src/OpusDecoder/opus_frame_decoder.h are adapted from wasm-audio-decoders
+Portions of src/OpusDecoder/OpusDecoderWasm.ts, src/OpusDecoder/opus_frame_decoder.c,
+src/OpusDecoder/opus_frame_decoder.h and the Makefile (the Emscripten build) are adapted from wasm-audio-decoders
 (https://github.com/eshaz/wasm-audio-decoders), Copyright (c) Ethan Halsall, whose original
 source is released under the MIT License:
 
@@ -28,4 +28,5 @@ source is released under the MIT License:
     DEALINGS IN THE SOFTWARE.
 
 libopus (src/OpusDecoder/opus, a git submodule compiled into the Opus codec artifacts) is
-distributed under its own BSD-style licence; see COPYING in that directory.
+distributed under its own BSD-style licence; see COPYING in that directory. The Docker image
+carries LICENSE, this NOTICE and libopus's COPYING under /usr/src/app/licenses/.

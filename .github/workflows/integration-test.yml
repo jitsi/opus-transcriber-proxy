@@ -1,4 +1,4 @@
-# Copyright @ 2025 - Present, 8x8 Inc
+# Copyright @ 2025 - present 8x8, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
