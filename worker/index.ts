@@ -37,6 +37,20 @@ interface TranscriptionMessage {
 }
 
 /**
+ * CONTAINER_INSTANCE_NAME for the container, from the name this Durable Object was looked up by.
+ * Every lookup in this Worker goes through `getContainer(binding, name)`, so the name is always
+ * set; the warning exists so that if a lookup by raw id ever appears, the resulting change in
+ * `service.instance.id` and `info.instanceId` is explained in the log rather than silent.
+ */
+function instanceNameEnv(id: DurableObjectId): Record<string, string> {
+	if (!id.name) {
+		console.warn(`Durable Object ${id} has no name; CONTAINER_INSTANCE_NAME will be unset for its container`);
+		return {};
+	}
+	return { CONTAINER_INSTANCE_NAME: id.name };
+}
+
+/**
  * Build the container env vars from the worker env bindings. `TranscriberContainer.envVars`
  * adds CONTAINER_INSTANCE_NAME on top, so every start path (the Worker's explicit
  * `startAndWaitForPorts`, the SDK's start-on-fetch, the passthrough override's safety net)
@@ -203,7 +217,7 @@ export class TranscriberContainer extends Container<Env> {
 	// from a name, which this Worker never does.
 	envVars: Record<string, string> = {
 		...buildContainerEnvVars(this.env),
-		...(this.ctx.id.name ? { CONTAINER_INSTANCE_NAME: this.ctx.id.name } : {}),
+		...instanceNameEnv(this.ctx.id),
 	};
 
 	override onStart() {
@@ -258,6 +272,10 @@ export class TranscriberContainer extends Container<Env> {
 	 *
 	 * Failures are returned as the same 500 responses `containerFetch` produces, not thrown,
 	 * so the Worker's `status !== 101` handling and its log lines are unchanged from 0.0.31.
+	 *
+	 * The body below mirrors `containerFetch` in @cloudflare/containers 0.3.7 (URL rewrite,
+	 * port lookup, error texts). None of that is covered by the SDK's types, so re-read
+	 * `containerFetch` when bumping the SDK.
 	 */
 	override async fetch(request: Request): Promise<Response> {
 		if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -277,8 +295,8 @@ export class TranscriberContainer extends Container<Env> {
 		}
 		this.renewActivityTimeout();
 		try {
-			// Same URL rewrite the SDK applies: the container's port speaks plain HTTP.
-			return await container.getTcpPort(port).fetch(request.url.replace('https:', 'http:'), request);
+			// The container's port speaks plain HTTP (the SDK rewrites the scheme the same way).
+			return await container.getTcpPort(port).fetch(request.url.replace(/^https:/, 'http:'), request);
 		} catch (e) {
 			if (!(e instanceof Error)) {
 				throw e;
