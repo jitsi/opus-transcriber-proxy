@@ -323,6 +323,33 @@ describe('handleWebSocketWithDispatcher: dispatching', () => {
 		expect(second.closed).toEqual({ code: 1000, reason: 'Session ended' });
 	});
 
+	it('replies to a dispatcher close frame instead of leaving that socket CLOSING', async () => {
+		vi.useFakeTimers();
+		const { dispatcherWs } = await setup();
+		dispatcherWs.remoteClose(1012, 'dispatcher restarting');
+		expect(dispatcherWs.closed).toEqual({ code: 1012, reason: 'dispatcher restarting' });
+		expect(dispatcherWs.readyState).toBe(3);
+	});
+
+	it('ignores a late close from a dispatcher socket that has already been replaced', async () => {
+		vi.useFakeTimers();
+		const first = new FakeWs();
+		const second = new FakeWs();
+		const sockets = [first, second, new FakeWs()];
+		const { containerWs, doFetch } = await setup({ dispatcherFetch: async () => ({ webSocket: sockets.shift() }) });
+		// The first socket errors; the next final reconnects to a second one.
+		first.remoteError();
+		containerWs.emit('message', { data: finalTranscript() });
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(doFetch).toHaveBeenCalledTimes(2);
+		expect(second.sentJson()).toHaveLength(1);
+		// Then the dead first socket's close arrives late: it must not start a third dial.
+		first.emit('close', { code: 1006, reason: '' });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(doFetch).toHaveBeenCalledTimes(2);
+		expect(second.closed).toBeNull();
+	});
+
 	it('cancels a pending reconnect backoff when the session ends', async () => {
 		vi.useFakeTimers();
 		const { serverWs, dispatcherWs, doFetch } = await setup();

@@ -5,6 +5,7 @@ import { TranscriberContainer } from './TranscriberContainer';
 import { buildContainerEnvVars } from './containerEnv';
 import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
+import { startWithRetries } from './startRetry';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -56,28 +57,44 @@ export default {
 		// Select which container instance to use based on routing strategy
 		const containerInstanceId = await selectContainerInstance(request, env);
 
-		// Get the container instance
-		const container = getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
-
-		// Start the container and wait for ports to be ready
-		// This is required for the fetch to work properly
+		// Start the container and wait for ports to be ready. A start that fails for one of the
+		// platform's transient reasons (the Durable Object briefly unreachable while Cloudflare
+		// recovers; see startRetry.ts) is retried twice, through a fresh stub each time and with about
+		// a second of waits in between, before the bridge is told to come back.
+		const startedAt = Date.now();
+		let attempts = 0;
+		let container: DurableObjectStub<TranscriberContainer>;
 		try {
-			await container.startAndWaitForPorts({
-				// The class-level envVars already carry the instance name from ctx.id.name; passing it
-				// explicitly with the name the Worker routed by keeps a request-driven start independent
-				// of whether the Durable Object's id arrived with its name.
-				startOptions: {
-					envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+			container = await startWithRetries(
+				async () => {
+					attempts++;
+					const stub = getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
+					await stub.startAndWaitForPorts({
+						// The class-level envVars already carry the instance name from ctx.id.name; passing
+						// it explicitly with the name the Worker routed by keeps a request-driven start
+						// independent of whether the Durable Object's id arrived with its name.
+						startOptions: {
+							envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+						},
+						cancellationOptions: {
+							waitInterval: 100, // Poll every 100ms (default: 1000ms)
+						},
+					});
+					return stub;
 				},
-				cancellationOptions: {
-					waitInterval: 100, // Poll every 100ms (default: 1000ms)
+				{
+					signal: request.signal,
+					onRetry: (attempt, error, delayMs) => {
+						const msg = error instanceof Error ? error.message : String(error);
+						console.warn(`Container start attempt ${attempt} failed transiently, retrying in ${delayMs}ms: ${msg}, container=${containerInstanceId}`);
+					},
 				},
-			});
+			);
 			console.log(`Container started and ready: ${containerInstanceId}`);
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
-			console.error(`Container failed to start: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
+			console.error(`Container failed to start after ${attempts} attempt(s) in ${Date.now() - startedAt}ms: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
 			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
 				status: 503,
 				statusText: 'Container Start Failed',

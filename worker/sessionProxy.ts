@@ -161,16 +161,32 @@ export async function handleWebSocketWithDispatcher(
 
 	// Setup close/error handlers for dispatcher WebSocket
 	function setupDispatcherHandlers() {
-		if (!dispatcherWs) return;
+		const ws = dispatcherWs;
+		if (!ws) return;
 
-		dispatcherWs.addEventListener('close', (event) => {
+		ws.addEventListener('close', (event) => {
 			console.error(`Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
-			if (!sessionClosed) {
+			// Complete the close handshake, as for the client and container sockets: with no automatic
+			// reply on our compatibility date the socket would otherwise sit CLOSING until it times out.
+			if (ws.readyState === WebSocket.READY_STATE_CLOSING) {
+				try {
+					ws.close(sendableCloseCode(event.code, 1000), closeReason(event.reason));
+				} catch {
+					// Already closed by the time we got here; nothing to complete.
+				}
+			}
+			// A socket that has already been replaced (a late close from one that errored earlier) must
+			// not start another reconnect and orphan the live one.
+			if (!sessionClosed && ws === dispatcherWs) {
 				scheduleReconnect();
 			}
 		});
 
-		dispatcherWs.addEventListener('error', () => {
+		// An error leaves the socket CLOSED, so it is deliberately not reconnected here: the next final
+		// finds it not OPEN, queues itself and schedules the reconnect, and a session that ends with
+		// finals still queued reconnects once in flushBeforeClose. Reconnecting eagerly would dial for
+		// sessions that may never produce another final.
+		ws.addEventListener('error', () => {
 			console.error(`Dispatcher WebSocket error, sessionId=${sessionId}`);
 		});
 	}
