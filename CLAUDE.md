@@ -121,8 +121,9 @@ Three things to know about the Worker's use of the SDK:
 
 - **Which lockfile is deployed.** The deployed Worker's dependencies come from
   `worker/package.json` + `worker/package-lock.json` (`cf:deploy` runs `npm install` in `worker/`),
-  not from the root lockfile; the root copy of `@cloudflare/containers` only serves
-  `typecheck:worker`. Keep the two pinned to the same version.
+  not from the root lockfile; the root copy of `@cloudflare/containers` is a devDependency that
+  only serves `typecheck:worker` (the server bundle never imports it). Keep the two pinned to the
+  same version.
 - **WebSocket upgrades bypass the SDK's relay.** Since 0.2.1 the SDK's `Container.fetch()` accepts
   the container's WebSocket inside the Durable Object and relays every message through a second
   `WebSocketPair` in JS, renewing the activity timer per message. `TranscriberContainer` overrides

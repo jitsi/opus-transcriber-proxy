@@ -38,8 +38,10 @@ interface TranscriptionMessage {
 
 /**
  * CONTAINER_INSTANCE_NAME for the container, from the name this Durable Object was looked up by.
- * Every lookup in this Worker goes through `getContainer(binding, name)`, so the name is always
- * set; the warning exists so that if a lookup by raw id ever appears, the resulting change in
+ * Every lookup in this Worker goes through `getContainer(binding, name)`, and Cloudflare keeps
+ * the name on the id when the object is later woken by one of its own alarms, so the name is
+ * expected to be set; the warning exists so that if an unnamed id ever appears (`idFromString`,
+ * `newUniqueId`, or an alarm scheduled before names were stored), the resulting change in
  * `service.instance.id` and `info.instanceId` is explained in the log rather than silent.
  */
 function instanceNameEnv(id: DurableObjectId): Record<string, string> {
@@ -192,6 +194,25 @@ function buildWorkerInfo(request: Request, env: Env): Record<string, unknown> {
 }
 
 /**
+ * Turn a `startAndWaitForPorts()` failure into the response the SDK's `containerFetch` gives it.
+ * The SDK classifies these by substring of the platform's error message (its helpers and the
+ * strings are not exported, so they are copied from @cloudflare/containers 0.3.7): no instance
+ * available is a capacity condition (503), too many starts per second is rate limiting (429),
+ * anything else is a server error (500).
+ */
+function containerStartFailureResponse(e: unknown): Response {
+	const message = e instanceof Error ? e.message : String(e);
+	const lower = message.toLowerCase();
+	if (lower.includes('there is no container instance that can be provided to this durable object')) {
+		return new Response('There is no Container instance available at this time.', { status: 503 });
+	}
+	if (lower.includes('you are requesting too many containers per second')) {
+		return new Response(message, { status: 429 });
+	}
+	return new Response(`Failed to start container: ${message}`, { status: 500 });
+}
+
+/**
  * TranscriberContainer wraps the Node.js transcription server
  * and forwards WebSocket requests to it.
  */
@@ -213,8 +234,9 @@ export class TranscriberContainer extends Container<Env> {
 
 	// Environment for the container. The instance name is the name this Durable Object was
 	// looked up by (`getContainer(binding, name)` → `idFromName`), which is the session or pool
-	// slot id the Worker uses everywhere else; `ctx.id.name` is unset only for ids not created
-	// from a name, which this Worker never does.
+	// slot id the Worker uses everywhere else. The Worker's explicit start passes the same env
+	// again with the name it routed by, so a start from a request never depends on `ctx.id.name`;
+	// this default covers the SDK's start-on-fetch and the passthrough override's safety net.
 	envVars: Record<string, string> = {
 		...buildContainerEnvVars(this.env),
 		...instanceNameEnv(this.ctx.id),
@@ -270,8 +292,9 @@ export class TranscriberContainer extends Container<Env> {
 	 * The gap is a second upgrade arriving while a restart is between `start()` and the port
 	 * coming up: it gets a 500 and the bridge redials a second later.
 	 *
-	 * Failures are returned as the same 500 responses `containerFetch` produces, not thrown,
-	 * so the Worker's `status !== 101` handling and its log lines are unchanged from 0.0.31.
+	 * Failures are returned as responses, not thrown, with the status `containerFetch` would
+	 * give them (503 when no container instance is available, 429 when rate limited, 500
+	 * otherwise), so the Worker's `status !== 101` handling and its log lines are unchanged.
 	 *
 	 * The body below mirrors `containerFetch` in @cloudflare/containers 0.3.7 (URL rewrite,
 	 * port lookup, error texts). None of that is covered by the SDK's types, so re-read
@@ -284,13 +307,13 @@ export class TranscriberContainer extends Container<Env> {
 		const port = this.defaultPort;
 		const container = this.ctx.container;
 		if (!container) {
-			throw new Error('Durable Object has no container binding');
+			return new Response('Durable Object has no container binding', { status: 500 });
 		}
 		if (!container.running) {
 			try {
 				await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
 			} catch (e) {
-				return new Response(`Failed to start container: ${e instanceof Error ? e.message : String(e)}`, { status: 500 });
+				return containerStartFailureResponse(e);
 			}
 		}
 		this.renewActivityTimeout();
@@ -796,8 +819,13 @@ export default {
 		// Start the container and wait for ports to be ready
 		// This is required for the fetch to work properly
 		try {
-			// envVars come from the class-level default (which includes CONTAINER_INSTANCE_NAME).
 			await container.startAndWaitForPorts({
+				// The class-level envVars already carry the instance name from ctx.id.name; passing it
+				// explicitly with the name the Worker routed by keeps a request-driven start independent
+				// of whether the Durable Object's id arrived with its name.
+				startOptions: {
+					envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+				},
 				cancellationOptions: {
 					waitInterval: 100, // Poll every 100ms (default: 1000ms)
 				},
