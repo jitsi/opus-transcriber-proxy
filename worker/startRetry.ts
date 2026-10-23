@@ -27,9 +27,10 @@
  *
  * Not retried: capacity (no container instance available) and rate limiting (too many starts per
  * second), which the SDK reports with their own messages and which a retry would only make worse,
- * and anything else, since an unknown failure is not known to be transient. The budget is small on
- * purpose: audio is buffering behind the upgrade, and the bridge's own first retry fires after one
- * second, so by the time it does we have either succeeded or stopped trying.
+ * and anything else, since an unknown failure is not known to be transient. The waits add about a
+ * second (250 + 750 ms) on top of the attempts themselves, each of which can take as long as the
+ * port wait: small on purpose, since audio is buffering behind the upgrade and the bridge redials
+ * on its own soon after.
  */
 
 /** Fallback for errors without the stub flags: messages the platform used for failures that cleared. */

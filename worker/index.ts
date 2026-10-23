@@ -62,8 +62,8 @@ export default {
 
 		// Start the container and wait for ports to be ready. A start that fails for one of the
 		// platform's transient reasons (the Durable Object briefly unreachable while Cloudflare
-		// recovers; see startRetry.ts) is retried a couple of times within about a second before the
-		// bridge is told to come back.
+		// recovers; see startRetry.ts) is retried twice, with about a second of waits in between,
+		// before the bridge is told to come back.
 		try {
 			await startWithRetries(
 				() =>

@@ -150,7 +150,7 @@ Four things to know about the Worker's use of the SDK:
 - **A failed container start is retried once or twice before the 503.** `worker/startRetry.ts`
   retries `startAndWaitForPorts` only for the platform's transient failures (object overloaded or no
   longer active, storage unreachable, "internal error; reference", code-update reset, connection
-  lost), with a budget of about a second, so that the one-to-few-second platform recoveries
+  lost), adding about a second of waits (250 + 750 ms) on top of the attempts, so that the one-to-few-second platform recoveries
   are absorbed in the request instead of each costing the bridge a round of exponential backoff.
   Classification prefers the stub error's `retryable`/`overloaded` flags, with message fragments as a
   fallback; an overloaded object waits the longest delay.
