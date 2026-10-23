@@ -851,6 +851,17 @@ The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANS
 
 Both the Node server and the Worker handler build these messages via the shared builders in `src/translate/messages.ts` (`message_id` uses a per-connection sequence counter — never `Date.now()`, which collides for same-tag events within one millisecond), so the two serializers cannot drift.
 
+## Copyright notice
+
+Every source file starts with the Apache 2.0 copyright notice used across Jitsi projects
+(`Copyright @ 2025 - Present, 8x8 Inc`; copy the block from any `.ts` file, or the `#` form from the
+`Makefile`). A shebang or the Dockerfile's `# syntax=` line stays first; the notice follows. When you
+add a file, add the notice; `npm run check:license-headers` (run in CI) fails on any tracked `.ts`,
+`.mts`, `.mjs`, `.cjs`, `.js`, `.c`, `.cc`, `.h`, `.jsonc`, `.yml`, `Dockerfile`, `Makefile` or
+`binding.gyp` without one. Generated files (`worker-configuration.d.ts`), the libopus submodule and
+`test/fixtures/` are exempt. Code adapted from elsewhere keeps its upstream attribution under the
+notice and is listed in `NOTICE`.
+
 ## Keeping Documentation Current
 
 When making code changes, update `CLAUDE.md` and `BACKENDS.md` in the same commit:

@@ -390,4 +390,6 @@ See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md
 
 ## License
 
-Apache 2.0
+Apache 2.0 (see `LICENSE`). Third-party components and their licences are listed in `NOTICE`:
+the WASM Opus decoder shim is adapted from the MIT-licensed wasm-audio-decoders, and libopus
+is a submodule under its own BSD-style licence.
