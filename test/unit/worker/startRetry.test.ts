@@ -22,20 +22,23 @@ import { describe, it, expect, vi } from 'vitest';
 import { isTransientStartFailure, startWithRetries } from '../../../worker/startRetry';
 
 const TRANSIENT = [
-	'Durable Object is overloaded. Requests queued for too long.',
 	'Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.',
 	'Durable Object storage is no longer accessible.',
 	'internal error; reference = 81s1197ukdq154flodsngelt',
 	'Durable Object reset because its code was updated.',
-	'Network connection lost.',
 ];
 
 const NOT_TRANSIENT = [
 	'There is no container instance that can be provided to this durable object',
 	'You are requesting too many containers per second',
+	'Durable Object is overloaded. Requests queued for too long.',
+	// What the SDK rethrows from its port probe when the container crashed or never listened.
+	'Network connection lost.',
 	'The container is not listening',
 	'Container exited with code 1',
 ];
+
+const flagged = (message: string, flags: Record<string, boolean>) => Object.assign(new Error(message), flags);
 
 describe('isTransientStartFailure', () => {
 	it.each(TRANSIENT)('retries: %s', (message) => {
@@ -46,22 +49,19 @@ describe('isTransientStartFailure', () => {
 		expect(isTransientStartFailure(new Error(message))).toBe(false);
 	});
 
-	it('matches case-insensitively and on non-Error rejections', () => {
-		expect(isTransientStartFailure('DURABLE OBJECT IS OVERLOADED')).toBe(true);
+	it('matches case-insensitively and copes with non-Error rejections', () => {
+		expect(isTransientStartFailure('STORAGE IS NO LONGER ACCESSIBLE')).toBe(true);
 		expect(isTransientStartFailure(42)).toBe(false);
+		expect(isTransientStartFailure(null)).toBe(false);
 	});
-});
 
-describe('isTransientStartFailure: stub error flags', () => {
-	const flagged = (message: string, flags: Record<string, boolean>) => Object.assign(new Error(message), flags);
-
-	it('retries on retryable or overloaded flags whatever the message says', () => {
+	it('follows the retryable flag whatever the message says', () => {
 		expect(isTransientStartFailure(flagged('something new', { retryable: true }))).toBe(true);
-		expect(isTransientStartFailure(flagged('something new', { overloaded: true }))).toBe(true);
+		expect(isTransientStartFailure(flagged('internal error; reference = x', { retryable: false }))).toBe(false);
 	});
 
-	it('does not retry an error the platform marks non-retryable, even with a known message', () => {
-		expect(isTransientStartFailure(flagged('internal error; reference = x', { retryable: false }))).toBe(false);
+	it('never retries an overloaded object, even if also marked retryable', () => {
+		expect(isTransientStartFailure(flagged('something new', { overloaded: true, retryable: true }))).toBe(false);
 	});
 
 	it('never retries capacity or rate limiting, even if flagged retryable', () => {
@@ -75,11 +75,13 @@ describe('startWithRetries', () => {
 	const sleep = async (ms: number) => {
 		sleeps.push(ms);
 	};
+	// random() of 0.5 means no jitter, so the base delays are observable.
+	const noJitter = { sleep, random: () => 0.5 };
 
 	it('returns the first success without sleeping', async () => {
 		sleeps.length = 0;
 		const start = vi.fn(async () => 'ok');
-		expect(await startWithRetries(start, { sleep })).toBe('ok');
+		expect(await startWithRetries(start, noJitter)).toBe('ok');
 		expect(start).toHaveBeenCalledTimes(1);
 		expect(sleeps).toEqual([]);
 	});
@@ -88,11 +90,11 @@ describe('startWithRetries', () => {
 		sleeps.length = 0;
 		const start = vi
 			.fn<() => Promise<string>>()
-			.mockRejectedValueOnce(new Error(TRANSIENT[3]))
-			.mockRejectedValueOnce(new Error(TRANSIENT[1]))
+			.mockRejectedValueOnce(new Error(TRANSIENT[2]))
+			.mockRejectedValueOnce(new Error(TRANSIENT[0]))
 			.mockResolvedValueOnce('ok');
 		const onRetry = vi.fn();
-		expect(await startWithRetries(start, { sleep, onRetry })).toBe('ok');
+		expect(await startWithRetries(start, { ...noJitter, onRetry })).toBe('ok');
 		expect(start).toHaveBeenCalledTimes(3);
 		expect(sleeps).toEqual([250, 750]);
 		expect(onRetry.mock.calls.map(([attempt, , delay]) => [attempt, delay])).toEqual([
@@ -101,45 +103,72 @@ describe('startWithRetries', () => {
 		]);
 	});
 
+	it('calls start afresh for every attempt, so the caller can use a new stub each time', async () => {
+		let made = 0;
+		const start = vi.fn(async () => {
+			made++;
+			if (made < 3) throw new Error(TRANSIENT[3]);
+			return made;
+		});
+		expect(await startWithRetries(start, noJitter)).toBe(3);
+	});
+
 	it('gives up with the last transient error once the delays are used up', async () => {
 		sleeps.length = 0;
-		const errors = [new Error(TRANSIENT[3]), new Error(TRANSIENT[2]), new Error(TRANSIENT[1])];
+		const errors = [new Error(TRANSIENT[2]), new Error(TRANSIENT[1]), new Error(TRANSIENT[0])];
 		const start = vi.fn<() => Promise<string>>();
 		for (const e of errors) start.mockRejectedValueOnce(e);
-		await expect(startWithRetries(start, { sleep })).rejects.toBe(errors[2]);
+		await expect(startWithRetries(start, noJitter)).rejects.toBe(errors[2]);
 		expect(start).toHaveBeenCalledTimes(3);
 		expect(sleeps).toEqual([250, 750]);
 	});
 
-	it('waits the longest delay before retrying an overloaded object', async () => {
-		sleeps.length = 0;
-		const overloaded = Object.assign(new Error('Durable Object is overloaded.'), { overloaded: true });
-		const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(overloaded).mockResolvedValueOnce('ok');
-		expect(await startWithRetries(start, { sleep })).toBe('ok');
-		expect(sleeps).toEqual([750]);
+	it('throws a non-transient failure immediately', async () => {
+		for (const message of NOT_TRANSIENT) {
+			sleeps.length = 0;
+			const failure = new Error(message);
+			const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(failure).mockResolvedValueOnce('ok');
+			await expect(startWithRetries(start, noJitter)).rejects.toBe(failure);
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(sleeps).toEqual([]);
+		}
 	});
 
-	it('throws a non-transient failure immediately', async () => {
-		sleeps.length = 0;
-		const capacity = new Error(NOT_TRANSIENT[0]);
-		const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(capacity).mockResolvedValueOnce('ok');
-		await expect(startWithRetries(start, { sleep })).rejects.toBe(capacity);
+	it('jitters each wait within the configured spread', async () => {
+		const waits: number[] = [];
+		const failTwice = () =>
+			vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error(TRANSIENT[0])).mockRejectedValueOnce(new Error(TRANSIENT[0])).mockResolvedValueOnce('ok');
+		await startWithRetries(failTwice(), { sleep: async (ms) => void waits.push(ms), random: () => 0 });
+		await startWithRetries(failTwice(), { sleep: async (ms) => void waits.push(ms), random: () => 1 });
+		expect(waits).toEqual([188, 563, 313, 938]);
+	});
+
+	it('stops retrying once the signal is aborted, during the wait or before it', async () => {
+		const controller = new AbortController();
+		const failure = new Error(TRANSIENT[0]);
+		const start = vi.fn<() => Promise<string>>().mockRejectedValue(failure);
+		await expect(
+			startWithRetries(start, { ...noJitter, signal: controller.signal, sleep: async () => controller.abort() }),
+		).rejects.toBe(failure);
 		expect(start).toHaveBeenCalledTimes(1);
-		expect(sleeps).toEqual([]);
+		const aborted = AbortSignal.abort();
+		const start2 = vi.fn<() => Promise<string>>().mockRejectedValue(failure);
+		await expect(startWithRetries(start2, { ...noJitter, signal: aborted })).rejects.toBe(failure);
+		expect(start2).toHaveBeenCalledTimes(1);
 	});
 
 	it('honours custom delays, including none', async () => {
 		sleeps.length = 0;
 		const failOnce = () => vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error(TRANSIENT[0])).mockResolvedValueOnce('ok');
-		await expect(startWithRetries(failOnce(), { sleep, delaysMs: [] })).rejects.toThrow(/overloaded/);
-		expect(await startWithRetries(failOnce(), { sleep, delaysMs: [10] })).toBe('ok');
+		await expect(startWithRetries(failOnce(), { ...noJitter, delaysMs: [] })).rejects.toThrow(/no longer active/);
+		expect(await startWithRetries(failOnce(), { ...noJitter, delaysMs: [10] })).toBe('ok');
 		expect(sleeps).toEqual([10]);
 	});
 
 	it('really waits by default', async () => {
 		vi.useFakeTimers();
 		const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error(TRANSIENT[0])).mockResolvedValueOnce('ok');
-		const pending = startWithRetries(start, { delaysMs: [250] });
+		const pending = startWithRetries(start, { delaysMs: [250], jitter: 0 });
 		await vi.advanceTimersByTimeAsync(249);
 		expect(start).toHaveBeenCalledTimes(1);
 		await vi.advanceTimersByTimeAsync(1);

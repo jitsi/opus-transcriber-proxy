@@ -175,7 +175,9 @@ export async function handleWebSocketWithDispatcher(
 					// Already closed by the time we got here; nothing to complete.
 				}
 			}
-			if (!sessionClosed) {
+			// A socket that has already been replaced (a late close from one that errored earlier) must
+			// not start another reconnect and orphan the live one.
+			if (!sessionClosed && ws === dispatcherWs) {
 				scheduleReconnect();
 			}
 		});

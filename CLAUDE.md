@@ -148,13 +148,14 @@ Four things to know about the Worker's use of the SDK:
   the Durable Object is rebuilt around an already-running container, and logs an unhandled rejection
   if either is missing. Keep both when touching `worker/index.ts` or `wrangler.jsonc`.
 - **A failed container start is retried once or twice before the 503.** `worker/startRetry.ts`
-  retries `startAndWaitForPorts` only for the platform's transient failures (object overloaded or no
-  longer active, storage unreachable, "internal error; reference", code-update reset, connection
-  lost), adding about a second of waits (250 + 750 ms) on top of the attempts, so that the one-to-few-second platform recoveries
-  are absorbed in the request instead of each costing the bridge a round of exponential backoff.
-  Classification prefers the stub error's `retryable`/`overloaded` flags, with message fragments as a
-  fallback; an overloaded object waits the longest delay.
-  Capacity and rate-limit failures are not retried, nor is anything unrecognised.
+  retries `startAndWaitForPorts` through a fresh stub (a stub can be broken after it throws) only for
+  the platform's transient failures: the stub error's `retryable` flag, or as a fallback the messages
+  for an object no longer active, storage unreachable, "internal error; reference" or a code-update
+  reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, so that the
+  one-to-few-second platform recoveries are absorbed in the request instead of each costing the
+  bridge a round of exponential backoff, and stops once the client has gone. Never retried:
+  overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
+  crashed or never listened, and anything unrecognised.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
