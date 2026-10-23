@@ -117,20 +117,29 @@ npm run cf:tail            # Tail logs
 
 The worker code is in `worker/` and uses `@cloudflare/containers` to run the Node.js server in a container.
 
-The deployed Worker's dependencies come from **`worker/package.json` + `worker/package-lock.json`**
-(`cf:deploy` runs `npm install` in `worker/`), not from the root lockfile; the root copy of
-`@cloudflare/containers` only serves `typecheck:worker`. Keep the two pinned to the same version.
-`TranscriberContainer` **overrides `fetch()` to pass WebSocket upgrades straight through** to the
-container's TCP port instead of the SDK's default (since 0.2.1) of relaying every message through the
-Durable Object in JS: that relay would put every 20 ms audio frame of every participant through the
-DO isolate, bill them as DO requests (20 messages per billable request), and remap a 1006 close to
-1000. `TranscriberContainer.envVars` carries `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every
-start path, including the SDK's start-on-fetch, gives the container the same identity. Any
-`containerFetch` response body must be consumed (or cancelled): since 0.2.1 an unread body keeps the
-request counted as in flight, and `isActivityExpired()` is false while anything is in flight. The flip side is that the SDK's
-activity timer never sees audio, so keeping a live call's container awake is done by the Worker's
-renewal loop and the `/status` probe in `onActivityExpired`; do not remove those on the assumption
-that the SDK renews on WebSocket traffic.
+Three things to know about the Worker's use of the SDK:
+
+- **Which lockfile is deployed.** The deployed Worker's dependencies come from
+  `worker/package.json` + `worker/package-lock.json` (`cf:deploy` runs `npm install` in `worker/`),
+  not from the root lockfile; the root copy of `@cloudflare/containers` only serves
+  `typecheck:worker`. Keep the two pinned to the same version.
+- **WebSocket upgrades bypass the SDK's relay.** Since 0.2.1 the SDK's `Container.fetch()` accepts
+  the container's WebSocket inside the Durable Object and relays every message through a second
+  `WebSocketPair` in JS, renewing the activity timer per message. `TranscriberContainer` overrides
+  `fetch()` to return the container port's response directly for upgrades, as the SDK did before
+  0.2.1. The reasons, in order of weight: every 20 ms audio frame of every participant would run a
+  JS handler in the DO isolate (a 20-participant meeting is ~1000 messages/s on one single-threaded
+  object); the relay remaps a 1006 abnormal close from the container to a clean 1000, hiding a
+  container crash from the bridge and from our logs; and incoming frames would be billed as DO
+  requests, though at 20 messages per billable request that is a minor cost. The consequence is that
+  the SDK's activity timer never sees audio, so keeping a live call's container awake is done by the
+  Worker's renewal loop and the `/status` probe in `onActivityExpired`. Do not remove those on the
+  assumption that the SDK renews on WebSocket traffic.
+- **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
+  `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
+  start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
+  be consumed or cancelled: since 0.2.1 an unread body keeps the request counted as in flight, and
+  `isActivityExpired()` is false while anything is in flight, so the container would never sleep.
 
 ## Architecture
 

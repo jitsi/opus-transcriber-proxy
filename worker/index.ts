@@ -232,15 +232,17 @@ export class TranscriberContainer extends Container<Env> {
 	 * Since @cloudflare/containers 0.2.1, `Container.fetch()` (via `containerFetch`) no longer
 	 * returns the container's WebSocket to the caller: it accepts it inside this Durable
 	 * Object, creates a second WebSocketPair, and relays every message between the two in JS,
-	 * calling `renewActivityTimeout()` per message. For this workload that would put every
-	 * 20 ms audio frame of every participant through this DO's isolate (a 20-participant
-	 * meeting is ~1000 messages/s), bill the incoming frames as DO requests (20 messages per
-	 * billable request), add a hop of latency, and remap a 1006 abnormal close from the container to a clean 1000, hiding a
-	 * container crash from the bridge and from our logs. The pre-0.2.1 behaviour (what this
-	 * deployment ran on, at 0.0.31, before this upgrade) was a plain passthrough: the response from the
-	 * container's TCP port is returned as-is and workerd pipes the socket with no per-message
-	 * code here. This override restores that for upgrades only; plain HTTP (the /status probe
-	 * in `onActivityExpired`, anything else) still goes through the SDK.
+	 * calling `renewActivityTimeout()` per message. For this workload that would run a JS
+	 * handler in this DO's isolate for every 20 ms audio frame of every participant (a
+	 * 20-participant meeting is ~1000 messages/s on one single-threaded object), add a hop of
+	 * latency, and remap a 1006 abnormal close from the container to a clean 1000, hiding a
+	 * container crash from the bridge and from our logs; the incoming frames would also be
+	 * billed as DO requests, a minor cost at 20 messages per billable request. The pre-0.2.1
+	 * behaviour (what this deployment ran on, at 0.0.31, before this upgrade) was a plain
+	 * passthrough: the response from the container's TCP port is returned as-is and workerd
+	 * pipes the socket with no per-message code here. This override restores that for upgrades
+	 * only; plain HTTP (the /status probe in `onActivityExpired`, anything else) still goes
+	 * through the SDK.
 	 *
 	 * Consequence: the SDK's activity timer does not see WebSocket traffic, exactly as before,
 	 * so keeping a live call's container awake stays our job (the renewal loop in
