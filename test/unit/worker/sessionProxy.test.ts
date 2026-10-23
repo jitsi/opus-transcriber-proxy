@@ -323,6 +323,14 @@ describe('handleWebSocketWithDispatcher: dispatching', () => {
 		expect(second.closed).toEqual({ code: 1000, reason: 'Session ended' });
 	});
 
+	it('replies to a dispatcher close frame instead of leaving that socket CLOSING', async () => {
+		vi.useFakeTimers();
+		const { dispatcherWs } = await setup();
+		dispatcherWs.remoteClose(1012, 'dispatcher restarting');
+		expect(dispatcherWs.closed).toEqual({ code: 1012, reason: 'dispatcher restarting' });
+		expect(dispatcherWs.readyState).toBe(3);
+	});
+
 	it('cancels a pending reconnect backoff when the session ends', async () => {
 		vi.useFakeTimers();
 		const { serverWs, dispatcherWs, doFetch } = await setup();
