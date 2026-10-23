@@ -117,6 +117,17 @@ npm run cf:tail            # Tail logs
 
 The worker code is in `worker/` and uses `@cloudflare/containers` to run the Node.js server in a container.
 
+The deployed Worker's dependencies come from **`worker/package.json` + `worker/package-lock.json`**
+(`cf:deploy` runs `npm install` in `worker/`), not from the root lockfile; the root copy of
+`@cloudflare/containers` only serves `typecheck:worker`. Keep the two pinned to the same version.
+`TranscriberContainer` **overrides `fetch()` to pass WebSocket upgrades straight through** to the
+container's TCP port instead of the SDK's default (since 0.2.1) of relaying every message through the
+Durable Object in JS: that relay would put every 20 ms audio frame of every participant through the
+DO isolate, bill each as a DO request, and remap a 1006 close to 1000. The flip side is that the SDK's
+activity timer never sees audio, so keeping a live call's container awake is done by the Worker's
+renewal loop and the `/status` probe in `onActivityExpired`; do not remove those on the assumption
+that the SDK renews on WebSocket traffic.
+
 ## Architecture
 
 ### Data Flow

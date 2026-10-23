@@ -9,7 +9,7 @@
 		"tail": "wrangler tail --config ../wrangler.jsonc"
 	},
 	"dependencies": {
-		"@cloudflare/containers": "latest"
+		"@cloudflare/containers": "^0.3.7"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20250106.0",

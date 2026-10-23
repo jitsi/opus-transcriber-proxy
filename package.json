@@ -30,7 +30,7 @@
 		"cf:tail": "cd worker && npm run tail"
 	},
 	"dependencies": {
-		"@cloudflare/containers": "^0.1.0",
+		"@cloudflare/containers": "^0.3.7",
 		"@opentelemetry/api": "^1.9.0",
 		"@opentelemetry/api-logs": "^0.57.2",
 		"@opentelemetry/exporter-logs-otlp-http": "^0.57.2",

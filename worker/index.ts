@@ -220,11 +220,51 @@ export class TranscriberContainer extends Container<Env> {
 	}
 
 	/**
+	 * Hand WebSocket upgrades straight to the container instead of letting the SDK proxy them.
+	 *
+	 * Since @cloudflare/containers 0.2.1, `Container.fetch()` (via `containerFetch`) no longer
+	 * returns the container's WebSocket to the caller: it accepts it inside this Durable
+	 * Object, creates a second WebSocketPair, and relays every message between the two in JS,
+	 * calling `renewActivityTimeout()` per message. For this workload that would put every
+	 * 20 ms audio frame of every participant through this DO's isolate (a 20-participant
+	 * meeting is ~1000 messages/s), bill each incoming frame as a DO request, add a hop of
+	 * latency, and remap a 1006 abnormal close from the container to a clean 1000, hiding a
+	 * container crash from the bridge and from our logs. The pre-0.2.1 behaviour (what this
+	 * deployment ran on, at 0.0.31, before this upgrade) was a plain passthrough: the response from the
+	 * container's TCP port is returned as-is and workerd pipes the socket with no per-message
+	 * code here. This override restores that for upgrades only; plain HTTP (the /status probe
+	 * in `onActivityExpired`, anything else) still goes through the SDK.
+	 *
+	 * Consequence: the SDK's activity timer does not see WebSocket traffic, exactly as before,
+	 * so keeping a live call's container awake stays our job (the renewal loop in
+	 * `handleWebSocketWithDispatcher` and the `/status` probe in `onActivityExpired` below).
+	 *
+	 * The Worker always calls `startAndWaitForPorts()` before `fetch()`, so the start here is
+	 * only a safety net for a container that stopped in between.
+	 */
+	override async fetch(request: Request): Promise<Response> {
+		if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+			return super.fetch(request);
+		}
+		const port = this.defaultPort;
+		const container = this.ctx.container;
+		if (!container) {
+			throw new Error('Durable Object has no container binding');
+		}
+		if (!container.running) {
+			await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
+		}
+		this.renewActivityTimeout();
+		// Same URL rewrite the SDK applies: the container's port speaks plain HTTP.
+		return container.getTcpPort(port).fetch(request.url.replace('https:', 'http:'), request);
+	}
+
+	/**
 	 * Called when the activity timer (`sleepAfter`) elapses. The default stops the
-	 * container. WebSocket audio frames bypass the Container class, so the timer never
-	 * sees an in-progress call and would sleep it mid-session — on EVERY routing path,
-	 * including the direct `container.fetch` path used by `useDispatcher=false` (VCC)
-	 * connections, which has no Worker-side renewal loop.
+	 * container. WebSocket audio frames bypass the SDK's activity tracking (see the `fetch`
+	 * override above), so the timer never sees an in-progress call and would sleep it
+	 * mid-session — on EVERY routing path, including the direct `container.fetch` path used by
+	 * `useDispatcher=false` (VCC) connections, which has no Worker-side renewal loop.
 	 *
 	 * So before sleeping, ask the container whether any sessions are still live; if so,
 	 * keep it alive. This is path-agnostic (it's the DO's own lifecycle hook) and costs
@@ -459,8 +499,9 @@ async function handleWebSocketWithDispatcher(
 	}
 
 	// Keep the container alive for the life of the call by renewing its activity timeout.
-	// WebSocket audio frames bypass the Container class, so sleepAfter does NOT reset on
-	// its own — without this the container sleeps (SIGTERM) ~sleepAfter after start, mid-call.
+	// WebSocket audio frames bypass the SDK's activity tracking (TranscriberContainer.fetch
+	// passes upgrades straight through), so sleepAfter does NOT reset on its own — without
+	// this the container sleeps (SIGTERM) ~sleepAfter after start, mid-call.
 	// renewActivityTimeout() is the real Container method (there is no keepAlive()); each
 	// call is one Worker subrequest, so we renew infrequently (every 3m) to stay well under
 	// the 1000-subrequest-per-invocation limit on long sessions. The interval must stay
