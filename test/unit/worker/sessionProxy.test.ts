@@ -40,6 +40,7 @@ class FakeWs {
 	}
 	close(code?: number, reason?: string) {
 		if (code !== undefined && !sendable(code)) throw new Error(`InvalidAccessError: close code ${code} cannot be sent`);
+		if (reason !== undefined && new TextEncoder().encode(reason).length > 123) throw new Error('SyntaxError: close reason longer than 123 bytes');
 		if (this.readyState === 3 || this.closed) throw new Error('close() on a WebSocket that is already closed');
 		// Replying to the peer's close completes the handshake; initiating one leaves us CLOSING.
 		this.readyState = this.readyState === 2 ? 3 : 2;
@@ -327,14 +328,13 @@ describe('handleWebSocketWithDispatcher: dispatching', () => {
 		expect(dispatcherWs.closed).toEqual({ code: 1000, reason: 'Session ended' });
 	});
 
-	it('sends a final queued during the first connect exactly once when the client closes meanwhile', async () => {
-		// Two paths drain the queue here: flushBeforeClose (via waitUntil, which opens its own
-		// socket) and the post-await branch for a session that ended during the connect. Both use
-		// shift(), so whichever resolves first sends the final and the other finds nothing.
-		const resolvers: Array<(v: unknown) => void> = [];
-		const sockets = [new FakeWs(), new FakeWs()];
+	it('sends a final queued during the first connect exactly once, on one socket, when the client closes meanwhile', async () => {
+		// The flush-on-close waits for the in-flight initial connect instead of dialling a second
+		// socket; the initial connect's own completion finds the session closed, flushes and closes.
+		let resolveConnect!: (v: unknown) => void;
+		const socket = new FakeWs();
 		const { run, containerWs, doFetch, ctx } = prepare({
-			dispatcherFetch: () => new Promise((resolve) => resolvers.push(resolve)),
+			dispatcherFetch: () => new Promise((resolve) => (resolveConnect = resolve)),
 		});
 		const pending = run();
 		await vi.waitFor(() => expect(doFetch).toHaveBeenCalledTimes(1));
@@ -342,16 +342,47 @@ describe('handleWebSocketWithDispatcher: dispatching', () => {
 		const [, serverWs] = pairs[0];
 		serverWs.remoteClose(1000, 'bye');
 		expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
-		await vi.waitFor(() => expect(doFetch).toHaveBeenCalledTimes(2));
-		// Resolve the flush-on-close connect first, then the initial one.
-		resolvers[1]({ webSocket: sockets[1] });
-		await ctx.waitUntil.mock.calls[0][0];
-		resolvers[0]({ webSocket: sockets[0] });
+		resolveConnect({ webSocket: socket });
 		await pending;
-		const sent = sockets.flatMap((ws) => ws.sentJson());
-		expect(sent.map((m) => m.text)).toEqual(['hello world']);
-		expect(sockets[0].closed).toEqual({ code: 1000, reason: 'Session ended' });
-		expect(sockets[1].closed).toEqual({ code: 1000, reason: 'Session ended' });
+		await ctx.waitUntil.mock.calls[0][0];
+		expect(doFetch).toHaveBeenCalledTimes(1);
+		expect(socket.sentJson().map((m) => m.text)).toEqual(['hello world']);
+		expect(socket.closed).toEqual({ code: 1000, reason: 'Session ended' });
+	});
+
+	it('dials once from the flush-on-close when the initial connect fails after the session ended', async () => {
+		let resolveConnect!: (v: unknown) => void;
+		const later = new FakeWs();
+		let attempts = 0;
+		const { run, containerWs, doFetch, ctx } = prepare({
+			dispatcherFetch: () => (attempts++ === 0 ? new Promise((resolve) => (resolveConnect = resolve)) : Promise.resolve({ webSocket: later })),
+		});
+		const pending = run();
+		await vi.waitFor(() => expect(doFetch).toHaveBeenCalledTimes(1));
+		containerWs.emit('message', { data: finalTranscript() });
+		const [, serverWs] = pairs[0];
+		serverWs.remoteClose(1000, 'bye');
+		resolveConnect({ webSocket: undefined });
+		await pending;
+		await ctx.waitUntil.mock.calls[0][0];
+		expect(doFetch).toHaveBeenCalledTimes(2);
+		expect(later.sentJson()).toHaveLength(1);
+		expect(later.closed).toEqual({ code: 1000, reason: 'Session ended' });
+	});
+
+	it('caps close reasons at 123 UTF-8 bytes', async () => {
+		const long = 'é'.repeat(200);
+		const a = await setup({
+			containerFetch: async () => {
+				throw new Error(long);
+			},
+		});
+		expect(a.serverWs.closed?.code).toBe(1011);
+		expect(a.serverWs.closed?.reason?.startsWith('Container unreachable: ')).toBe(true);
+		expect(new TextEncoder().encode(a.serverWs.closed?.reason ?? '').length).toBeLessThanOrEqual(123);
+		const b = await setup();
+		b.containerWs.remoteClose(1001, long);
+		expect(new TextEncoder().encode(b.serverWs.closed?.reason ?? '').length).toBeLessThanOrEqual(123);
 	});
 
 	it('closes the client when the container drops while the dispatcher connect is still pending', async () => {

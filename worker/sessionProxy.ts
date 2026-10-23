@@ -2,6 +2,7 @@ import type { Env } from './env';
 import type { TranscriberContainer } from './TranscriberContainer';
 import type { DispatcherTranscriptionMessage, TranscriptionMessage } from './types';
 import { buildWorkerInfo } from './containerEnv';
+import { closeReason } from '../src/agent/closeReason';
 
 /**
  * A close code workerd will put in a close frame: 1000-1003, 1007-1014 and 3000-4999. Its `close()`
@@ -47,7 +48,7 @@ export async function handleWebSocketWithDispatcher(
 		// Container connection failed - close client WebSocket with error
 		const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
 		console.error(`Container fetch failed during WebSocket upgrade: ${errorMsg}`);
-		serverWs.close(1011, `Container unreachable: ${errorMsg}`);
+		serverWs.close(1011, closeReason(`Container unreachable: ${errorMsg}`));
 		return new Response('Service Unavailable: Container connection failed', {
 			status: 503,
 			statusText: 'Container Unreachable',
@@ -71,8 +72,9 @@ export async function handleWebSocketWithDispatcher(
 	const messageQueue: DispatcherTranscriptionMessage[] = [];
 	let reconnectAttempts = 0;
 	let isReconnecting = false;
-	// True while the initial connect is in flight, so a queued final does not also start a reconnect.
-	let connecting = false;
+	// The initial connect while it is in flight, so a queued final does not also start a reconnect
+	// and a flush-on-close waits for it instead of dialling a second socket.
+	let initialConnect: Promise<WebSocket | null> | null = null;
 	let sessionClosed = false;
 
 	// Function to connect/reconnect to dispatcher DO
@@ -172,6 +174,13 @@ export async function handleWebSocketWithDispatcher(
 
 		console.log(`Flushing ${messageQueue.length} queued messages before session close, sessionId=${sessionId}`);
 
+		// If the session ended while the initial connect was still in flight, let that connect finish
+		// and flush (it does both when it finds the session closed) rather than dial a second socket.
+		if (initialConnect) {
+			await initialConnect;
+			if (messageQueue.length === 0) return;
+		}
+
 		// Try to reconnect if not connected (allow during close)
 		if (!dispatcherWs || dispatcherWs.readyState !== WebSocket.READY_STATE_OPEN) {
 			const newWs = await connectToDispatcher(true);
@@ -247,7 +256,7 @@ export async function handleWebSocketWithDispatcher(
 					if (messageQueue.length === 1) {
 						console.log(`Dispatcher not connected, queueing messages, sessionId=${sessionId}`);
 					}
-					if (!isReconnecting && !connecting) {
+					if (!isReconnecting && !initialConnect) {
 						scheduleReconnect();
 					}
 				}
@@ -308,16 +317,17 @@ export async function handleWebSocketWithDispatcher(
 		clearInterval(keepAliveInterval);
 
 		const [closedWs, otherWs] = from === 'client' ? [serverWs, containerWs] : [containerWs, serverWs];
+		// Reasons are capped at 123 UTF-8 bytes (RFC 6455); a longer one makes close() throw.
 		if (!errored && OPEN_OR_CLOSING(closedWs)) {
-			closedWs.close(sendableCloseCode(code, 1000), reason);
+			closedWs.close(sendableCloseCode(code, 1000), closeReason(reason));
 		}
 		if (OPEN_OR_CLOSING(otherWs)) {
 			if (errored) {
-				otherWs.close(1011, reason);
+				otherWs.close(1011, closeReason(reason));
 			} else if (from === 'container') {
-				otherWs.close(sendableCloseCode(code, 1011), reason || 'Container connection closed');
+				otherWs.close(sendableCloseCode(code, 1011), closeReason(reason || 'Container connection closed'));
 			} else {
-				otherWs.close(sendableCloseCode(code, 1000), reason);
+				otherWs.close(sendableCloseCode(code, 1000), closeReason(reason));
 			}
 		}
 
@@ -357,9 +367,9 @@ export async function handleWebSocketWithDispatcher(
 	// does meanwhile is handled: a final is queued and flushed below, and a close or error marks the
 	// session closed, in which case the socket that resolves here is closed again right away rather
 	// than left open until the Worker is torn down.
-	connecting = true;
-	dispatcherWs = await connectToDispatcher(true);
-	connecting = false;
+	initialConnect = connectToDispatcher(true);
+	dispatcherWs = await initialConnect;
+	initialConnect = null;
 	if (sessionClosed) {
 		flushMessageQueue();
 		if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
