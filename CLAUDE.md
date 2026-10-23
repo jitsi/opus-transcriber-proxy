@@ -615,6 +615,7 @@ worker/
 └── env.d.ts                   # Worker Env types
 
 scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
+scripts/check-license-headers.mjs  # CI guard: every source file carries the copyright notice
 
 test/
 ├── setup.ts                   # Vitest setup
@@ -850,6 +851,19 @@ The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANS
 `/translate` transcript messages use inner `type: "realtime-translation-result"` (so jitsi-meet recognizes them as a translation stream and does not render them in the CC panel like normal transcriptions) but keep outer `event: "transcription-result"` — JVB dispatches on `event` (via jicoco-mediajson) and forwards the payload, including the inner `type`, verbatim, so no JVB change is needed and old clients ignore the unrecognized `type`. Deltas are `is_interim: true`; the transcript-done event is final. Interims are sent to the client only when `sendBackInterim` is set. Note `sendBack` gates **transcripts only** on `/translate` — the translated **audio** (`media` events) is always returned to the bridge regardless of `sendBack`, since returning translated audio is the entire purpose of the endpoint (both `src/server.ts` and `worker/handleTranslate.ts`). The CF Worker dispatcher path forwards `realtime-translation-result` finals (in addition to `transcription-result`) to the dispatcher under `useDispatcher`; the Worker-hosted `/translate` forwards its finals to the per-session Dispatcher DO the same way (`worker/handleTranslate.ts`).
 
 Both the Node server and the Worker handler build these messages via the shared builders in `src/translate/messages.ts` (`message_id` uses a per-connection sequence counter — never `Date.now()`, which collides for same-tag events within one millisecond), so the two serializers cannot drift.
+
+## Copyright notice
+
+Every source file starts with the Apache 2.0 copyright notice used across Jitsi projects,
+`Copyright @ <year> - present 8x8, Inc.`, where the year is the one the file was created (the files
+that predate the notice carry 2025, the repository's first year). Copy the block from any `.ts` file,
+or the `#` form from the `Makefile`. A shebang or the Dockerfile's `# syntax=` line stays first; the
+notice follows. When you add a file, add the notice: `npm run check:license-headers` (run in CI)
+fails on any tracked `.ts`, `.mts`, `.mjs`, `.cjs`, `.js`, `.c`, `.cc`, `.h`, `.jsonc`, `.yml`,
+`.yaml`, `Dockerfile`, `Makefile` or `binding.gyp` whose leading comment block lacks one. Only the
+generated `worker-configuration.d.ts` and the libopus submodule are exempt. Code adapted from
+elsewhere keeps its upstream attribution under the notice and is listed in `NOTICE`, which the
+Docker image ships under `licenses/` together with `LICENSE` and libopus's `COPYING`.
 
 ## Keeping Documentation Current
 

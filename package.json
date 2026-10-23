@@ -12,6 +12,7 @@
 		"build:ts": "tsc",
 		"typecheck:worker": "tsc --noEmit --project worker/tsconfig.json",
 		"check:worker-safe": "node scripts/check-worker-safe.mjs",
+		"check:license-headers": "node scripts/check-license-headers.mjs",
 		"build:bundle": "node build.mjs",
 		"build": "npm run build:wasm && npm run build:native && npm run build:bundle",
 		"dev": "npm run build:wasm && tsx watch src/server.ts",
