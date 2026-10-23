@@ -200,19 +200,26 @@ function buildWorkerInfo(request: Request, env: Env): Record<string, unknown> {
 }
 
 /**
- * Turn a `startAndWaitForPorts()` failure into the response the SDK's `containerFetch` gives it.
- * The SDK classifies these by substring of the platform's error message (its helpers and the
- * strings are not exported, so they are copied from @cloudflare/containers 0.3.7): no instance
- * available is a capacity condition (503), too many starts per second is rate limiting (429),
- * anything else is a server error (500).
+ * The platform error messages the SDK's `containerFetch` classifies a failed start by, copied from
+ * @cloudflare/containers 0.3.7 (`dist/lib/container.js`, `NO_CONTAINER_INSTANCE_ERROR` and
+ * `RATE_LIMITED_ERROR`; matched lower-cased by substring). The SDK does not export them, so
+ * re-check these two lines against the SDK source when bumping it.
+ */
+const SDK_NO_CONTAINER_INSTANCE_ERROR = 'there is no container instance that can be provided to this durable object';
+const SDK_RATE_LIMITED_ERROR = 'you are requesting too many containers per second';
+
+/**
+ * Turn a `startAndWaitForPorts()` failure into the response the SDK's `containerFetch` gives it:
+ * no instance available is a capacity condition (503), too many starts per second is rate
+ * limiting (429), anything else is a server error (500).
  */
 function containerStartFailureResponse(e: unknown): Response {
 	const message = e instanceof Error ? e.message : String(e);
 	const lower = message.toLowerCase();
-	if (lower.includes('there is no container instance that can be provided to this durable object')) {
+	if (lower.includes(SDK_NO_CONTAINER_INSTANCE_ERROR)) {
 		return new Response('There is no Container instance available at this time.', { status: 503 });
 	}
-	if (lower.includes('you are requesting too many containers per second')) {
+	if (lower.includes(SDK_RATE_LIMITED_ERROR)) {
 		return new Response(message, { status: 429 });
 	}
 	return new Response(`Failed to start container: ${message}`, { status: 500 });
@@ -317,6 +324,9 @@ export class TranscriberContainer extends Container<Env> {
 			return new Response('Durable Object has no container binding', { status: 500 });
 		}
 		if (!container.running || (await this.getState()).status !== 'healthy') {
+			// Every other start is logged by the Worker; this one would otherwise be invisible, and a
+			// container that dies between the Worker's start and the upgrade is exactly what to notice.
+			console.warn(`Container ${this.ctx.id.name ?? this.ctx.id} not ready at upgrade (running=${container.running}); starting it before connecting`);
 			try {
 				await this.startAndWaitForPorts({ ports: port, cancellationOptions: { abort: request.signal } });
 			} catch (e) {
@@ -357,7 +367,7 @@ export class TranscriberContainer extends Container<Env> {
 	 */
 	override async onActivityExpired(): Promise<void> {
 		try {
-			const res = await this.containerFetch('http://container/status', 8080);
+			const res = await this.containerFetch('http://container/status', this.defaultPort);
 			if (res.ok) {
 				const { active = 0, detached = 0 } = (await res.json()) as { active?: number; detached?: number };
 				if (active + detached > 0) {
@@ -853,8 +863,10 @@ export default {
 
 		// Report connection tracking for autoscale mode
 		const routingMode = env.ROUTING_MODE || 'session';
-		const upgradeHeader = request.headers.get('Upgrade');
-		if (routingMode === 'autoscale' && upgradeHeader === 'websocket') {
+		// Header values are case-insensitive (RFC 6455 clients send both `websocket` and `WebSocket`);
+		// the same normalised test is used by TranscriberContainer.fetch, so both layers agree.
+		const isWebSocketUpgrade = request.headers.get('Upgrade')?.toLowerCase() === 'websocket';
+		if (routingMode === 'autoscale' && isWebSocketUpgrade) {
 			const coordinator = env.CONTAINER_COORDINATOR.get(env.CONTAINER_COORDINATOR.idFromName('global'));
 
 			// Report connection opened
@@ -874,7 +886,7 @@ export default {
 		}
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
-		if (useDispatcher && upgradeHeader === 'websocket' && env.DISPATCHER_DO) {
+		if (useDispatcher && isWebSocketUpgrade && env.DISPATCHER_DO) {
 			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId);
 		}
 
@@ -888,9 +900,8 @@ export default {
 			console.error(`Container fetch failed: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
 
 			// Return appropriate error response
-			const isWebSocket = upgradeHeader === 'websocket';
 			return new Response(
-				isWebSocket
+				isWebSocketUpgrade
 					? `WebSocket Upgrade Failed: Container unreachable (${errorMsg})`
 					: `Service Unavailable: Container connection failed (${errorMsg})`,
 				{
