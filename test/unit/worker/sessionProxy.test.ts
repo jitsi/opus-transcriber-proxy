@@ -632,7 +632,7 @@ describe('handleWebSocketWithDispatcher: close and error propagation', () => {
 		expect(dispatcherWs.closed).toEqual({ code: 1000, reason: 'Session ended' });
 	});
 
-	it("logs the dispatcher's close reply after the session ended at info, and a mid-session drop at error", async () => {
+	it("logs the dispatcher's 1000 reply after the session ended at info, and any other close at error", async () => {
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const dispatcherLines = (spy: typeof error) => spy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('Dispatcher WebSocket closed'));
@@ -651,6 +651,13 @@ describe('handleWebSocketWithDispatcher: close and error propagation', () => {
 
 		const error2 = vi.spyOn(console, 'error').mockImplementation(() => {});
 		try {
+			// After the session ended, a DO that vanishes instead of replying is still a failure.
+			const ended = await setup();
+			ended.serverWs.remoteClose(1000, 'bye');
+			ended.dispatcherWs.remoteClose(1006, '');
+			expect(dispatcherLines(error2)).toEqual(['Dispatcher WebSocket closed: code=1006, reason=none, sessionId=s1']);
+			error2.mockClear();
+			// Mid-session, every close is a drop the reconnect has to recover from.
 			vi.useFakeTimers();
 			const { dispatcherWs } = await setup();
 			dispatcherWs.remoteClose(1006, '');

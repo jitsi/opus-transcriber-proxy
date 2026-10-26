@@ -186,11 +186,12 @@ export async function handleWebSocketWithDispatcher(
 		if (!ws) return;
 
 		ws.addEventListener('close', (event) => {
-			// Once the session has ended this is the Dispatcher DO's reply to the close we sent from
-			// endSession: the handshake completing as it should, not a failure. Mid-session it is the
-			// dispatcher dropping us (1006 and the like), which the reconnect below has to recover from.
+			// Once the session has ended, a 1000 is the Dispatcher DO's reply to the close we sent from
+			// endSession: the handshake completing as it should, not a failure. Anything else is a
+			// failure: mid-session the dispatcher dropping us (1006 and the like), which the reconnect
+			// below has to recover from, and after the session a DO that vanished instead of replying.
 			const line = `Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`;
-			if (sessionClosed) {
+			if (sessionClosed && event.code === 1000) {
 				console.log(line);
 			} else {
 				console.error(line);
