@@ -186,7 +186,15 @@ export async function handleWebSocketWithDispatcher(
 		if (!ws) return;
 
 		ws.addEventListener('close', (event) => {
-			console.error(`Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
+			// Once the session has ended this is the Dispatcher DO's reply to the close we sent from
+			// endSession: the handshake completing as it should, not a failure. Mid-session it is the
+			// dispatcher dropping us (1006 and the like), which the reconnect below has to recover from.
+			const line = `Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`;
+			if (sessionClosed) {
+				console.log(line);
+			} else {
+				console.error(line);
+			}
 			// Complete the close handshake, as for the client and container sockets: with no automatic
 			// reply on our compatibility date the socket would otherwise sit CLOSING until it times out.
 			if (ws.readyState === WebSocket.READY_STATE_CLOSING) {
