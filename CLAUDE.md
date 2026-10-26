@@ -186,8 +186,7 @@ Five things to know about the Worker's use of the SDK:
   through `countLater`, which cannot throw into the request. They are OTLP
   **delta** counters, pushed one POST per start (and per unreachable container) inside
   `ctx.waitUntil` with the `OTLP_*` settings the Worker forwards to the container, and hand-built
-  because the OpenTelemetry SDK does not run in a Worker (and the 8x8 Worker publisher is not
-  public). Every isolate sends the same series, with no instance identity: isolates are
+  because the OpenTelemetry SDK does not run in a Worker. Every isolate sends the same series, with no instance identity: isolates are
   short-lived, and a series per isolate would lose each one's first count, which `rate()` cannot
   see. The collector (`nomad/alloy-cloudflare.hcl` in infra-customizations-private) restamps delta
   points with their arrival time so concurrent pushes stay in order, converts them to running
