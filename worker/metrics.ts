@@ -72,7 +72,7 @@ function parseJsonObject(value: string | undefined): Record<string, unknown> {
 function keyValues(attrs: Record<string, unknown>): { key: string; value: { stringValue: string } }[] {
 	return Object.entries(attrs)
 		.filter(([, v]) => v !== undefined && v !== null && v !== '')
-		.map(([key, v]) => ({ key, value: { stringValue: String(v) } }));
+		.map(([key, v]) => ({ key, value: { stringValue: typeof v === 'object' ? JSON.stringify(v) : String(v) } }));
 }
 
 /** The OTLP/HTTP JSON body for one push of delta counters. */
@@ -87,10 +87,11 @@ export function buildCounterPayload(env: OtlpEnv, points: CounterPoint[], nowMs:
 		// carries no SDK marker either, so this has to say it is the Worker, and win over the merge.
 		'cloudflare.source': 'cloudflare-workers',
 	};
-	const timeUnixNano = `${BigInt(nowMs) * 1_000_000n}`;
+	const ms = BigInt(Math.trunc(nowMs));
+	const timeUnixNano = `${ms * 1_000_000n}`;
 	// Each push is its own delta window; a second is enough to bracket it. The collector replaces
 	// the end time with the arrival time, so only the start is ours.
-	const startTimeUnixNano = `${(BigInt(nowMs) - 1000n) * 1_000_000n}`;
+	const startTimeUnixNano = `${(ms - 1000n) * 1_000_000n}`;
 
 	const byName = new Map<string, CounterPoint[]>();
 	for (const point of points) {
@@ -153,14 +154,27 @@ export async function pushCounters(env: OtlpEnv, points: CounterPoint[], now: ()
 	}
 }
 
+const START_RESULTS: readonly StartResult[] = ['ok', 'rescued', 'gave_up', 'failed'];
+
 /**
  * The counters for one container start: `otp_worker_container_starts{result, colo}` by one, and
- * `otp_worker_container_start_retries{colo}` by the number of retries it took, when there were any.
- * `colo` is the Cloudflare data centre that handled the request (a fixed set of codes).
+ * `otp_worker_container_start_retries{colo}` by the number of retries it took. `colo` is the
+ * Cloudflare data centre that handled the request (a fixed set of codes).
+ *
+ * Every push also carries a zero for each other result and for the retries. The collector turns a
+ * stream's first delta into its first running total, which `rate()` and `increase()` cannot count
+ * (there is nothing before it), and forgets a stream idle for a day. Failures are rare, so without
+ * the zeros most would be the first point of their stream and never be seen; with them, the
+ * frequent `ok` starts keep every stream of a colo alive at zero, and a failure is an increase.
  */
 export function containerStartPoints(result: StartResult, attempts: number, colo: string | undefined): CounterPoint[] {
 	const where = { colo: colo || 'unknown' };
-	const points: CounterPoint[] = [{ name: 'otp_worker_container_starts', value: 1, attributes: { result, ...where } }];
-	if (attempts > 1) points.push({ name: 'otp_worker_container_start_retries', value: attempts - 1, attributes: where });
-	return points;
+	return [
+		...START_RESULTS.map((r) => ({
+			name: 'otp_worker_container_starts',
+			value: r === result ? 1 : 0,
+			attributes: { result: r, ...where },
+		})),
+		{ name: 'otp_worker_container_start_retries', value: Math.max(0, attempts - 1), attributes: where },
+	];
 }

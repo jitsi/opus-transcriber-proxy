@@ -166,9 +166,13 @@ Five things to know about the Worker's use of the SDK:
   every request, including those that find the container already running, so its elapsed time
   mixes cold starts with near-instant checks. Each start is also counted, from the Worker itself
   (`worker/metrics.ts`): `otp_worker_container_starts{result, colo}` (`result` = `ok`, `rescued`,
-  `gave_up` for a transient failure with no retry left, `failed` for one never retried; `ok`
-  includes the warm-container checks) and `otp_worker_container_start_retries{colo}`, the retries
-  the start took. They are OTLP **delta** counters, pushed one POST per start inside
+  `gave_up` for a failure after retrying or a transient one with no retry left, `failed` for one
+  the retry never touched; `ok` includes the warm-container checks) and
+  `otp_worker_container_start_retries{colo}`, the retries the start took. Every push carries a zero
+  for the other results and the retries: the collector makes a stream's first delta its first
+  running total, which `rate()` cannot count, and forgets a stream idle for a day, so a rare
+  failure would otherwise usually be invisible; the frequent `ok` pushes keep each colo's streams
+  alive at zero. They are OTLP **delta** counters, pushed one POST per start inside
   `ctx.waitUntil` with the `OTLP_*` settings the Worker forwards to the container, and hand-built
   because the OpenTelemetry SDK does not run in a Worker (and the 8x8 Worker publisher is not
   public). Every isolate sends the same series, with no instance identity: isolates are

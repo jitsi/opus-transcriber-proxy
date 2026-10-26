@@ -89,6 +89,18 @@ describe('buildCounterPayload', () => {
 		expect(point.startTimeUnixNano).toBe('1699999999000000000');
 	});
 
+	it('keeps a structured attribute value readable rather than "[object Object]"', () => {
+		const payload = buildCounterPayload({ OTLP_RESOURCE_ATTRIBUTES: '{"k":{"a":1},"l":[1,2]}' }, [{ name: 'x', value: 1 }], 0) as Payload;
+		const resource = attrs(payload.resourceMetrics[0].resource.attributes);
+		expect(resource.k).toBe('{"a":1}');
+		expect(resource.l).toBe('[1,2]');
+	});
+
+	it('accepts a clock with fractional milliseconds', () => {
+		const payload = buildCounterPayload({}, [{ name: 'x', value: 1 }], 1000.7) as Payload;
+		expect(payload.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[0].timeUnixNano).toBe('1000000000');
+	});
+
 	it('leaves out what is unset and ignores attributes that are not a JSON object', () => {
 		const bare = buildCounterPayload({ OTLP_RESOURCE_ATTRIBUTES: 'not json' }, [{ name: 'x', value: 1 }], 0) as Payload;
 		const keys = bare.resourceMetrics[0].resource.attributes.map((a) => a.key);
@@ -161,20 +173,27 @@ describe('pushCounters', () => {
 });
 
 describe('containerStartPoints', () => {
-	it('counts a first-try start, with no retries series', () => {
-		expect(containerStartPoints('ok', 1, 'IAD')).toEqual([
-			{ name: 'otp_worker_container_starts', value: 1, attributes: { result: 'ok', colo: 'IAD' } },
-		]);
+	const counts = (points: ReturnType<typeof containerStartPoints>) =>
+		Object.fromEntries(points.map((p) => [`${p.name}{${p.attributes?.result ?? ''}}`, p.value]));
+
+	it('counts the start under its result, and every other result and the retries as zero', () => {
+		expect(counts(containerStartPoints('ok', 1, 'IAD'))).toEqual({
+			'otp_worker_container_starts{ok}': 1,
+			'otp_worker_container_starts{rescued}': 0,
+			'otp_worker_container_starts{gave_up}': 0,
+			'otp_worker_container_starts{failed}': 0,
+			'otp_worker_container_start_retries{}': 0,
+		});
 	});
 
 	it('counts the retries a start took', () => {
-		expect(containerStartPoints('rescued', 3, 'NRT')).toEqual([
-			{ name: 'otp_worker_container_starts', value: 1, attributes: { result: 'rescued', colo: 'NRT' } },
-			{ name: 'otp_worker_container_start_retries', value: 2, attributes: { colo: 'NRT' } },
-		]);
+		const points = containerStartPoints('rescued', 3, 'NRT');
+		expect(counts(points)['otp_worker_container_starts{rescued}']).toBe(1);
+		expect(counts(points)['otp_worker_container_start_retries{}']).toBe(2);
+		expect(points.every((p) => p.attributes?.colo === 'NRT')).toBe(true);
 	});
 
 	it('labels a request with no colo as unknown', () => {
-		expect(containerStartPoints('failed', 1, undefined)[0].attributes).toEqual({ result: 'failed', colo: 'unknown' });
+		expect(containerStartPoints('failed', 1, undefined).every((p) => p.attributes?.colo === 'unknown')).toBe(true);
 	});
 });

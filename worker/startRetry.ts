@@ -151,14 +151,15 @@ export async function startContainer<S>(
 
 /**
  * How a start ended, for the `result` label of the start counter: `ok` on the first attempt
- * (including a container that was already running), `rescued` by a retry, `gave_up` when the last
- * failure was transient but no retry was left (attempts or time), and `failed` when it was not one
- * to retry at all (overload, capacity, a crashed container, anything unrecognised).
+ * (including a container that was already running), `rescued` by a retry, `gave_up` when it failed
+ * after retrying or with a transient failure no retry was left for (attempts or time), and `failed`
+ * when it failed at once with one not to retry (overload, capacity, a crashed container, anything
+ * unrecognised). So `failed` is exactly the starts the retry never touched.
  */
 export type StartResult = 'ok' | 'rescued' | 'gave_up' | 'failed';
 
 export function startResult(attempts: number, failure?: { error: unknown }): StartResult {
 	if (!failure) return attempts > 1 ? 'rescued' : 'ok';
 	const { error } = failure;
-	return isTransientStartFailure(error) ? 'gave_up' : 'failed';
+	return attempts > 1 || isTransientStartFailure(error) ? 'gave_up' : 'failed';
 }

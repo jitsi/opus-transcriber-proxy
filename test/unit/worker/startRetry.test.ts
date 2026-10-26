@@ -245,6 +245,8 @@ describe('startResult', () => {
 		expect(startResult(1, { error: new Error(TRANSIENT[2]) })).toBe('gave_up');
 		expect(startResult(1, { error: new Error('Durable Object is overloaded.') })).toBe('failed');
 		expect(startResult(1, { error: new Error('something new') })).toBe('failed');
+		// Retried, then lost to an error not worth retrying: the retry was involved, so not 'failed'.
+		expect(startResult(2, { error: new Error('There is no container instance that can be provided') })).toBe('gave_up');
 		// A thrown value that is not an Error, even undefined, is still a failure.
 		expect(startResult(1, { error: undefined })).toBe('failed');
 	});
