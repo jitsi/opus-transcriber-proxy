@@ -172,7 +172,8 @@ Five things to know about the Worker's use of the SDK:
   for the other results and the retries: the collector makes a stream's first delta its first
   running total, which `rate()` cannot count, and forgets a stream idle for a day, so a rare
   failure would otherwise usually be invisible; the frequent `ok` pushes keep each colo's streams
-  alive at zero. They are OTLP **delta** counters, pushed one POST per start inside
+  alive at zero. The limit: in a colo with no starts for a day, the first failure after the gap is
+  still unseen (its push recreates the streams, so later ones count). They are OTLP **delta** counters, pushed one POST per start inside
   `ctx.waitUntil` with the `OTLP_*` settings the Worker forwards to the container, and hand-built
   because the OpenTelemetry SDK does not run in a Worker (and the 8x8 Worker publisher is not
   public). Every isolate sends the same series, with no instance identity: isolates are
