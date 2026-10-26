@@ -33,8 +33,8 @@
  * error); and anything unrecognised, since an unknown failure is not known to be transient. The
  * waits add about a second (250 + 750 ms, jittered) on top of the attempts themselves, each of which
  * can take as long as the port wait, and no retry starts whose wait would end more than 5 s after
- * the first attempt began: small on purpose, since audio is buffering behind the upgrade and the bridge redials on
- * its own soon after.
+ * the first attempt began: small on purpose, since audio is buffering behind the upgrade and the
+ * bridge redials on its own soon after.
  */
 
 /** Fallback for errors without the stub flags: messages the platform used for failures that cleared. */
