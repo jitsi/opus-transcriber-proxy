@@ -538,6 +538,8 @@ The `worker/` directory contains:
 - `startRetry.ts` / `metrics.ts` - the container start retry, and the OTLP counters the Worker pushes for each start
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
 - `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)
+- `dispatcherForwarder.ts` - the `/translate` path's Dispatcher DO socket: bounded queue while (re)connecting, reopened on the next forward, replies to a received close frame
+- `closeCode.ts` - `sendableCloseCode`, the close codes workerd will put in a close frame, shared by `sessionProxy.ts` and `dispatcherForwarder.ts`
 - `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
 - Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
@@ -662,6 +664,7 @@ worker/
 ├── types.ts                   # Dispatcher / transcription message shapes
 ├── ContainerCoordinator.ts    # Container routing logic
 ├── handleTranslate.ts         # Worker-hosted /translate (WebSocketPair + TranslatorProxy)
+├── dispatcherForwarder.ts     # /translate's Dispatcher DO socket (bounded queue, reconnect on next forward)
 ├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
 ├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
 ├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
@@ -672,7 +675,7 @@ scripts/check-license-headers.mjs  # CI guard: every source file carries the cop
 
 test/
 ├── setup.ts                   # Vitest setup
-├── unit/worker/               # Worker module tests (containerEnv, routing, TranscriberContainer, sessionProxy, startRetry, metrics)
+├── unit/worker/               # Worker module tests (containerEnv, routing, TranscriberContainer, sessionProxy, dispatcherForwarder, startRetry, metrics)
 ├── helpers/                   # Test utilities
 └── unit/                      # Unit tests
 ```
