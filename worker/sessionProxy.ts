@@ -21,21 +21,9 @@ import { buildWorkerInfo } from './containerEnv';
 import { closeReason } from '../src/agent/closeReason';
 import { DISPATCHER_QUEUE_LIMIT } from './dispatcherForwarder';
 import { containerFailureReason, containerUnreachablePoints, countLater, requestColo } from './metrics';
+import { sendableCloseCode } from './closeCode';
 
-/**
- * A close code workerd will put in a close frame: 1000-1003, 1007-1014 and 3000-4999. Its `close()`
- * throws on anything else, notably 1005 (no status received) and 1006 (abnormal closure), which are
- * exactly what a socket *reports* when the peer sent no code or vanished. Forwarding one of those
- * unchanged turned a plain client disconnect into an error cascade that closed the container side
- * with 1011. `fallback` is what a peer's unsendable code should mean to the other side: a container
- * that vanished (1006) is reported to the bridge as 1011 so a crash stays visible, a client that
- * sent no code is reported to the container as 1000. Application codes (the agent protocol's 4xxx)
- * pass through.
- */
-export function sendableCloseCode(code: number, fallback: number): number {
-	const sendable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
-	return sendable ? code : fallback;
-}
+export { sendableCloseCode };
 
 const OPEN_OR_CLOSING = (ws: WebSocket) =>
 	ws.readyState === WebSocket.READY_STATE_OPEN || ws.readyState === WebSocket.READY_STATE_CLOSING;
@@ -100,6 +88,9 @@ export async function handleWebSocketWithDispatcher(
 	// does not start another one and a flush-on-close waits for it instead of dialling a second socket.
 	let pendingConnect: Promise<WebSocket | null> | null = null;
 	let sessionClosed = false;
+	// Set once we have sent the dispatcher socket a close, so its close event can be told apart
+	// from the dispatcher closing on us.
+	let dispatcherCloseSent = false;
 	let queueOverflowLogged = false;
 
 	// Function to connect/reconnect to dispatcher DO
@@ -186,16 +177,12 @@ export async function handleWebSocketWithDispatcher(
 		if (!ws) return;
 
 		ws.addEventListener('close', (event) => {
-			// Once the session has ended, a 1000 is the Dispatcher DO's reply to the close we sent from
-			// endSession: the handshake completing as it should, not a failure. Anything else is a
-			// failure: mid-session the dispatcher dropping us (1006 and the like), which the reconnect
-			// below has to recover from, and after the session a DO that vanished instead of replying.
-			const line = `Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`;
-			if (sessionClosed && event.code === 1000) {
-				console.log(line);
-			} else {
-				console.error(line);
-			}
+			// A 1000 after we sent our close is the Dispatcher DO's reply: the handshake completing as
+			// it should, not a failure. Anything else is one: mid-session the dispatcher dropping us
+			// (1006 and the like), which the reconnect below has to recover from, and after our close
+			// a DO that vanished instead of replying.
+			const healthy = dispatcherCloseSent && event.code === 1000;
+			(healthy ? console.log : console.error)(`Dispatcher WebSocket closed: code=${event.code}, reason=${event.reason || 'none'}, sessionId=${sessionId}`);
 			// Complete the close handshake, as for the client and container sockets: with no automatic
 			// reply on our compatibility date the socket would otherwise sit CLOSING until it times out.
 			if (ws.readyState === WebSocket.READY_STATE_CLOSING) {
@@ -250,6 +237,7 @@ export async function handleWebSocketWithDispatcher(
 				dispatcherWs.send(JSON.stringify(msg));
 			}
 			console.log(`Successfully flushed all queued messages, sessionId=${sessionId}`);
+			dispatcherCloseSent = true;
 			dispatcherWs.close(1000, 'Session ended');
 		} else {
 			console.error(`Failed to flush ${messageQueue.length} queued messages - dispatcher not connected, sessionId=${sessionId}`);
@@ -414,6 +402,7 @@ export async function handleWebSocketWithDispatcher(
 			// the socket it flushes through).
 			ctx.waitUntil(flushBeforeClose());
 		} else if (dispatcherWs?.readyState === WebSocket.READY_STATE_OPEN) {
+			dispatcherCloseSent = true;
 			safeClose(dispatcherWs, 1000, from === 'client' ? 'Session ended' : 'Container disconnected', 'dispatcher');
 		}
 	}

@@ -20,6 +20,7 @@
 
 import type { Env } from './env';
 import type { DispatcherTranscriptionMessage } from './types';
+import { sendableCloseCode } from './closeCode';
 
 /** Bound on the dispatcher forward queue: with the DO persistently unreachable, a long-lived
  * session would otherwise accumulate one entry per final transcript indefinitely. */
@@ -48,8 +49,19 @@ export function createDispatcherForwarder(env: Env, sessionId: string) {
 				throw new Error(`Dispatcher DO WebSocket upgrade failed (HTTP ${resp.status})`);
 			}
 			resp.webSocket.accept();
-			resp.webSocket.addEventListener('close', () => {
-				ws = null; // reopened on the next forward
+			const socket = resp.webSocket;
+			socket.addEventListener('close', (event) => {
+				// Complete the close handshake, as sessionProxy does for its sockets: our compatibility
+				// date has no automatic reply, and a socket left CLOSING is a waitUntil task workerd
+				// cancels 30 s after the session ends, with a warning.
+				if (socket.readyState === WebSocket.READY_STATE_CLOSING) {
+					try {
+						socket.close(sendableCloseCode(event.code, 1000), event.reason);
+					} catch {
+						// Already closed by the time we got here; nothing to complete.
+					}
+				}
+				if (ws === socket) ws = null; // reopened on the next forward
 			});
 			ws = resp.webSocket;
 			console.log(
@@ -88,7 +100,8 @@ export function createDispatcherForwarder(env: Env, sessionId: string) {
 		},
 		close(): void {
 			try {
-				ws?.close();
+				// With a code: an empty close frame reaches the Dispatcher DO as 1005, which it cannot echo.
+				ws?.close(1000, 'Session ended');
 			} catch {
 				// already closed
 			}

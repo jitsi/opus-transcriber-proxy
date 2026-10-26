@@ -23,7 +23,7 @@
  * workerd's WebSocketPair / accept() surface and the READY_STATE_* statics are stubbed with plain
  * objects; the container and dispatcher Durable Object stubs are fakes.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { handleWebSocketWithDispatcher } from '../../../worker/sessionProxy';
 
 type Listener = (e: any) => void;
@@ -632,40 +632,53 @@ describe('handleWebSocketWithDispatcher: close and error propagation', () => {
 		expect(dispatcherWs.closed).toEqual({ code: 1000, reason: 'Session ended' });
 	});
 
-	it("logs the dispatcher's 1000 reply after the session ended at info, and any other close at error", async () => {
-		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		const dispatcherLines = (spy: typeof error) => spy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('Dispatcher WebSocket closed'));
-		try {
+	describe('dispatcher close log level', () => {
+		let error: ReturnType<typeof vi.spyOn>;
+		let log: ReturnType<typeof vi.spyOn>;
+		const dispatcherLines = (spy: ReturnType<typeof vi.spyOn>) =>
+			spy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('Dispatcher WebSocket closed'));
+		beforeEach(() => {
+			error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		});
+		afterEach(() => {
+			vi.restoreAllMocks();
+			vi.useRealTimers();
+		});
+
+		it("logs the DO's 1000 reply to the close sent on a client close at info", async () => {
 			const { serverWs, dispatcherWs } = await setup();
 			serverWs.remoteClose(1000, 'bye');
 			expect(dispatcherWs.closed).toEqual({ code: 1000, reason: 'Session ended' });
-			// The DO replies to our close: the handshake completing, which is healthy.
 			dispatcherWs.remoteClose(1000, 'Session ended');
 			expect(dispatcherLines(error)).toEqual([]);
 			expect(dispatcherLines(log)).toEqual(['Dispatcher WebSocket closed: code=1000, reason=Session ended, sessionId=s1']);
-		} finally {
-			error.mockRestore();
-			log.mockRestore();
-		}
+		});
 
-		const error2 = vi.spyOn(console, 'error').mockImplementation(() => {});
-		try {
-			// After the session ended, a DO that vanishes instead of replying is still a failure.
-			const ended = await setup();
-			ended.serverWs.remoteClose(1000, 'bye');
-			ended.dispatcherWs.remoteClose(1006, '');
-			expect(dispatcherLines(error2)).toEqual(['Dispatcher WebSocket closed: code=1006, reason=none, sessionId=s1']);
-			error2.mockClear();
-			// Mid-session, every close is a drop the reconnect has to recover from.
+		it("logs the DO's 1000 reply to the close sent on a container close at info", async () => {
+			const { containerWs, dispatcherWs } = await setup();
+			containerWs.remoteClose(1001, 'closing');
+			expect(dispatcherWs.closed).toEqual({ code: 1000, reason: 'Container disconnected' });
+			dispatcherWs.remoteClose(1000, 'Container disconnected');
+			expect(dispatcherLines(error)).toEqual([]);
+			expect(dispatcherLines(log)).toHaveLength(1);
+		});
+
+		it('logs a DO that vanishes after our close instead of replying at error', async () => {
+			const { serverWs, dispatcherWs } = await setup();
+			serverWs.remoteClose(1000, 'bye');
+			dispatcherWs.remoteClose(1006, '');
+			expect(dispatcherLines(error)).toEqual(['Dispatcher WebSocket closed: code=1006, reason=none, sessionId=s1']);
+			expect(dispatcherLines(log)).toEqual([]);
+		});
+
+		it('logs a mid-session drop at error, even with code 1000', async () => {
 			vi.useFakeTimers();
 			const { dispatcherWs } = await setup();
-			dispatcherWs.remoteClose(1006, '');
-			expect(dispatcherLines(error2)).toEqual(['Dispatcher WebSocket closed: code=1006, reason=none, sessionId=s1']);
-		} finally {
-			error2.mockRestore();
-			vi.useRealTimers();
-		}
+			dispatcherWs.remoteClose(1000, 'DO going away');
+			expect(dispatcherLines(error)).toEqual(['Dispatcher WebSocket closed: code=1000, reason=DO going away, sessionId=s1']);
+			expect(dispatcherLines(log)).toEqual([]);
+		});
 	});
 
 	it('propagates a container close to the client, replies to the container, with a fallback reason', async () => {
