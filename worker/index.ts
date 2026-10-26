@@ -81,8 +81,9 @@ export default {
 		const startedAt = Date.now();
 		let attempts = 0;
 		const colo = (request.cf as { colo?: string } | undefined)?.colo;
-		const countStart = (error?: unknown) =>
-			ctx.waitUntil(pushCounters(env, containerStartPoints(startResult(attempts, error), attempts, colo)));
+		// Called once the start has finished, so `attempts` is final.
+		const countStart = (failure?: { error: unknown }) =>
+			ctx.waitUntil(pushCounters(env, containerStartPoints(startResult(attempts, failure), attempts, colo)));
 		let container: DurableObjectStub<TranscriberContainer>;
 		try {
 			container = await startContainer(
@@ -115,7 +116,7 @@ export default {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
 			console.error(`Container failed to start after ${attempts} attempt(s) in ${Date.now() - startedAt}ms: ${errorMsg}, container=${containerInstanceId}${errorStack ? '\n' + errorStack : ''}`);
-			countStart(error);
+			countStart({ error });
 			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
 				status: 503,
 				statusText: 'Container Start Failed',

@@ -240,10 +240,12 @@ describe('startResult', () => {
 	});
 
 	it('tells a transient failure the retries could not absorb from one never retried', () => {
-		expect(startResult(3, new Error(TRANSIENT[0]))).toBe('gave_up');
+		expect(startResult(3, { error: new Error(TRANSIENT[0]) })).toBe('gave_up');
 		// A transient error on the first attempt that arrived too late to retry is still a give-up.
-		expect(startResult(1, new Error(TRANSIENT[2]))).toBe('gave_up');
-		expect(startResult(1, new Error('Durable Object is overloaded.'))).toBe('failed');
-		expect(startResult(1, new Error('something new'))).toBe('failed');
+		expect(startResult(1, { error: new Error(TRANSIENT[2]) })).toBe('gave_up');
+		expect(startResult(1, { error: new Error('Durable Object is overloaded.') })).toBe('failed');
+		expect(startResult(1, { error: new Error('something new') })).toBe('failed');
+		// A thrown value that is not an Error, even undefined, is still a failure.
+		expect(startResult(1, { error: undefined })).toBe('failed');
 	});
 });

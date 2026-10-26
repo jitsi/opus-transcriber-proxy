@@ -157,7 +157,8 @@ export async function startContainer<S>(
  */
 export type StartResult = 'ok' | 'rescued' | 'gave_up' | 'failed';
 
-export function startResult(attempts: number, error?: unknown): StartResult {
-	if (error === undefined) return attempts > 1 ? 'rescued' : 'ok';
+export function startResult(attempts: number, failure?: { error: unknown }): StartResult {
+	if (!failure) return attempts > 1 ? 'rescued' : 'ok';
+	const { error } = failure;
 	return isTransientStartFailure(error) ? 'gave_up' : 'failed';
 }
