@@ -160,8 +160,9 @@ Five things to know about the Worker's use of the SDK:
   attempt N failed transiently, retrying"), and both outcomes carry the attempt count and elapsed time
   ("Container started and ready: <id> after N attempt(s) in Xms" / "Container failed to start after N
   attempt(s) in Xms: <error>, container=<id>"). So each rescued start is exactly one ready line with
-  N > 1 (count those, not the retry warnings, of which a rescue writes N - 1), and each 503 is one
-  failed-to-start line. The ready line is written on every request, including those that find the
+  N > 1 (count those, not the retry warnings, of which a rescue writes N - 1), and each 503 for a start
+  failure is one failed-to-start line (the Worker also answers 503 when the container cannot be
+  reached after a successful start, which these lines do not cover). The ready line is written on every request, including those that find the
   container already running, so its elapsed time mixes cold starts with near-instant checks. The
   Worker has no metrics pipeline, so alerting on these is done from the logs.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries

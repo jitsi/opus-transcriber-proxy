@@ -170,6 +170,22 @@ describe('startWithRetries', () => {
 		expect(start).toHaveBeenCalledTimes(2);
 	});
 
+	it('applies the deadline to the jittered wait, not the base one', async () => {
+		const run = async (random: number) => {
+			let clock = 0;
+			const start = vi.fn(async () => {
+				clock += 4700;
+				throw new Error(TRANSIENT[2]);
+			});
+			await startWithRetries(start, { now: () => clock, sleep: async (ms) => void (clock += ms), random: () => random }).catch(() => {});
+			return start.mock.calls.length;
+		};
+		// The 250 ms base would end at 4950 ms, inside 5 s; jittered to 188 ms it still does, but
+		// jittered to 313 ms it would end at 5013 ms, so that retry is not started.
+		expect(await run(0)).toBe(2);
+		expect(await run(1)).toBe(1);
+	});
+
 	it('honours custom delays, including none', async () => {
 		sleeps.length = 0;
 		const failOnce = () => vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error(TRANSIENT[0])).mockResolvedValueOnce('ok');

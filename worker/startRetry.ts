@@ -118,10 +118,13 @@ export async function startWithRetries<T>(start: () => Promise<T>, options: Star
 			return await start();
 		} catch (error) {
 			const base = delays[attempt - 1];
-			if (base === undefined || !isTransientStartFailure(error) || now() + base > deadline) {
+			if (base === undefined || !isTransientStartFailure(error)) {
 				throw error;
 			}
 			const delay = Math.round(base * (1 - jitter + 2 * jitter * random()));
+			if (now() + delay > deadline) {
+				throw error;
+			}
 			options.onRetry?.(attempt, error, delay);
 			await sleep(delay);
 		}
