@@ -151,7 +151,8 @@ Four things to know about the Worker's use of the SDK:
   retries `startAndWaitForPorts` through a fresh stub (a stub can be broken after it throws) only for
   the platform's transient failures: the stub error's `retryable` flag, or as a fallback the messages
   for an object no longer active, storage unreachable, "internal error; reference" or a code-update
-  reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, so that the
+  reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, and starts
+  no retry once 5 s have passed since the first attempt began, so that the
   one-to-few-second platform recoveries are absorbed in the request instead of each costing the
   bridge a round of exponential backoff. Never retried:
   overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
@@ -493,7 +494,7 @@ The `worker/` directory contains:
 - `index.ts` - Cloudflare Worker entry point: the fetch router, plus the Durable Object class re-exports wrangler needs
 - `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, `/status` idle probe)
 - `routing.ts` - `selectContainerInstance` (session / pool / shared / autoscale)
-- `sessionProxy.ts` - `handleWebSocketWithDispatcher`: the client<->container pipe with dispatcher forwarding and the keepalive loop
+- `sessionProxy.ts` - `handleWebSocketWithDispatcher`: the client<->container pipe with dispatcher forwarding and the keepalive loop. Every socket it holds (client, container, Dispatcher DO) gets a reply to a received close frame, since our compatibility date has no automatic reply; a close from a dispatcher socket that has already been replaced does not start another reconnect
 - `containerEnv.ts` - container env vars, instance name, the `worker` info block
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
 - `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)

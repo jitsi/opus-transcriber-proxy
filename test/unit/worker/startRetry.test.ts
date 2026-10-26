@@ -66,6 +66,18 @@ describe('isTransientStartFailure', () => {
 		expect(isTransientStartFailure(flagged('Durable Object is overloaded. Requests queued for too long.', { retryable: true }))).toBe(false);
 	});
 
+	it('never retries a crashed or never-listening container or any overload wording, even if flagged retryable', () => {
+		for (const message of [
+			'Network connection lost.',
+			'The container is not listening on port 8080',
+			'Container exited with code 1',
+			'Too many requests queued for Durable Object',
+			"Durable Object's isolate exceeded its memory limit and was reset.",
+		]) {
+			expect(isTransientStartFailure(flagged(message, { retryable: true }))).toBe(false);
+		}
+	});
+
 	it('never retries capacity or rate limiting, even if flagged retryable', () => {
 		expect(isTransientStartFailure(flagged(NOT_TRANSIENT[0], { retryable: true }))).toBe(false);
 		expect(isTransientStartFailure(flagged(NOT_TRANSIENT[1], { retryable: true }))).toBe(false);
@@ -143,6 +155,19 @@ describe('startWithRetries', () => {
 		await startWithRetries(failTwice(), { sleep: async (ms) => void waits.push(ms), random: () => 0 });
 		await startWithRetries(failTwice(), { sleep: async (ms) => void waits.push(ms), random: () => 1 });
 		expect(waits).toEqual([188, 563, 313, 938]);
+	});
+
+	it('starts no retry that would begin after the deadline', async () => {
+		let clock = 0;
+		const start = vi.fn(async () => {
+			clock += 4600; // an attempt that spends most of a port wait before failing transiently
+			throw new Error(TRANSIENT[2]);
+		});
+		const failure = startWithRetries(start, { ...noJitter, now: () => clock, sleep: async (ms) => void (clock += ms) });
+		await expect(failure).rejects.toThrow(/internal error/);
+		// 4600 ms + the 250 ms wait is inside 5 s, so one retry runs; at 9450 ms the second retry
+		// (which the delays would still allow) is not started.
+		expect(start).toHaveBeenCalledTimes(2);
 	});
 
 	it('honours custom delays, including none', async () => {

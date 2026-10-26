@@ -32,8 +32,9 @@
  * worse; a container that crashed or never listened (the SDK surfaces that as the port probe's own
  * error); and anything unrecognised, since an unknown failure is not known to be transient. The
  * waits add about a second (250 + 750 ms, jittered) on top of the attempts themselves, each of which
- * can take as long as the port wait: small on purpose, since audio is buffering behind the upgrade
- * and the bridge redials on its own soon after.
+ * can take as long as the port wait, and no retry starts once 5 s have passed since the first
+ * attempt: small on purpose, since audio is buffering behind the upgrade and the bridge redials on
+ * its own soon after.
  */
 
 /** Fallback for errors without the stub flags: messages the platform used for failures that cleared. */
@@ -44,11 +45,22 @@ const TRANSIENT_START_FAILURES = [
 	'reset because its code was updated',
 ];
 
-/** Never retried, whatever flags they carry. */
+/**
+ * Never retried, whatever flags they carry (checked before the flags): capacity, rate limiting,
+ * overload in the wordings the platform uses for it, and a container that crashed or never listened,
+ * which the SDK's port probe surfaces as the raw connection error and which a network-class error
+ * can carry `retryable: true` across the Durable Object boundary.
+ */
 const NEVER_RETRY = [
 	'there is no container instance that can be provided',
 	'requesting too many containers per second',
 	'durable object is overloaded',
+	'requests queued for too long',
+	'too many requests queued',
+	'exceeded its memory limit',
+	'network connection lost',
+	'container is not listening',
+	'container exited',
 ];
 
 function messageOf(error: unknown): string {
@@ -70,6 +82,13 @@ export interface StartRetryOptions {
 	delaysMs?: number[];
 	/** Spread of the random jitter applied to each wait, as a fraction (0.25 means ±25%). */
 	jitter?: number;
+	/**
+	 * No retry is started once this long (ms) has passed since the first attempt began: each attempt
+	 * can take a whole port wait, and a transient error that arrives late must not hold the bridge
+	 * for several of them.
+	 */
+	deadlineMs?: number;
+	now?: () => number;
 	/** Injected for tests. */
 	sleep?: (ms: number) => Promise<void>;
 	random?: () => number;
@@ -79,6 +98,7 @@ export interface StartRetryOptions {
 
 const DEFAULT_DELAYS_MS = [250, 750];
 const DEFAULT_JITTER = 0.25;
+const DEFAULT_DEADLINE_MS = 5000;
 
 /**
  * Run `start` and, if it fails transiently, run it again after each delay in turn. Resolves with the
@@ -91,12 +111,14 @@ export async function startWithRetries<T>(start: () => Promise<T>, options: Star
 	const jitter = options.jitter ?? DEFAULT_JITTER;
 	const random = options.random ?? Math.random;
 	const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const now = options.now ?? Date.now;
+	const deadline = now() + (options.deadlineMs ?? DEFAULT_DEADLINE_MS);
 	for (let attempt = 1; ; attempt++) {
 		try {
 			return await start();
 		} catch (error) {
 			const base = delays[attempt - 1];
-			if (base === undefined || !isTransientStartFailure(error)) {
+			if (base === undefined || !isTransientStartFailure(error) || now() + base > deadline) {
 				throw error;
 			}
 			const delay = Math.round(base * (1 - jitter + 2 * jitter * random()));
