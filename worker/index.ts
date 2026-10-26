@@ -109,7 +109,7 @@ export default {
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
-			console.error(`Container failed to start after ${attempts} attempt(s) in ${Date.now() - startedAt}ms: ${errorMsg}${errorStack ? '\n' + errorStack : ''}`);
+			console.error(`Container failed to start after ${attempts} attempt(s) in ${Date.now() - startedAt}ms: ${errorMsg}, container=${containerInstanceId}${errorStack ? '\n' + errorStack : ''}`);
 			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
 				status: 503,
 				statusText: 'Container Start Failed',

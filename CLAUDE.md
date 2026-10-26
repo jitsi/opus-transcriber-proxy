@@ -117,7 +117,7 @@ npm run cf:tail            # Tail logs
 
 The worker code is in `worker/` and uses `@cloudflare/containers` to run the Node.js server in a container.
 
-Four things to know about the Worker's use of the SDK:
+Five things to know about the Worker's use of the SDK:
 
 - **How it is really deployed, and which lockfile that uses.** Production, staging and dev are
   deployed by the Jenkins job `deploy-cloudflare-opus-transcriber-proxy`, which runs
@@ -152,15 +152,18 @@ Four things to know about the Worker's use of the SDK:
   the platform's transient failures: the stub error's `retryable` flag, or as a fallback the messages
   for an object no longer active, storage unreachable, "internal error; reference" or a code-update
   reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, and starts
-  no retry once 5 s have passed since the first attempt began, so that the
+  no retry whose wait would end more than 5 s after the first attempt began, so that the
   one-to-few-second platform recoveries are absorbed in the request instead of each costing the
   bridge a round of exponential backoff. Never retried:
   overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
   crashed or never listened, and anything unrecognised. The Worker logs each retry ("Container start
   attempt N failed transiently, retrying"), and both outcomes carry the attempt count and elapsed time
   ("Container started and ready: <id> after N attempt(s) in Xms" / "Container failed to start after N
-  attempt(s) in Xms"), so a start the retry rescued is one line with N > 1. The Worker has no metrics
-  pipeline, so alerting on these is done from the logs.
+  attempt(s) in Xms: <error>, container=<id>"). So each rescued start is exactly one ready line with
+  N > 1 (count those, not the retry warnings, of which a rescue writes N - 1), and each 503 is one
+  failed-to-start line. The ready line is written on every request, including those that find the
+  container already running, so its elapsed time mixes cold starts with near-instant checks. The
+  Worker has no metrics pipeline, so alerting on these is done from the logs.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
