@@ -153,7 +153,7 @@ Four things to know about the Worker's use of the SDK:
   for an object no longer active, storage unreachable, "internal error; reference" or a code-update
   reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, so that the
   one-to-few-second platform recoveries are absorbed in the request instead of each costing the
-  bridge a round of exponential backoff, and stops once the client has gone. Never retried:
+  bridge a round of exponential backoff. Never retried:
   overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
   crashed or never listened, and anything unrecognised.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries

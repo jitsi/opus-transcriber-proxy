@@ -70,8 +70,6 @@ export interface StartRetryOptions {
 	delaysMs?: number[];
 	/** Spread of the random jitter applied to each wait, as a fraction (0.25 means ±25%). */
 	jitter?: number;
-	/** Stop retrying once this is aborted (the client gave up on the request). */
-	signal?: AbortSignal;
 	/** Injected for tests. */
 	sleep?: (ms: number) => Promise<void>;
 	random?: () => number;
@@ -85,7 +83,7 @@ const DEFAULT_JITTER = 0.25;
 /**
  * Run `start` and, if it fails transiently, run it again after each delay in turn. Resolves with the
  * first success; rejects with the first non-transient error immediately, or with the last transient
- * error once the delays are used up or the signal is aborted. Jitter keeps sessions that failed
+ * error once the delays are used up. Jitter keeps sessions that failed
  * together in a platform blip from retrying in lockstep.
  */
 export async function startWithRetries<T>(start: () => Promise<T>, options: StartRetryOptions = {}): Promise<T> {
@@ -98,15 +96,30 @@ export async function startWithRetries<T>(start: () => Promise<T>, options: Star
 			return await start();
 		} catch (error) {
 			const base = delays[attempt - 1];
-			if (base === undefined || options.signal?.aborted || !isTransientStartFailure(error)) {
+			if (base === undefined || !isTransientStartFailure(error)) {
 				throw error;
 			}
 			const delay = Math.round(base * (1 - jitter + 2 * jitter * random()));
 			options.onRetry?.(attempt, error, delay);
 			await sleep(delay);
-			if (options.signal?.aborted) {
-				throw error;
-			}
 		}
 	}
+}
+
+/**
+ * Start a container through `startWithRetries`, creating a **fresh stub for every attempt** with
+ * `makeStub` (Cloudflare's guidance: a Durable Object stub can be broken after it throws, so a retry
+ * through the same one would fail the same way), and resolve with the stub whose start succeeded,
+ * which is the one the caller must use for the request that follows.
+ */
+export async function startContainer<S>(
+	makeStub: () => S,
+	start: (stub: S) => Promise<unknown>,
+	options: StartRetryOptions = {},
+): Promise<S> {
+	return startWithRetries(async () => {
+		const stub = makeStub();
+		await start(stub);
+		return stub;
+	}, options);
 }

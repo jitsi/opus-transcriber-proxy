@@ -5,7 +5,7 @@ import { TranscriberContainer } from './TranscriberContainer';
 import { buildContainerEnvVars } from './containerEnv';
 import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
-import { startWithRetries } from './startRetry';
+import { startContainer } from './startRetry';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -65,11 +65,13 @@ export default {
 		let attempts = 0;
 		let container: DurableObjectStub<TranscriberContainer>;
 		try {
-			container = await startWithRetries(
-				async () => {
+			container = await startContainer(
+				() => {
 					attempts++;
-					const stub = getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
-					await stub.startAndWaitForPorts({
+					return getContainer<TranscriberContainer>(env.TRANSCRIBER, containerInstanceId);
+				},
+				(stub) =>
+					stub.startAndWaitForPorts({
 						// The class-level envVars already carry the instance name from ctx.id.name; passing
 						// it explicitly with the name the Worker routed by keeps a request-driven start
 						// independent of whether the Durable Object's id arrived with its name.
@@ -79,11 +81,8 @@ export default {
 						cancellationOptions: {
 							waitInterval: 100, // Poll every 100ms (default: 1000ms)
 						},
-					});
-					return stub;
-				},
+					}),
 				{
-					signal: request.signal,
 					onRetry: (attempt, error, delayMs) => {
 						const msg = error instanceof Error ? error.message : String(error);
 						console.warn(`Container start attempt ${attempt} failed transiently, retrying in ${delayMs}ms: ${msg}, container=${containerInstanceId}`);
