@@ -176,5 +176,37 @@ export function containerStartPoints(result: StartResult, attempts: number, colo
 			attributes: { result: r, ...where },
 		})),
 		{ name: 'otp_worker_container_start_retries', value: Math.max(0, attempts - 1), attributes: where },
+		// Kept alive here for the same reason: the start push is the frequent one.
+		...unreachableSeries(undefined, colo),
 	];
+}
+
+/** The request path that found the container unreachable: straight through, or the dispatcher proxy. */
+export type UnreachablePath = 'direct' | 'dispatcher';
+/** `fetch_failed`: the request to the started container threw. `no_upgrade`: it answered an upgrade with something other than 101. */
+export type UnreachableReason = 'fetch_failed' | 'no_upgrade';
+
+const UNREACHABLE: readonly [UnreachablePath, UnreachableReason][] = [
+	['direct', 'fetch_failed'],
+	['direct', 'no_upgrade'],
+	['dispatcher', 'fetch_failed'],
+	['dispatcher', 'no_upgrade'],
+];
+
+function unreachableSeries(hit: [UnreachablePath, UnreachableReason] | undefined, colo: string | undefined): CounterPoint[] {
+	const where = { colo: colo || 'unknown' };
+	return UNREACHABLE.map(([path, reason]) => ({
+		name: 'otp_worker_container_unreachable',
+		value: hit && hit[0] === path && hit[1] === reason ? 1 : 0,
+		attributes: { path, reason, ...where },
+	}));
+}
+
+/**
+ * The counter for a container that had started (and was counted as such) but then failed the
+ * request itself, which the Worker answers with a 503 or passes on:
+ * `otp_worker_container_unreachable{path, reason, colo}` by one, with zeros for its other series.
+ */
+export function containerUnreachablePoints(path: UnreachablePath, reason: UnreachableReason, colo: string | undefined): CounterPoint[] {
+	return unreachableSeries([path, reason], colo);
 }

@@ -22,7 +22,7 @@ import { buildContainerEnvVars } from './containerEnv';
 import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
 import { startContainer, startResult } from './startRetry';
-import { containerStartPoints, pushCounters } from './metrics';
+import { containerStartPoints, containerUnreachablePoints, pushCounters } from './metrics';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -157,8 +157,13 @@ export default {
 
 		// Forward request directly to container (pass-through mode)
 		try {
-			return await container.fetch(request);
+			const response = await container.fetch(request);
+			if (isWebSocketUpgrade && response.status !== 101) {
+				ctx.waitUntil(pushCounters(env, containerUnreachablePoints('direct', 'no_upgrade', colo)));
+			}
+			return response;
 		} catch (error) {
+			ctx.waitUntil(pushCounters(env, containerUnreachablePoints('direct', 'fetch_failed', colo)));
 			// Container connection failed
 			const errorMsg = error instanceof Error ? error.message : 'Container connection failed';
 			const errorStack = error instanceof Error ? error.stack : undefined;

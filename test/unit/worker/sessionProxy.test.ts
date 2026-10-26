@@ -121,6 +121,8 @@ interface SetupOptions {
 	dispatcherFetch?: () => Promise<unknown>;
 	/** Omit the DISPATCHER_DO binding entirely. */
 	noDispatcherBinding?: boolean;
+	/** Extra env vars, e.g. OTLP_ENDPOINT to have metrics pushed. */
+	env?: Record<string, string>;
 }
 
 function prepare(opts: SetupOptions = {}) {
@@ -134,6 +136,7 @@ function prepare(opts: SetupOptions = {}) {
 	const doFetch = vi.fn(opts.dispatcherFetch ?? (async () => ({ webSocket: dispatcherWs })));
 	const env = {
 		...(opts.noDispatcherBinding ? {} : { DISPATCHER_DO: { idFromName: vi.fn(() => 'do-id'), get: vi.fn(() => ({ fetch: doFetch })) } }),
+		...opts.env,
 	};
 	const ctx = { waitUntil: vi.fn() };
 	const request = new Request('https://opus.example/transcribe?sessionId=s1', { headers: { Upgrade: 'websocket' } });
@@ -191,6 +194,20 @@ describe('handleWebSocketWithDispatcher: setup', () => {
 		});
 		expect(res.status).toBe(503);
 		expect(serverWs.closed).toEqual({ code: 1011, reason: 'Container unreachable: boom' });
+	});
+
+	it.each([
+		['fetch_failed', async () => Promise.reject(new Error('boom'))],
+		['no_upgrade', async () => new Response('nope', { status: 500 })],
+	])('counts a container that is unreachable after starting (%s)', async (reason, containerFetch) => {
+		const collector = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200, body: null }));
+		vi.stubGlobal('fetch', collector);
+		const { ctx } = await setup({ containerFetch, env: { OTLP_ENDPOINT: 'https://collector.example' } });
+		await Promise.all(ctx.waitUntil.mock.calls.map(([p]) => p));
+		const sent = collector.mock.calls.map(([, init]) => JSON.parse(init.body as string));
+		const points = sent.flatMap((body) => body.resourceMetrics[0].scopeMetrics[0].metrics.flatMap((m: any) => m.sum.dataPoints));
+		const hit = points.find((p: any) => p.asInt === '1');
+		expect(Object.fromEntries(hit.attributes.map((a: any) => [a.key, a.value.stringValue]))).toMatchObject({ path: 'dispatcher', reason });
 	});
 });
 

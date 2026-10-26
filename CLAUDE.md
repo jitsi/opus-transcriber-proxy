@@ -162,7 +162,8 @@ Five things to know about the Worker's use of the SDK:
   attempt(s) in Xms: <error>, container=<id>"). So each rescued start is exactly one ready line with
   N > 1 (count those, not the retry warnings, of which a rescue writes N - 1), and each 503 for a start
   failure is one failed-to-start line (the Worker also answers 503 when the container cannot be
-  reached after a successful start, which these lines do not cover). The ready line is written on
+  reached after a successful start, which these lines do not cover, but the unreachable counter
+  below does). The ready line is written on
   every request, including those that find the container already running, so its elapsed time
   mixes cold starts with near-instant checks. Each start is also counted, from the Worker itself
   (`worker/metrics.ts`): `otp_worker_container_starts{result, colo}` (`result` = `ok`, `rescued`,
@@ -173,7 +174,12 @@ Five things to know about the Worker's use of the SDK:
   running total, which `rate()` cannot count, and forgets a stream idle for a day, so a rare
   failure would otherwise usually be invisible; the frequent `ok` pushes keep each colo's streams
   alive at zero. The limit: in a colo with no starts for a day, the first failure after the gap is
-  still unseen (its push recreates the streams, so later ones count). They are OTLP **delta** counters, pushed one POST per start inside
+  still unseen (its push recreates the streams, so later ones count). A container that started but
+  then failed the request is counted separately, as `otp_worker_container_unreachable{path, reason,
+  colo}` (`path` = `direct` or `dispatcher`, `reason` = `fetch_failed` when the fetch to it threw,
+  `no_upgrade` when it answered an upgrade with something other than 101), with its series kept
+  alive at zero by the start pushes; those requests count as `ok` starts too. They are OTLP
+  **delta** counters, pushed one POST per start (and per unreachable container) inside
   `ctx.waitUntil` with the `OTLP_*` settings the Worker forwards to the container, and hand-built
   because the OpenTelemetry SDK does not run in a Worker (and the 8x8 Worker publisher is not
   public). Every isolate sends the same series, with no instance identity: isolates are

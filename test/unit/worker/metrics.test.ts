@@ -19,7 +19,7 @@
  * that a failed push is only logged.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildCounterPayload, containerStartPoints, pushCounters } from '../../../worker/metrics';
+import { buildCounterPayload, containerStartPoints, containerUnreachablePoints, pushCounters } from '../../../worker/metrics';
 
 const ENV = {
 	OTLP_ENDPOINT: 'https://collector.example/',
@@ -174,7 +174,11 @@ describe('pushCounters', () => {
 
 describe('containerStartPoints', () => {
 	const counts = (points: ReturnType<typeof containerStartPoints>) =>
-		Object.fromEntries(points.map((p) => [`${p.name}{${p.attributes?.result ?? ''}}`, p.value]));
+		Object.fromEntries(
+			points
+				.filter((p) => p.name !== 'otp_worker_container_unreachable')
+				.map((p) => [`${p.name}{${p.attributes?.result ?? ''}}`, p.value]),
+		);
 
 	it('counts the start under its result, and every other result and the retries as zero', () => {
 		expect(counts(containerStartPoints('ok', 1, 'IAD'))).toEqual({
@@ -195,5 +199,24 @@ describe('containerStartPoints', () => {
 
 	it('labels a request with no colo as unknown', () => {
 		expect(containerStartPoints('failed', 1, undefined).every((p) => p.attributes?.colo === 'unknown')).toBe(true);
+	});
+
+	it('keeps the unreachable series alive at zero', () => {
+		const unreachable = containerStartPoints('ok', 1, 'IAD').filter((p) => p.name === 'otp_worker_container_unreachable');
+		expect(unreachable).toHaveLength(4);
+		expect(unreachable.every((p) => p.value === 0)).toBe(true);
+	});
+});
+
+describe('containerUnreachablePoints', () => {
+	it('counts the one path and reason, and the other series as zero', () => {
+		const points = containerUnreachablePoints('dispatcher', 'no_upgrade', 'LAX');
+		expect(points.map((p) => [p.attributes?.path, p.attributes?.reason, p.value])).toEqual([
+			['direct', 'fetch_failed', 0],
+			['direct', 'no_upgrade', 0],
+			['dispatcher', 'fetch_failed', 0],
+			['dispatcher', 'no_upgrade', 1],
+		]);
+		expect(points.every((p) => p.name === 'otp_worker_container_unreachable' && p.attributes?.colo === 'LAX')).toBe(true);
 	});
 });
