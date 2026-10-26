@@ -19,7 +19,7 @@
  * with which delays, and what the caller finally sees.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { isTransientStartFailure, startContainer, startWithRetries } from '../../../worker/startRetry';
+import { isTransientStartFailure, startContainer, startResult, startWithRetries } from '../../../worker/startRetry';
 
 const TRANSIENT = [
 	'Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.',
@@ -230,5 +230,20 @@ describe('startContainer', () => {
 		const failure = new Error(NOT_TRANSIENT[0]);
 		await expect(startContainer(makeStub, async () => Promise.reject(failure), noJitter)).rejects.toBe(failure);
 		expect(makeStub).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('startResult', () => {
+	it('tells a first-try start from one a retry rescued', () => {
+		expect(startResult(1)).toBe('ok');
+		expect(startResult(2)).toBe('rescued');
+	});
+
+	it('tells a transient failure the retries could not absorb from one never retried', () => {
+		expect(startResult(3, new Error(TRANSIENT[0]))).toBe('gave_up');
+		// A transient error on the first attempt that arrived too late to retry is still a give-up.
+		expect(startResult(1, new Error(TRANSIENT[2]))).toBe('gave_up');
+		expect(startResult(1, new Error('Durable Object is overloaded.'))).toBe('failed');
+		expect(startResult(1, new Error('something new'))).toBe('failed');
 	});
 });

@@ -21,7 +21,8 @@ import { TranscriberContainer } from './TranscriberContainer';
 import { buildContainerEnvVars } from './containerEnv';
 import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
-import { startContainer } from './startRetry';
+import { startContainer, startResult } from './startRetry';
+import { containerStartPoints, pushCounters } from './metrics';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -79,6 +80,9 @@ export default {
 		// a second of waits in between, before the bridge is told to come back.
 		const startedAt = Date.now();
 		let attempts = 0;
+		const colo = (request.cf as { colo?: string } | undefined)?.colo;
+		const countStart = (error?: unknown) =>
+			ctx.waitUntil(pushCounters(env, containerStartPoints(startResult(attempts, error), attempts, colo)));
 		let container: DurableObjectStub<TranscriberContainer>;
 		try {
 			container = await startContainer(
@@ -106,10 +110,12 @@ export default {
 				},
 			);
 			console.log(`Container started and ready: ${containerInstanceId} after ${attempts} attempt(s) in ${Date.now() - startedAt}ms`);
+			countStart();
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;
 			console.error(`Container failed to start after ${attempts} attempt(s) in ${Date.now() - startedAt}ms: ${errorMsg}, container=${containerInstanceId}${errorStack ? '\n' + errorStack : ''}`);
+			countStart(error);
 			return new Response(`Service Unavailable: Container failed to start (${errorMsg})`, {
 				status: 503,
 				statusText: 'Container Start Failed',

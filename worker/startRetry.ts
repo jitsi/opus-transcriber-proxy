@@ -148,3 +148,16 @@ export async function startContainer<S>(
 		return stub;
 	}, options);
 }
+
+/**
+ * How a start ended, for the `result` label of the start counter: `ok` on the first attempt
+ * (including a container that was already running), `rescued` by a retry, `gave_up` when the last
+ * failure was transient but no retry was left (attempts or time), and `failed` when it was not one
+ * to retry at all (overload, capacity, a crashed container, anything unrecognised).
+ */
+export type StartResult = 'ok' | 'rescued' | 'gave_up' | 'failed';
+
+export function startResult(attempts: number, error?: unknown): StartResult {
+	if (error === undefined) return attempts > 1 ? 'rescued' : 'ok';
+	return isTransientStartFailure(error) ? 'gave_up' : 'failed';
+}
