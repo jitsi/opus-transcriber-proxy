@@ -105,7 +105,7 @@ export default {
 					},
 				},
 			);
-			console.log(`Container started and ready: ${containerInstanceId}`);
+			console.log(`Container started and ready: ${containerInstanceId} after ${attempts} attempt(s) in ${Date.now() - startedAt}ms`);
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : 'Container failed to start';
 			const errorStack = error instanceof Error ? error.stack : undefined;

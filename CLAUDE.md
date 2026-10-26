@@ -156,7 +156,11 @@ Four things to know about the Worker's use of the SDK:
   one-to-few-second platform recoveries are absorbed in the request instead of each costing the
   bridge a round of exponential backoff. Never retried:
   overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
-  crashed or never listened, and anything unrecognised.
+  crashed or never listened, and anything unrecognised. The Worker logs each retry ("Container start
+  attempt N failed transiently, retrying"), and both outcomes carry the attempt count and elapsed time
+  ("Container started and ready: <id> after N attempt(s) in Xms" / "Container failed to start after N
+  attempt(s) in Xms"), so a start the retry rescued is one line with N > 1. The Worker has no metrics
+  pipeline, so alerting on these is done from the logs.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
