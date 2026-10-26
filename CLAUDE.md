@@ -162,9 +162,10 @@ Five things to know about the Worker's use of the SDK:
   attempt(s) in Xms: <error>, container=<id>"). So each rescued start is exactly one ready line with
   N > 1 (count those, not the retry warnings, of which a rescue writes N - 1), and each 503 for a start
   failure is one failed-to-start line (the Worker also answers 503 when the container cannot be
-  reached after a successful start, which these lines do not cover). The ready line is written on every request, including those that find the
-  container already running, so its elapsed time mixes cold starts with near-instant checks. The
-  Worker has no metrics pipeline, so alerting on these is done from the logs.
+  reached after a successful start, which these lines do not cover). The ready line is written on
+  every request, including those that find the container already running, so its elapsed time
+  mixes cold starts with near-instant checks. The Worker has no metrics pipeline, so alerting on
+  these is done from the logs.
 - **Two SDK details the DO class depends on.** `TranscriberContainer.envVars` carries
   `CONTAINER_INSTANCE_NAME` (from `ctx.id.name`) so every start path, including the SDK's
   start-on-fetch, gives the container the same identity. And any `containerFetch` response body must
