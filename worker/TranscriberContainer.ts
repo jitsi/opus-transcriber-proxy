@@ -17,6 +17,7 @@
 import { Container } from '@cloudflare/containers';
 import type { Env } from './env';
 import { buildContainerEnvVars, instanceNameEnv } from './containerEnv';
+import { CONTAINER_FAILURE_HEADER, type ContainerFailureReason } from './metrics';
 
 /**
  * The platform error messages the SDK's `containerFetch` classifies a failed start by, copied from
@@ -36,12 +37,22 @@ export function containerStartFailureResponse(e: unknown): Response {
 	const message = e instanceof Error ? e.message : String(e);
 	const lower = message.toLowerCase();
 	if (lower.includes(SDK_NO_CONTAINER_INSTANCE_ERROR)) {
-		return new Response('There is no Container instance available at this time.', { status: 503 });
+		return containerFailure('There is no Container instance available at this time.', 503, 'start_failed');
 	}
 	if (lower.includes(SDK_RATE_LIMITED_ERROR)) {
-		return new Response(message, { status: 429 });
+		return containerFailure(message, 429, 'start_failed');
 	}
-	return new Response(`Failed to start container: ${message}`, { status: 500 });
+	return containerFailure(`Failed to start container: ${message}`, 500, 'start_failed');
+}
+
+/**
+ * A failure of the Durable Object's own (start, port, proxy), as opposed to an answer from the
+ * container's server, marked with `CONTAINER_FAILURE_HEADER` so the Worker can count it apart
+ * from the server's deliberate refusals (an /agent upgrade answered 400 or 503, a disabled
+ * endpoint's 404), which pass through unmarked.
+ */
+function containerFailure(body: string, status: number, reason: ContainerFailureReason): Response {
+	return new Response(body, { status, headers: { [CONTAINER_FAILURE_HEADER]: reason } });
 }
 
 /**
@@ -127,7 +138,8 @@ export class TranscriberContainer extends Container<Env> {
 	 *
 	 * Failures are returned as responses, not thrown, with the status `containerFetch` would
 	 * give them (503 when no container instance is available, 429 when rate limited, 500
-	 * otherwise), so the Worker's `status !== 101` handling and its log lines are unchanged.
+	 * otherwise), so the Worker's `status !== 101` handling and its log lines are unchanged, and
+	 * carry `CONTAINER_FAILURE_HEADER` so the Worker counts them as an unreachable container.
 	 *
 	 * The body below mirrors `containerFetch` in @cloudflare/containers 0.3.7 (URL rewrite,
 	 * port lookup, error texts). None of that is covered by the SDK's types, so re-read
@@ -140,7 +152,7 @@ export class TranscriberContainer extends Container<Env> {
 		const port = this.defaultPort;
 		const container = this.ctx.container;
 		if (!container) {
-			return new Response('Durable Object has no container binding', { status: 500 });
+			return containerFailure('Durable Object has no container binding', 500, 'disconnected');
 		}
 		if (!container.running || (await this.getState()).status !== 'healthy') {
 			// Every other start is logged by the Worker; this one would otherwise be invisible, and a
@@ -161,10 +173,10 @@ export class TranscriberContainer extends Container<Env> {
 				throw e;
 			}
 			if (e.message.includes('Network connection lost.')) {
-				return new Response('Container suddenly disconnected, try again', { status: 500 });
+				return containerFailure('Container suddenly disconnected, try again', 500, 'disconnected');
 			}
 			console.error(`Error proxying WebSocket upgrade to container ${this.ctx.id}:`, e);
-			return new Response(`Error proxying request to container: ${e.message}`, { status: 500 });
+			return containerFailure(`Error proxying request to container: ${e.message}`, 500, 'disconnected');
 		}
 	}
 

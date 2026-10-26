@@ -19,7 +19,15 @@
  * that a failed push is only logged.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildCounterPayload, containerStartPoints, containerUnreachablePoints, pushCounters } from '../../../worker/metrics';
+import {
+	buildCounterPayload,
+	CONTAINER_FAILURE_HEADER,
+	containerFailureReason,
+	containerStartPoints,
+	containerUnreachablePoints,
+	countLater,
+	pushCounters,
+} from '../../../worker/metrics';
 
 const ENV = {
 	OTLP_ENDPOINT: 'https://collector.example/',
@@ -203,20 +211,58 @@ describe('containerStartPoints', () => {
 
 	it('keeps the unreachable series alive at zero', () => {
 		const unreachable = containerStartPoints('ok', 1, 'IAD').filter((p) => p.name === 'otp_worker_container_unreachable');
-		expect(unreachable).toHaveLength(4);
+		expect(unreachable).toHaveLength(6);
 		expect(unreachable.every((p) => p.value === 0)).toBe(true);
 	});
 });
 
 describe('containerUnreachablePoints', () => {
 	it('counts the one path and reason, and the other series as zero', () => {
-		const points = containerUnreachablePoints('dispatcher', 'no_upgrade', 'LAX');
+		const points = containerUnreachablePoints('dispatcher', 'disconnected', 'LAX');
 		expect(points.map((p) => [p.attributes?.path, p.attributes?.reason, p.value])).toEqual([
-			['direct', 'fetch_failed', 0],
-			['direct', 'no_upgrade', 0],
-			['dispatcher', 'fetch_failed', 0],
-			['dispatcher', 'no_upgrade', 1],
+			['direct', 'stub_failed', 0],
+			['direct', 'start_failed', 0],
+			['direct', 'disconnected', 0],
+			['dispatcher', 'stub_failed', 0],
+			['dispatcher', 'start_failed', 0],
+			['dispatcher', 'disconnected', 1],
 		]);
 		expect(points.every((p) => p.name === 'otp_worker_container_unreachable' && p.attributes?.colo === 'LAX')).toBe(true);
+	});
+});
+
+describe('containerFailureReason', () => {
+	it("reads the Durable Object's own failure mark", () => {
+		expect(containerFailureReason(new Response('x', { status: 500, headers: { [CONTAINER_FAILURE_HEADER]: 'disconnected' } }))).toBe('disconnected');
+		expect(containerFailureReason(new Response('x', { status: 503, headers: { [CONTAINER_FAILURE_HEADER]: 'start_failed' } }))).toBe('start_failed');
+	});
+
+	it("ignores the container server's own answers, and an unknown mark", () => {
+		expect(containerFailureReason(new Response('agent refused', { status: 503 }))).toBeUndefined();
+		expect(containerFailureReason(new Response('x', { status: 500, headers: { [CONTAINER_FAILURE_HEADER]: 'other' } }))).toBeUndefined();
+	});
+});
+
+describe('countLater', () => {
+	it('hands the push to waitUntil', () => {
+		const ctx = { waitUntil: vi.fn() };
+		countLater(ctx as any, {}, () => [{ name: 'x', value: 1 }]);
+		expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+	});
+
+	it('never throws into the request, whether building the points or scheduling them fails', () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const ctx = {
+			waitUntil: vi.fn(() => {
+				throw new Error('context ended');
+			}),
+		};
+		expect(() => countLater(ctx as any, {}, () => [])).not.toThrow();
+		expect(() =>
+			countLater({ waitUntil: vi.fn() } as any, {}, () => {
+				throw new Error('bad label');
+			}),
+		).not.toThrow();
+		expect(error).toHaveBeenCalledTimes(2);
 	});
 });

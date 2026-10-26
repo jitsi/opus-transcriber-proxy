@@ -174,11 +174,16 @@ Five things to know about the Worker's use of the SDK:
   running total, which `rate()` cannot count, and forgets a stream idle for a day, so a rare
   failure would otherwise usually be invisible; the frequent `ok` pushes keep each colo's streams
   alive at zero. The limit: in a colo with no starts for a day, the first failure after the gap is
-  still unseen (its push recreates the streams, so later ones count). A container that started but
-  then failed the request is counted separately, as `otp_worker_container_unreachable{path, reason,
-  colo}` (`path` = `direct` or `dispatcher`, `reason` = `fetch_failed` when the fetch to it threw,
-  `no_upgrade` when it answered an upgrade with something other than 101), with its series kept
-  alive at zero by the start pushes; those requests count as `ok` starts too. They are OTLP
+  still unseen (its push recreates the streams, so later ones count). Only WebSocket upgrades are
+  counted (they are the sessions; a health check is not a start). A container that started but
+  could not then take the upgrade is counted separately, as `otp_worker_container_unreachable{path,
+  reason, colo}`: `path` = `direct` or `dispatcher`; `reason` = `stub_failed` when the call to the
+  Durable Object threw, or the reason `TranscriberContainer.fetch` marks its own failure responses
+  with in `X-Container-Failure` (`start_failed` when it had to start the container again and could
+  not, `disconnected` when the port could not be reached). The container server's own refusals,
+  such as an `/agent` upgrade answered 400 or 503, carry no mark and are not counted. Its series are
+  kept alive at zero by the start pushes; those requests count as `ok` starts too. Metric code goes
+  through `countLater`, which cannot throw into the request. They are OTLP
   **delta** counters, pushed one POST per start (and per unreachable container) inside
   `ctx.waitUntil` with the `OTLP_*` settings the Worker forwards to the container, and hand-built
   because the OpenTelemetry SDK does not run in a Worker (and the 8x8 Worker publisher is not
@@ -527,7 +532,7 @@ See README.md for complete configuration reference.
 
 The `worker/` directory contains:
 - `index.ts` - Cloudflare Worker entry point: the fetch router, plus the Durable Object class re-exports wrangler needs
-- `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, `/status` idle probe)
+- `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, which marks its own failure responses with `X-Container-Failure`; `/status` idle probe)
 - `routing.ts` - `selectContainerInstance` (session / pool / shared / autoscale)
 - `sessionProxy.ts` - `handleWebSocketWithDispatcher`: the client<->container pipe with dispatcher forwarding and the keepalive loop. Every socket it holds (client, container, Dispatcher DO) gets a reply to a received close frame, since our compatibility date has no automatic reply; a close from a dispatcher socket that has already been replaced does not start another reconnect
 - `containerEnv.ts` - container env vars, instance name, the `worker` info block

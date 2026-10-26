@@ -197,8 +197,9 @@ describe('handleWebSocketWithDispatcher: setup', () => {
 	});
 
 	it.each([
-		['fetch_failed', async () => Promise.reject(new Error('boom'))],
-		['no_upgrade', async () => new Response('nope', { status: 500 })],
+		['stub_failed', async () => Promise.reject(new Error('boom'))],
+		['disconnected', async () => new Response('x', { status: 500, headers: { 'X-Container-Failure': 'disconnected' } })],
+		['start_failed', async () => new Response('x', { status: 503, headers: { 'X-Container-Failure': 'start_failed' } })],
 	])('counts a container that is unreachable after starting (%s)', async (reason, containerFetch) => {
 		const collector = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200, body: null }));
 		vi.stubGlobal('fetch', collector);
@@ -208,6 +209,17 @@ describe('handleWebSocketWithDispatcher: setup', () => {
 		const points = sent.flatMap((body) => body.resourceMetrics[0].scopeMetrics[0].metrics.flatMap((m: any) => m.sum.dataPoints));
 		const hit = points.find((p: any) => p.asInt === '1');
 		expect(Object.fromEntries(hit.attributes.map((a: any) => [a.key, a.value.stringValue]))).toMatchObject({ path: 'dispatcher', reason });
+	});
+
+	it("does not count the container server's own refusal of an upgrade as unreachable", async () => {
+		const collector = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200, body: null }));
+		vi.stubGlobal('fetch', collector);
+		const { ctx } = await setup({
+			containerFetch: async () => new Response('agent not configured', { status: 503 }),
+			env: { OTLP_ENDPOINT: 'https://collector.example' },
+		});
+		expect(ctx.waitUntil).not.toHaveBeenCalled();
+		expect(collector).not.toHaveBeenCalled();
 	});
 });
 

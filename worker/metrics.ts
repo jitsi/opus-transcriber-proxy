@@ -183,15 +183,28 @@ export function containerStartPoints(result: StartResult, attempts: number, colo
 
 /** The request path that found the container unreachable: straight through, or the dispatcher proxy. */
 export type UnreachablePath = 'direct' | 'dispatcher';
-/** `fetch_failed`: the request to the started container threw. `no_upgrade`: it answered an upgrade with something other than 101. */
-export type UnreachableReason = 'fetch_failed' | 'no_upgrade';
 
-const UNREACHABLE: readonly [UnreachablePath, UnreachableReason][] = [
-	['direct', 'fetch_failed'],
-	['direct', 'no_upgrade'],
-	['dispatcher', 'fetch_failed'],
-	['dispatcher', 'no_upgrade'],
-];
+/**
+ * Why the Durable Object could not hand the request to the container, as it marks its own failure
+ * responses: `start_failed` when the container was not ready and its start there failed (capacity,
+ * rate limit or other), `disconnected` when the container's port could not be reached.
+ */
+export type ContainerFailureReason = 'start_failed' | 'disconnected';
+/** `stub_failed`: the call to the Durable Object itself threw. */
+export type UnreachableReason = ContainerFailureReason | 'stub_failed';
+
+/** Response header the Durable Object sets on its own failures; a container server's answer never carries it. */
+export const CONTAINER_FAILURE_HEADER = 'X-Container-Failure';
+
+/** The Durable Object's failure reason on a response, or undefined for anything the container's server answered. */
+export function containerFailureReason(response: Response): ContainerFailureReason | undefined {
+	const value = response.headers.get(CONTAINER_FAILURE_HEADER);
+	return value === 'start_failed' || value === 'disconnected' ? value : undefined;
+}
+
+const UNREACHABLE: readonly [UnreachablePath, UnreachableReason][] = (['direct', 'dispatcher'] as const).flatMap(
+	(path) => (['stub_failed', 'start_failed', 'disconnected'] as const).map((reason): [UnreachablePath, UnreachableReason] => [path, reason]),
+);
 
 function unreachableSeries(hit: [UnreachablePath, UnreachableReason] | undefined, colo: string | undefined): CounterPoint[] {
 	const where = { colo: colo || 'unknown' };
@@ -203,10 +216,27 @@ function unreachableSeries(hit: [UnreachablePath, UnreachableReason] | undefined
 }
 
 /**
- * The counter for a container that had started (and was counted as such) but then failed the
- * request itself, which the Worker answers with a 503 or passes on:
+ * The counter for a container that had started (and was counted as such) but could not then take
+ * the request, which the Worker answers with a 503 or passes on:
  * `otp_worker_container_unreachable{path, reason, colo}` by one, with zeros for its other series.
  */
 export function containerUnreachablePoints(path: UnreachablePath, reason: UnreachableReason, colo: string | undefined): CounterPoint[] {
 	return unreachableSeries([path, reason], colo);
+}
+
+/** The Cloudflare data centre that handled the request, for the `colo` label. */
+export function requestColo(request: Request): string | undefined {
+	return (request.cf as { colo?: string } | undefined)?.colo;
+}
+
+/**
+ * Hand a push to ctx.waitUntil without letting building or scheduling it throw into the request:
+ * a metric must never turn a working request into a failed one.
+ */
+export function countLater(ctx: ExecutionContext, env: OtlpEnv, points: () => CounterPoint[]): void {
+	try {
+		ctx.waitUntil(pushCounters(env, points()));
+	} catch (error) {
+		console.error(`Metrics push failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }

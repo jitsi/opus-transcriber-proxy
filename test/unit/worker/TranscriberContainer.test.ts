@@ -173,6 +173,7 @@ describe('TranscriberContainer.fetch', () => {
 		const res = await dobj.fetch(upgrade());
 		expect(res.status).toBe(500);
 		expect(await res.text()).toBe('Failed to start container: no instance');
+		expect(res.headers.get('X-Container-Failure')).toBe('start_failed');
 		expect(tcpFetch).not.toHaveBeenCalled();
 	});
 
@@ -185,6 +186,7 @@ describe('TranscriberContainer.fetch', () => {
 		const res = await rateLimited.dobj.fetch(upgrade());
 		expect(res.status).toBe(429);
 		expect(await res.text()).toBe('You are requesting too many containers per second');
+		expect(res.headers.get('X-Container-Failure')).toBe('start_failed');
 	});
 
 	it('answers 500 rather than throwing when the Durable Object has no container binding', async () => {
@@ -192,6 +194,7 @@ describe('TranscriberContainer.fetch', () => {
 		(ctx as any).container = undefined;
 		const res = await dobj.fetch(upgrade());
 		expect(res.status).toBe(500);
+		expect(res.headers.get('X-Container-Failure')).toBe('disconnected');
 	});
 
 	it('maps the container-restart error to the same 500 the SDK produces (text tracks SDK 0.3.7)', async () => {
@@ -200,6 +203,7 @@ describe('TranscriberContainer.fetch', () => {
 		const res = await dobj.fetch(upgrade());
 		expect(res.status).toBe(500);
 		expect(await res.text()).toBe('Container suddenly disconnected, try again');
+		expect(res.headers.get('X-Container-Failure')).toBe('disconnected');
 	});
 
 	it('maps any other connect error to a 500 carrying the message (text tracks SDK 0.3.7)', async () => {
@@ -208,6 +212,7 @@ describe('TranscriberContainer.fetch', () => {
 		const res = await dobj.fetch(upgrade());
 		expect(res.status).toBe(500);
 		expect(await res.text()).toBe('Error proxying request to container: connection refused');
+		expect(res.headers.get('X-Container-Failure')).toBe('disconnected');
 	});
 
 	it('rethrows a non-Error rejection untouched', async () => {
