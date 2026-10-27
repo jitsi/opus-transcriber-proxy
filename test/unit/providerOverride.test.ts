@@ -17,8 +17,9 @@
  * Unit tests for the KV provider override (worker/providerOverride.ts).
  *
  * The decision logic is pure, so most of these drive `decideProviderOverride` directly. The async
- * wrapper is covered for the two things only it can get wrong: skipping the KV read entirely when
- * the request names a provider, and swallowing a KV failure.
+ * wrapper is covered for the things only it can get wrong: skipping the KV read entirely when the
+ * request names a provider, swallowing a KV failure, and reading the value as text so that a
+ * malformed entry is reported as an operator typo rather than as an infrastructure failure.
  *
  * The load-bearing property throughout: every rejection path must leave the request alone, because
  * the container closes the socket with 1002 when handed a provider it cannot use.
@@ -30,6 +31,7 @@ import {
 	providerIsConfigured,
 	resolveProviderOverride,
 	MAX_OVERRIDE_WINDOW_MS,
+	MIN_PLAUSIBLE_UNTIL_MS,
 	PROVIDER_OVERRIDE_KEY,
 	type OverridableProvider,
 	type ProviderOverrideEnv,
@@ -38,6 +40,9 @@ import {
 const NOW = Date.UTC(2026, 0, 1, 12, 0, 0);
 const VALID = { provider: 'deepgram', until: NOW + 60_000, reason: 'xAI outage' };
 
+/** Entries are stored in KV as strings; the decision function parses them. */
+const j = (value: unknown) => JSON.stringify(value);
+
 /** Default opts: no explicit param, every provider configured. */
 function opts(over: Partial<Parameters<typeof decideProviderOverride>[1]> = {}) {
 	return { hasProviderParam: false, isConfigured: () => true, now: NOW, ...over };
@@ -45,12 +50,12 @@ function opts(over: Partial<Parameters<typeof decideProviderOverride>[1]> = {}) 
 
 describe('decideProviderOverride', () => {
 	it('applies a well-formed, unexpired override', () => {
-		const decision = decideProviderOverride(VALID, opts());
+		const decision = decideProviderOverride(j(VALID), opts());
 		expect(decision).toEqual({ applied: true, provider: 'deepgram', until: VALID.until, reason: 'xAI outage' });
 	});
 
 	it('omits reason when the entry has none', () => {
-		const decision = decideProviderOverride({ provider: 'openai', until: NOW + 1000 }, opts());
+		const decision = decideProviderOverride(j({ provider: 'openai', until: NOW + 1000 }), opts());
 		expect(decision).toMatchObject({ applied: true, provider: 'openai' });
 		expect((decision as { reason?: string }).reason).toBeUndefined();
 	});
@@ -58,19 +63,29 @@ describe('decideProviderOverride', () => {
 	it('never overrides a request that names a provider explicitly', () => {
 		// The whole point of rule 1: an explicitly chosen provider (openai_custom in particular,
 		// which carries the caller's own endpoint and key) must survive untouched.
-		const decision = decideProviderOverride(VALID, opts({ hasProviderParam: true }));
+		const decision = decideProviderOverride(j(VALID), opts({ hasProviderParam: true }));
 		expect(decision.applied).toBe(false);
 	});
 
 	it('does nothing when no override is set', () => {
 		expect(decideProviderOverride(null, opts()).applied).toBe(false);
 		expect(decideProviderOverride(undefined, opts()).applied).toBe(false);
+		expect(decideProviderOverride('   ', opts()).applied).toBe(false);
+	});
+
+	it('reports a malformed value as a parse error, not as a KV failure', () => {
+		// An operator typo must not read like an infrastructure problem, or it sends them looking
+		// at KV health instead of at the value they just wrote.
+		const decision = decideProviderOverride('{provider: deepgram}', opts());
+		expect(decision).toMatchObject({ applied: false, level: 'error' });
+		expect((decision as { why: string }).why).toContain('not valid JSON');
 	});
 
 	it.each([
-		['a string', 'deepgram'],
-		['a number', 42],
-		['an array', [{ provider: 'deepgram', until: NOW + 1000 }]],
+		['a bare string', j('deepgram')],
+		['a number', j(42)],
+		['null', j(null)],
+		['an array', j([{ provider: 'deepgram', until: NOW + 1000 }])],
 	])('rejects an entry that is %s', (_label, raw) => {
 		const decision = decideProviderOverride(raw, opts());
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
@@ -83,43 +98,62 @@ describe('decideProviderOverride', () => {
 		[42, 'is not even a string'],
 		[undefined, 'is missing'],
 	])('refuses provider %s', (provider) => {
-		const decision = decideProviderOverride({ provider, until: NOW + 1000 }, opts());
+		const decision = decideProviderOverride(j({ provider, until: NOW + 1000 }), opts());
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
 	});
 
 	it.each([
-		['missing', undefined],
-		['not a number', '2026-01-01'],
-		['NaN', Number.NaN],
-		['Infinity', Number.POSITIVE_INFINITY],
-	])('refuses an override whose until is %s', (_label, until) => {
+		['missing', 'null'],
+		['not a number', '"2026-01-01"'],
+		['NaN', 'NaN'],
+		['Infinity', 'Infinity'],
+	])('refuses an override whose until is %s', (_label, literal) => {
 		// An entry with no usable expiry would be a permanent override — the state this mechanism
-		// exists to make impossible.
-		const decision = decideProviderOverride({ provider: 'deepgram', until }, opts());
+		// exists to make impossible. NaN/Infinity are written as raw literals because they do not
+		// survive JSON.stringify, and JSON.parse rejects them outright, which is itself the error path.
+		const decision = decideProviderOverride(`{"provider":"deepgram","until":${literal}}`, opts());
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
 	});
 
+	it('refuses a seconds-granularity until as malformed, not as expired', () => {
+		// The likeliest operator slip, because --ttl on the same command line takes seconds. Reporting
+		// it as merely "expired" at info would leave the operator believing the override is armed
+		// while traffic stays on the failing provider.
+		const decision = decideProviderOverride(j({ provider: 'deepgram', until: Math.floor((NOW + 7_200_000) / 1000) }), opts());
+		expect(decision).toMatchObject({ applied: false, level: 'error' });
+		expect((decision as { why: string }).why).toContain('millisecond');
+	});
+
+	it('treats the plausibility floor as the boundary', () => {
+		const below = decideProviderOverride(j({ provider: 'deepgram', until: MIN_PLAUSIBLE_UNTIL_MS - 1 }), opts());
+		expect(below).toMatchObject({ applied: false, level: 'error' });
+
+		// At the floor it is a real timestamp, just long past — an ordinary expiry.
+		const atFloor = decideProviderOverride(j({ provider: 'deepgram', until: MIN_PLAUSIBLE_UNTIL_MS }), opts());
+		expect(atFloor).toMatchObject({ applied: false, level: 'info' });
+	});
+
 	it('refuses an expired override, so the primary is re-tested automatically', () => {
-		const decision = decideProviderOverride({ provider: 'deepgram', until: NOW - 1 }, opts());
+		const decision = decideProviderOverride(j({ provider: 'deepgram', until: NOW - 1 }), opts());
 		expect(decision).toMatchObject({ applied: false, level: 'info' });
 	});
 
 	it('treats until exactly equal to now as expired', () => {
-		const decision = decideProviderOverride({ provider: 'deepgram', until: NOW }, opts());
+		const decision = decideProviderOverride(j({ provider: 'deepgram', until: NOW }), opts());
 		expect(decision.applied).toBe(false);
 	});
 
 	it('accepts a window exactly at the cap but refuses one beyond it', () => {
-		const atCap = decideProviderOverride({ provider: 'deepgram', until: NOW + MAX_OVERRIDE_WINDOW_MS }, opts());
+		const atCap = decideProviderOverride(j({ provider: 'deepgram', until: NOW + MAX_OVERRIDE_WINDOW_MS }), opts());
 		expect(atCap.applied).toBe(true);
 
-		const overCap = decideProviderOverride({ provider: 'deepgram', until: NOW + MAX_OVERRIDE_WINDOW_MS + 1 }, opts());
+		const overCap = decideProviderOverride(j({ provider: 'deepgram', until: NOW + MAX_OVERRIDE_WINDOW_MS + 1 }), opts());
 		expect(overCap).toMatchObject({ applied: false, level: 'error' });
 	});
 
 	it('refuses a provider with no API key configured', () => {
 		// Without this check the container would close every session with 1002.
-		const decision = decideProviderOverride(VALID, opts({ isConfigured: () => false }));
+		const decision = decideProviderOverride(j(VALID), opts({ isConfigured: () => false }));
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
 	});
 
@@ -170,23 +204,25 @@ describe('applyProviderOverride', () => {
 });
 
 describe('resolveProviderOverride', () => {
-	const env = (kvValue: unknown, fail = false): ProviderOverrideEnv => ({
+	const env = (kvValue: string | null, fail = false): ProviderOverrideEnv => ({
 		DEEPGRAM_API_KEY: 'k',
 		CONFIG_KV: {
 			get: fail ? vi.fn().mockRejectedValue(new Error('kv exploded')) : vi.fn().mockResolvedValue(kvValue),
 		},
 	});
 
-	it('reads the override key as json and applies it', async () => {
-		const e = env(VALID);
+	it('reads the override key as text and applies it', async () => {
+		const e = env(j(VALID));
 		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, NOW);
 
 		expect(decision).toMatchObject({ applied: true, provider: 'deepgram' });
-		expect(e.CONFIG_KV!.get).toHaveBeenCalledWith(PROVIDER_OVERRIDE_KEY, expect.objectContaining({ type: 'json' }));
+		// text, not json: `type: 'json'` throws on a malformed value, which would be reported as a KV
+		// failure rather than as the operator typo it is.
+		expect(e.CONFIG_KV!.get).toHaveBeenCalledWith(PROVIDER_OVERRIDE_KEY, expect.objectContaining({ type: 'text' }));
 	});
 
 	it('skips the KV read entirely when the request names a provider', async () => {
-		const e = env(VALID);
+		const e = env(j(VALID));
 		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe?provider=openai_custom'), e, NOW);
 
 		expect(decision.applied).toBe(false);
@@ -204,8 +240,15 @@ describe('resolveProviderOverride', () => {
 		expect((decision as { why: string }).why).toContain('kv exploded');
 	});
 
+	it('reports a malformed stored value as a parse error, not a KV failure', async () => {
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), env('not-json-at-all'), NOW);
+		expect(decision).toMatchObject({ applied: false, level: 'error' });
+		expect((decision as { why: string }).why).toContain('not valid JSON');
+		expect((decision as { why: string }).why).not.toContain('KV read failed');
+	});
+
 	it('does not apply an override whose provider key is missing from the env', async () => {
-		const e: ProviderOverrideEnv = { CONFIG_KV: { get: vi.fn().mockResolvedValue(VALID) } };
+		const e: ProviderOverrideEnv = { CONFIG_KV: { get: vi.fn().mockResolvedValue(j(VALID)) } };
 		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, NOW);
 		expect(decision.applied).toBe(false);
 	});

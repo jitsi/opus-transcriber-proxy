@@ -54,6 +54,17 @@
 			// }
 		]
 	},
+	// Operator-controlled runtime config: the transcription provider override
+	// (see worker/providerOverride.ts). The id below is a placeholder — each deployment binds its
+	// own namespace in the infra wrapper config. Replace it with a real id (or one from
+	// `wrangler kv namespace create`) to exercise the override with `wrangler dev` / `cf:deploy`;
+	// with no binding at all the Worker simply applies no override.
+	"kv_namespaces": [
+		{
+			"binding": "CONFIG_KV",
+			"id": "00000000000000000000000000000000"
+		}
+	],
 	"migrations": [
 		{
 			"tag": "v1",

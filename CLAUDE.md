@@ -561,13 +561,23 @@ Armed by writing one KV key, `transcribe:provider-override`, in the `CONFIG_KV` 
 # CLOUDFLARE_ACCOUNT_ID must be set: the deploy tokens reach several accounts, and wrangler
 # otherwise stops and asks which one to use (in a script it just fails).
 export CLOUDFLARE_ACCOUNT_ID=<account id for this environment>
+# `until` is computed, never pasted: a literal from an older runbook is already in the past, and an
+# expired entry is ignored (at info level), so the override silently does nothing.
 wrangler kv key put transcribe:provider-override \
-  '{"provider":"deepgram","until":1789000000000,"reason":"xAI 503s"}' \
+  "{\"provider\":\"deepgram\",\"until\":$(( $(date +%s) * 1000 + 7200000 )),\"reason\":\"xAI 503s\"}" \
   --namespace-id=<id> --ttl 7200 --remote
 ```
 
 The flag is `--ttl` (seconds), not `--expiration-ttl`, and `--remote` is required — without it
 wrangler writes to the local simulator and the deployed Worker never sees the key.
+
+**`until` is the effective deadline; `--ttl` is only a safety net.** `until` is in **milliseconds**
+and is what the Worker enforces, at read time. `--ttl` is in seconds and merely deletes the key
+later. When they disagree the shorter one wins in practice: `until` stops the override being
+applied, `--ttl` stops the key existing. Set them to the same window. A `until` given in *seconds*
+is rejected as malformed (at `error`), rather than being read as an override that expired in 1970 —
+that mistake would otherwise look like a quietly armed override while traffic stayed on the failing
+provider.
 
 Three properties are load-bearing:
 
@@ -597,9 +607,20 @@ Three properties are load-bearing:
   actually get. To probe whether the primary has recovered, pin a check explicitly with
   `?provider=<primary>` (rule 1 makes that immune to the override).
 - A standalone container deployment with no Worker in front gets no override.
+- **Only `/transcribe` WebSocket upgrades are considered.** Health and status probes, `/agent`
+  upgrades and plain GETs are forwarded untouched, so they cost no KV read and cannot log an
+  override decision.
+- **The target provider's key must already have been set when the running containers started.**
+  The Worker checks its own current env, but a container validates against the env it was started
+  with (`buildContainerEnvVars`). Adding a provider's secret and arming the override in the same
+  breath is therefore unsafe: a container started before the secret existed still has the empty
+  value and closes its new sessions with 1002, which is exactly what the fall-back-to-default rule
+  is meant to prevent. Set the key, let the containers cycle, then arm.
 
 An applied override is recorded as `worker.providerOverride` in the `info` message (the container
-cannot tell an override apart from a client-supplied parameter) and logged in the Worker.
+cannot tell an override apart from a client-supplied parameter) and logged in the Worker. That
+field rides on the `worker` block, which is only added on the dispatcher path (`USE_DISPATCHER`),
+so with pass-through routing the override is visible in the Worker log but not in `info`.
 
 ## Common Patterns
 

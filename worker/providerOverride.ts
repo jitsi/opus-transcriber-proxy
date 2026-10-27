@@ -66,9 +66,18 @@ export const MAX_OVERRIDE_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const OVERRIDE_CACHE_TTL_SECONDS = 60;
 
+/**
+ * Smallest `until` that can be a real millisecond timestamp (2001-09-09). Anything below it is a
+ * seconds-granularity value, which is the likeliest operator slip — `--ttl` on the same command
+ * line takes seconds. Treating it as a merely expired override would be the worst outcome: the
+ * operator believes the override is armed, it is reported at `info`, and traffic quietly stays on
+ * the failing provider. It is refused as malformed instead, at `error`.
+ */
+export const MIN_PLAUSIBLE_UNTIL_MS = 1_000_000_000_000;
+
 /** The minimal KV surface this module needs. Keeps the module easy to fake in tests. */
 export interface ProviderOverrideKv {
-	get(key: string, options: { type: 'json'; cacheTtl?: number }): Promise<unknown>;
+	get(key: string, options: { type: 'text'; cacheTtl?: number }): Promise<string | null>;
 }
 
 /** Just enough of the Worker env to resolve an override. */
@@ -93,6 +102,13 @@ function isOverridableProvider(value: unknown): value is OverridableProvider {
  * `isProviderAvailable`, evaluated against the Worker env (which holds the same secrets it
  * forwards to the container). Without this check an override naming a provider whose key is unset
  * would close every session with 1002.
+ *
+ * Caveat: this reads the Worker's *current* env, while a running container validates against the
+ * env it was started with (`buildContainerEnvVars`, at container start). The two disagree for a
+ * container that started before a newly added secret existed — it still has the empty value, so it
+ * closes sessions with 1002 even though the check here passes. A provider's key must therefore
+ * already have been set when the running containers started; adding the secret and arming the
+ * override in the same breath is not safe.
  */
 export function providerIsConfigured(env: ProviderOverrideEnv, provider: OverridableProvider): boolean {
 	switch (provider) {
@@ -108,11 +124,13 @@ export function providerIsConfigured(env: ProviderOverrideEnv, provider: Overrid
 }
 
 /**
- * Decide what a KV entry means, with no I/O. `raw` is whatever the KV read produced (already
- * JSON-parsed, so `null` covers both "no such key" and "stored null").
+ * Decide what a KV entry means, with no I/O. `raw` is the raw stored string, or `null` for "no such
+ * key". Parsing happens here rather than in the KV read so that an operator's typo gets its own
+ * "not valid JSON" message instead of being reported as a KV failure — which would send them
+ * looking at infrastructure health rather than at the value they just wrote.
  */
 export function decideProviderOverride(
-	raw: unknown,
+	raw: string | null | undefined,
 	opts: {
 		hasProviderParam: boolean;
 		isConfigured: (provider: OverridableProvider) => boolean;
@@ -125,15 +143,23 @@ export function decideProviderOverride(
 		return { applied: false, level: 'debug', why: 'request names a provider explicitly' };
 	}
 
-	if (raw === null || raw === undefined) {
+	if (raw === null || raw === undefined || raw.trim() === '') {
 		return { applied: false, level: 'debug', why: 'no override set' };
 	}
 
-	if (typeof raw !== 'object' || Array.isArray(raw)) {
-		return { applied: false, level: 'error', why: `override is not a JSON object (got ${typeof raw})` };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		return { applied: false, level: 'error', why: `override is not valid JSON: ${msg}` };
 	}
 
-	const entry = raw as Record<string, unknown>;
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		return { applied: false, level: 'error', why: `override is not a JSON object (got ${Array.isArray(parsed) ? 'array' : typeof parsed})` };
+	}
+
+	const entry = parsed as Record<string, unknown>;
 
 	if (!isOverridableProvider(entry.provider)) {
 		return {
@@ -150,6 +176,16 @@ export function decideProviderOverride(
 		return { applied: false, level: 'error', why: `override has no usable "until" timestamp (got ${JSON.stringify(entry.until)})` };
 	}
 	const until = entry.until;
+
+	// A seconds-granularity value cannot be a legitimately expired override, so it is refused as
+	// malformed rather than reported as expired — see MIN_PLAUSIBLE_UNTIL_MS.
+	if (until < MIN_PLAUSIBLE_UNTIL_MS) {
+		return {
+			applied: false,
+			level: 'error',
+			why: `override "until" is not a millisecond timestamp (got ${until}); use milliseconds since the epoch`,
+		};
+	}
 
 	if (opts.now >= until) {
 		return { applied: false, level: 'info', why: `override expired at ${new Date(until).toISOString()}` };
@@ -189,9 +225,11 @@ export async function resolveProviderOverride(request: Request, env: ProviderOve
 		return { applied: false, level: 'debug', why: 'CONFIG_KV binding is not configured' };
 	}
 
-	let raw: unknown;
+	// Read as text, not json: `type: 'json'` throws on a malformed value, which would surface an
+	// operator typo as a KV failure. decideProviderOverride parses and reports it properly.
+	let raw: string | null;
 	try {
-		raw = await env.CONFIG_KV.get(PROVIDER_OVERRIDE_KEY, { type: 'json', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS });
+		raw = await env.CONFIG_KV.get(PROVIDER_OVERRIDE_KEY, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS });
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		return { applied: false, level: 'error', why: `KV read failed: ${msg}` };
