@@ -150,11 +150,11 @@ Five things to know about the Worker's use of the SDK:
 - **A failed container start is retried once or twice before the 503.** `worker/startRetry.ts`
   retries `startAndWaitForPorts` through a fresh stub (a stub can be broken after it throws) only for
   the platform's transient failures: the stub error's `retryable` flag, or as a fallback the messages
-  for an object no longer active, storage unreachable, "internal error; reference" or a code-update
-  reset. It adds about a second of jittered waits (250 + 750 ms) on top of the attempts, and starts
-  no retry whose wait would end more than 5 s after the first attempt began, so that the
-  one-to-few-second platform recoveries are absorbed in the request instead of each costing the
-  bridge a round of exponential backoff. Never retried:
+  for an object no longer active, storage unreachable, "internal error; reference", a code-update
+  reset or a storage failure that "caused object to be reset". It adds about a second of jittered
+  waits (250 + 750 ms) on top of the attempts, and starts no retry whose wait would end more than
+  5 s after the first attempt began, so that the one-to-few-second platform recoveries are absorbed
+  in the request instead of each costing the bridge a round of exponential backoff. Never retried:
   overloaded objects (per Cloudflare's guidance), capacity and rate-limit failures, a container that
   crashed or never listened, and anything unrecognised. The Worker logs each retry ("Container start
   attempt N failed transiently, retrying"), and both outcomes carry the attempt count and elapsed time

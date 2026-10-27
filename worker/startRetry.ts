@@ -43,6 +43,7 @@ const TRANSIENT_START_FAILURES = [
 	'storage is no longer accessible',
 	'internal error; reference',
 	'reset because its code was updated',
+	'caused object to be reset',
 ];
 
 /**

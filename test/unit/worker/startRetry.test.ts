@@ -24,8 +24,11 @@ import { isTransientStartFailure, startContainer, startResult, startWithRetries 
 const TRANSIENT = [
 	'Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.',
 	'Durable Object storage is no longer accessible.',
-	'internal error; reference = 81s1197ukdq154flodsngelt',
+	'internal error; reference = 0123456789abcdefghijklmn',
 	'Durable Object reset because its code was updated.',
+	'Durable Object storage operation exceeded timeout which caused object to be reset.',
+	'Internal error in Durable Object storage caused object to be reset; reference = 0123456789abcdefghijklmn',
+	'Internal error while starting up Durable Object storage caused object to be reset; reference = 0123456789abcdefghijklmn',
 ];
 
 const NOT_TRANSIENT = [
