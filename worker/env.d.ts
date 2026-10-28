@@ -42,8 +42,9 @@ export interface Env {
 	CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
 
 	// Operator-controlled runtime config, read per connection (see worker/providerOverride.ts).
-	// Holds the transcription provider override used to move traffic to a secondary provider during
-	// an outage without a Worker release. Optional: with no binding, no override is ever applied.
+	// Holds the provider overrides (transcription, speech-to-speech translation, text translation)
+	// used to move traffic to a secondary provider during an outage without a Worker release.
+	// Optional: with no binding, no override is ever applied.
 	CONFIG_KV?: KVNamespace;
 
 	// Environment variables

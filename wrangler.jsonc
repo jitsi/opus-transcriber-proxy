@@ -54,8 +54,8 @@
 			// }
 		]
 	},
-	// Uncomment to enable the operator-controlled transcription provider override
-	// (see worker/providerOverride.ts), and put a real namespace id in it — one from
+	// Uncomment to enable the operator-controlled provider overrides (transcription, speech-to-speech
+	// translation, text translation; see worker/providerOverride.ts), and put a real namespace id in it — one from
 	// `wrangler kv namespace create`, or the one this environment uses in the infra wrapper config.
 	// It is left commented out because `wrangler deploy` validates the id against the account, so a
 	// placeholder would break `npm run cf:deploy` here. With no binding the Worker applies no

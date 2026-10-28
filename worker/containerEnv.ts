@@ -20,7 +20,7 @@
  * `worker` block merged into the container's `info` message.
  */
 import type { Env } from './env';
-import type { OverridableProvider } from './providerOverride';
+import type { AppliedOverrides } from './providerOverride';
 
 /**
  * CONTAINER_INSTANCE_NAME for the container, from the name this Durable Object was looked up by.
@@ -171,18 +171,20 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
  * cannot know about (deployed Worker version, the colo/location that handled the request, the
  * routing mode). Merged in-place into the container's info before forwarding to the client.
  *
- * `providerOverride` is present only when an operator override actually changed this connection's
- * provider. The container reports the provider it used either way, but it cannot tell an override
- * apart from a client-supplied parameter — so recording it here is what makes an active override
- * visible in the peer's logs (JVB logs the info message verbatim).
+ * `providerOverride` and `textTranslationProviderOverride` are present only when an operator
+ * override (worker/providerOverride.ts) actually changed this connection's transcription or
+ * text-translation provider. The container reports the providers it used either way, but it cannot
+ * tell an override apart from a client-supplied parameter — so recording them here is what makes an
+ * active override visible in the peer's logs (JVB logs the info message verbatim).
  */
-export function buildWorkerInfo(request: Request, env: Env, providerOverride?: OverridableProvider): Record<string, unknown> {
+export function buildWorkerInfo(request: Request, env: Env, overrides?: AppliedOverrides): Record<string, unknown> {
 	const cf = (request.cf || {}) as Record<string, unknown>;
 	const worker: Record<string, unknown> = {
 		present: true,
 		routingMode: env.ROUTING_MODE || 'session',
 	};
-	if (providerOverride) worker.providerOverride = providerOverride;
+	if (overrides?.transcribe) worker.providerOverride = overrides.transcribe;
+	if (overrides?.['text-translation']) worker.textTranslationProviderOverride = overrides['text-translation'];
 	if (env.CF_VERSION_METADATA) {
 		worker.versionId = env.CF_VERSION_METADATA.id;
 		worker.versionTag = env.CF_VERSION_METADATA.tag;

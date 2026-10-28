@@ -23,7 +23,7 @@ import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
 import { startContainer, startResult } from './startRetry';
 import { containerFailureReason, containerStartPoints, containerUnreachablePoints, countLater, requestColo } from './metrics';
-import { applyProviderOverride, describeOverrideDecision, resolveProviderOverride, type OverridableProvider } from './providerOverride';
+import { applyProviderOverrides, TEXT_TRANSLATION_PROVIDER_SLOT, TRANSCRIBE_PROVIDER_SLOT, TRANSLATE_PROVIDER_SLOT, type AppliedOverrides, type TranslateProvider } from './providerOverride';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
 // re-exported so the entry module stays the Worker's public surface.
@@ -54,7 +54,16 @@ export default {
 			if (env.ENABLE_TRANSLATE === 'false') {
 				return new Response('Translation endpoint disabled', { status: 404 });
 			}
-			return handleTranslate(request, env, ctx);
+			// The operator speech-to-speech provider override (worker/providerOverride.ts), applied the
+			// same way as the transcribe one below: only on an upgrade, never over an explicit
+			// `provider` parameter, and every failure mode degrades to "not applied".
+			let translateOverride: TranslateProvider | undefined;
+			if (isWebSocketUpgrade) {
+				const result = await applyProviderOverrides(request, env, [TRANSLATE_PROVIDER_SLOT]);
+				request = result.request;
+				translateOverride = result.applied.translate as TranslateProvider | undefined;
+			}
+			return handleTranslate(request, env, ctx, translateOverride);
 		}
 
 		// Handle stats endpoint for monitoring
@@ -70,33 +79,32 @@ export default {
 			}
 		}
 
-		// Apply the operator provider override, if one is armed in KV and this request did not name a
-		// provider itself. Done before the container is selected so it covers BOTH forwarding paths
-		// below (dispatcher and direct) — each of them forwards this request object as-is, and the
-		// container reads `provider` from the URL already, so nothing container-side changes.
+		// Apply the operator provider overrides, if any is armed in KV and this request did not name
+		// that provider itself: the transcription provider, and, when text translation is on, the
+		// text-translation provider. Done before the container is selected so it covers BOTH
+		// forwarding paths below (dispatcher and direct) — each of them forwards this request object
+		// as-is, and the container reads the parameters from the URL already, so nothing
+		// container-side changes.
 		//
-		// Every failure mode inside resolveProviderOverride degrades to "not applied", so a bad or
+		// Every failure mode inside applyProviderOverrides degrades to "not applied", so a bad or
 		// unreachable override can only leave the configured default in place.
 		// Gated to transcribe upgrades: every other request reaching this point (/health and /status
 		// probes, /agent upgrades, plain GETs) is forwarded to the container unchanged. Without the
 		// gate each of them pays a KV read, a malformed entry logs once per probe instead of once per
 		// session, and an /agent upgrade is forwarded with a `provider` parameter it has no use for.
-		const overrideDecision = isWebSocketUpgrade && url.pathname.endsWith('/transcribe')
-			? await resolveProviderOverride(request, env)
-			: ({ applied: false, level: 'debug', why: 'not a transcribe upgrade' } as const);
-		let providerOverride: OverridableProvider | undefined;
-		if (overrideDecision.applied) {
-			providerOverride = overrideDecision.provider;
-			request = applyProviderOverride(request, overrideDecision.provider);
+		// The text-translation slot is read only when the feature is on, since the container ignores
+		// the parameter otherwise and the read would be wasted.
+		let overrides: AppliedOverrides = {};
+		if (isWebSocketUpgrade && url.pathname.endsWith('/transcribe')) {
+			const slots = env.ENABLE_TEXT_TRANSLATION === 'true'
+				? [TRANSCRIBE_PROVIDER_SLOT, TEXT_TRANSLATION_PROVIDER_SLOT]
+				: [TRANSCRIBE_PROVIDER_SLOT];
+			const result = await applyProviderOverrides(request, env, slots);
+			request = result.request;
+			overrides = result.applied;
 			// Re-derive rather than patching `url` separately, so the rewritten request stays the one
 			// definition of this connection's parameters.
 			url = new URL(request.url);
-			console.log(describeOverrideDecision(overrideDecision));
-		} else if (overrideDecision.level === 'error') {
-			// A malformed or unusable override is an operator mistake that is silently doing nothing.
-			console.error(describeOverrideDecision(overrideDecision));
-		} else if (overrideDecision.level === 'info') {
-			console.log(describeOverrideDecision(overrideDecision));
 		}
 
 		// Check query param first, fall back to env var
@@ -186,7 +194,7 @@ export default {
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
 		if (useDispatcher && isWebSocketUpgrade && env.DISPATCHER_DO) {
-			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, providerOverride);
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, overrides);
 		}
 
 		// Forward request directly to container (pass-through mode)

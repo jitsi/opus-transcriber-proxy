@@ -37,15 +37,21 @@ import {
 	type TranslationTalkStopData,
 } from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
+import type { TranslateProvider } from './providerOverride';
 import { createWorkerTranslationRuntime } from './translationRuntime';
 import { flushTranslationUsage } from '../src/usage-reporter';
 
-export function handleTranslate(request: Request, env: Env, ctx: ExecutionContext): Response {
+/**
+ * `providerOverride` is the speech-to-speech provider an operator override (worker/providerOverride.ts)
+ * wrote into this request's `provider` parameter, if one did; it is reported in the `info` message,
+ * since the parameter alone cannot be told apart from a client-supplied one.
+ */
+export function handleTranslate(request: Request, env: Env, ctx: ExecutionContext, providerOverride?: TranslateProvider): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {
 		return new Response('Expected WebSocket upgrade', { status: 426 });
 	}
 
-	const runtime = createWorkerTranslationRuntime(env, request);
+	const runtime = createWorkerTranslationRuntime(env, request, providerOverride);
 	const url = new URL(request.url);
 
 	// The speech-to-speech provider: `?provider=` or the deployment default. Without its key every

@@ -14,27 +14,33 @@
  * limitations under the License.
  */
 /**
- * Unit tests for the KV provider override (worker/providerOverride.ts).
+ * Unit tests for the KV provider overrides (worker/providerOverride.ts).
  *
- * The decision logic is pure, so most of these drive `decideProviderOverride` directly. The async
- * wrapper is covered for the things only it can get wrong: skipping the KV read entirely when the
- * request names a provider, swallowing a KV failure, and reading the value as text so that a
- * malformed entry is reported as an operator typo rather than as an infrastructure failure.
+ * The decision logic is pure, so most of these drive `decideProviderOverride` directly, against
+ * the transcribe slot. The async wrapper is covered for the things only it can get wrong: skipping
+ * the KV read entirely when the request names a provider, swallowing a KV failure, and reading the
+ * value as text so that a malformed entry is reported as an operator typo rather than as an
+ * infrastructure failure. The two other slots (speech-to-speech and text translation) are covered
+ * for what differs: their key, parameter, provider list and credential fallbacks, and that
+ * applying several slots to one request rewrites each parameter independently.
  *
  * The load-bearing property throughout: every rejection path must leave the request alone, because
- * the container closes the socket with 1002 when handed a provider it cannot use.
+ * the server fails a session handed a provider it cannot use (the container closes the socket with
+ * 1002; the Worker refuses a /translate upgrade).
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
 	applyProviderOverride,
+	applyProviderOverrides,
 	decideProviderOverride,
-	providerIsConfigured,
 	resolveProviderOverride,
 	MAX_OVERRIDE_WINDOW_MS,
 	MIN_PLAUSIBLE_UNTIL_MS,
-	PROVIDER_OVERRIDE_KEY,
-	type OverridableProvider,
+	TEXT_TRANSLATION_PROVIDER_SLOT,
+	TRANSCRIBE_PROVIDER_SLOT,
+	TRANSLATE_PROVIDER_SLOT,
 	type ProviderOverrideEnv,
+	type ProviderOverrideSlot,
 } from '../../worker/providerOverride';
 
 const NOW = Date.UTC(2026, 0, 1, 12, 0, 0);
@@ -43,9 +49,9 @@ const VALID = { provider: 'deepgram', until: NOW + 60_000, reason: 'xAI outage' 
 /** Entries are stored in KV as strings; the decision function parses them. */
 const j = (value: unknown) => JSON.stringify(value);
 
-/** Default opts: no explicit param, every provider configured. */
-function opts(over: Partial<Parameters<typeof decideProviderOverride>[1]> = {}) {
-	return { hasProviderParam: false, isConfigured: () => true, now: NOW, ...over };
+/** Default opts: the transcribe slot, no explicit param, every provider configured. */
+function opts(over: Partial<Parameters<typeof decideProviderOverride<string>>[1]> = {}) {
+	return { slot: TRANSCRIBE_PROVIDER_SLOT as ProviderOverrideSlot, hasProviderParam: false, isConfigured: () => true, now: NOW, ...over };
 }
 
 describe('decideProviderOverride', () => {
@@ -164,20 +170,73 @@ describe('decideProviderOverride', () => {
 	});
 });
 
-describe('providerIsConfigured', () => {
-	it.each([
-		['openai', { OPENAI_API_KEY: 'k' }],
-		['deepgram', { DEEPGRAM_API_KEY: 'k' }],
-		['gemini', { GEMINI_API_KEY: 'k' }],
-		['xai', { XAI_API_KEY: 'k' }],
-	])('reports %s configured when its key is set', (provider, env) => {
-		expect(providerIsConfigured(env as ProviderOverrideEnv, provider as OverridableProvider)).toBe(true);
-		expect(providerIsConfigured({}, provider as OverridableProvider)).toBe(false);
+describe('the slots', () => {
+	it('each names its own KV key and the parameter the server parses', () => {
+		expect(TRANSCRIBE_PROVIDER_SLOT).toMatchObject({ key: 'transcribe:provider-override', param: 'provider' });
+		expect(TRANSLATE_PROVIDER_SLOT).toMatchObject({ key: 'translate:provider-override', param: 'provider' });
+		expect(TEXT_TRANSLATION_PROVIDER_SLOT).toMatchObject({ key: 'transcribe:text-translation-provider-override', param: 'text_translation_provider' });
+		// /transcribe and /translate both take `provider`, so they must be told apart by key.
+		expect(TRANSCRIBE_PROVIDER_SLOT.key).not.toBe(TRANSLATE_PROVIDER_SLOT.key);
 	});
 
-	it('treats an empty-string key as unconfigured', () => {
-		// The Worker forwards XAI_API_KEY as '' when unset, which must not read as available.
-		expect(providerIsConfigured({ XAI_API_KEY: '' }, 'xai')).toBe(false);
+	it('exclude the providers that cannot be an override target', () => {
+		// openai_custom needs the caller's URL and key; dummy and stub produce nothing real.
+		expect(TRANSCRIBE_PROVIDER_SLOT.providers).toEqual(['openai', 'deepgram', 'gemini', 'xai']);
+		expect(TRANSLATE_PROVIDER_SLOT.providers).toEqual(['openai', 'xai']);
+		expect(TEXT_TRANSLATION_PROVIDER_SLOT.providers).toEqual(['openai', 'xai', 'gemini', 'google']);
+	});
+
+	it('refuse a provider another slot accepts', () => {
+		const decision = decideProviderOverride(j({ provider: 'deepgram', until: NOW + 1000 }), opts({ slot: TRANSLATE_PROVIDER_SLOT }));
+		expect(decision).toMatchObject({ applied: false, level: 'error' });
+		expect((decision as { why: string }).why).toContain('openai, xai');
+	});
+
+	describe('transcribe: configured when the provider key is set', () => {
+		it.each([
+			['openai', { OPENAI_API_KEY: 'k' }],
+			['deepgram', { DEEPGRAM_API_KEY: 'k' }],
+			['gemini', { GEMINI_API_KEY: 'k' }],
+			['xai', { XAI_API_KEY: 'k' }],
+		] as const)('%s', (provider, env) => {
+			expect(TRANSCRIBE_PROVIDER_SLOT.isConfigured(env, provider)).toBe(true);
+			expect(TRANSCRIBE_PROVIDER_SLOT.isConfigured({}, provider)).toBe(false);
+		});
+
+		it('treats an empty-string key as unconfigured', () => {
+			// The Worker forwards XAI_API_KEY as '' when unset, which must not read as available.
+			expect(TRANSCRIBE_PROVIDER_SLOT.isConfigured({ XAI_API_KEY: '' }, 'xai')).toBe(false);
+		});
+	});
+
+	describe('translate: the translation key, falling back to the transcription key', () => {
+		it.each([
+			['openai', 'OPENAI_TRANSLATION_API_KEY', 'OPENAI_API_KEY'],
+			['xai', 'XAI_TRANSLATION_API_KEY', 'XAI_API_KEY'],
+		] as const)('%s', (provider, dedicated, fallback) => {
+			expect(TRANSLATE_PROVIDER_SLOT.isConfigured({ [dedicated]: 'k' }, provider)).toBe(true);
+			expect(TRANSLATE_PROVIDER_SLOT.isConfigured({ [fallback]: 'k' }, provider)).toBe(true);
+			expect(TRANSLATE_PROVIDER_SLOT.isConfigured({}, provider)).toBe(false);
+		});
+	});
+
+	describe('text translation: the per-provider key, falling back to the transcription key', () => {
+		it.each([
+			['openai', 'TEXT_TRANSLATION_OPENAI_API_KEY', 'OPENAI_API_KEY'],
+			['xai', 'TEXT_TRANSLATION_XAI_API_KEY', 'XAI_API_KEY'],
+			['gemini', 'TEXT_TRANSLATION_GEMINI_API_KEY', 'GEMINI_API_KEY'],
+		] as const)('%s', (provider, dedicated, fallback) => {
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({ [dedicated]: 'k' }, provider)).toBe(true);
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({ [fallback]: 'k' }, provider)).toBe(true);
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({}, provider)).toBe(false);
+		});
+
+		it('google takes either credential and has no fallback to a Gemini key', () => {
+			// A Gemini/AI Studio key is not valid for translation.googleapis.com (src/config.ts).
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({ TEXT_TRANSLATION_GOOGLE_API_KEY: 'k' }, 'google')).toBe(true);
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({ TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON: '{}' }, 'google')).toBe(true);
+			expect(TEXT_TRANSLATION_PROVIDER_SLOT.isConfigured({ GEMINI_API_KEY: 'k' }, 'google')).toBe(false);
+		});
 	});
 });
 
@@ -186,7 +245,7 @@ describe('applyProviderOverride', () => {
 		const original = new Request('https://example.test/transcribe?sessionId=abc&sendBack=true', {
 			headers: { Upgrade: 'websocket', 'X-Custom': 'kept' },
 		});
-		const rewritten = applyProviderOverride(original, 'deepgram');
+		const rewritten = applyProviderOverride(original, TRANSCRIBE_PROVIDER_SLOT, 'deepgram');
 
 		const url = new URL(rewritten.url);
 		expect(url.searchParams.get('provider')).toBe('deepgram');
@@ -198,8 +257,14 @@ describe('applyProviderOverride', () => {
 
 	it('leaves the original request untouched', () => {
 		const original = new Request('https://example.test/transcribe?sessionId=abc');
-		applyProviderOverride(original, 'openai');
+		applyProviderOverride(original, TRANSCRIBE_PROVIDER_SLOT, 'openai');
 		expect(new URL(original.url).searchParams.has('provider')).toBe(false);
+	});
+
+	it('sets the text-translation parameter for that slot', () => {
+		const rewritten = applyProviderOverride(new Request('https://example.test/transcribe'), TEXT_TRANSLATION_PROVIDER_SLOT, 'google');
+		expect(new URL(rewritten.url).searchParams.get('text_translation_provider')).toBe('google');
+		expect(new URL(rewritten.url).searchParams.has('provider')).toBe(false);
 	});
 });
 
@@ -213,35 +278,35 @@ describe('resolveProviderOverride', () => {
 
 	it('reads the override key as text and applies it', async () => {
 		const e = env(j(VALID));
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, TRANSCRIBE_PROVIDER_SLOT, NOW);
 
 		expect(decision).toMatchObject({ applied: true, provider: 'deepgram' });
 		// text, not json: `type: 'json'` throws on a malformed value, which would be reported as a KV
 		// failure rather than as the operator typo it is.
-		expect(e.CONFIG_KV!.get).toHaveBeenCalledWith(PROVIDER_OVERRIDE_KEY, expect.objectContaining({ type: 'text' }));
+		expect(e.CONFIG_KV!.get).toHaveBeenCalledWith(TRANSCRIBE_PROVIDER_SLOT.key, expect.objectContaining({ type: 'text' }));
 	});
 
 	it('skips the KV read entirely when the request names a provider', async () => {
 		const e = env(j(VALID));
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe?provider=openai_custom'), e, NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe?provider=openai_custom'), e, TRANSCRIBE_PROVIDER_SLOT, NOW);
 
 		expect(decision.applied).toBe(false);
 		expect(e.CONFIG_KV!.get).not.toHaveBeenCalled();
 	});
 
 	it('applies no override when the binding is absent', async () => {
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), { DEEPGRAM_API_KEY: 'k' }, NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), { DEEPGRAM_API_KEY: 'k' }, TRANSCRIBE_PROVIDER_SLOT, NOW);
 		expect(decision.applied).toBe(false);
 	});
 
 	it('swallows a KV failure rather than failing the connection', async () => {
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), env(null, true), NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), env(null, true), TRANSCRIBE_PROVIDER_SLOT, NOW);
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
 		expect((decision as { why: string }).why).toContain('kv exploded');
 	});
 
 	it('reports a malformed stored value as a parse error, not a KV failure', async () => {
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), env('not-json-at-all'), NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), env('not-json-at-all'), TRANSCRIBE_PROVIDER_SLOT, NOW);
 		expect(decision).toMatchObject({ applied: false, level: 'error' });
 		expect((decision as { why: string }).why).toContain('not valid JSON');
 		expect((decision as { why: string }).why).not.toContain('KV read failed');
@@ -249,7 +314,96 @@ describe('resolveProviderOverride', () => {
 
 	it('does not apply an override whose provider key is missing from the env', async () => {
 		const e: ProviderOverrideEnv = { CONFIG_KV: { get: vi.fn().mockResolvedValue(j(VALID)) } };
-		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, NOW);
+		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, TRANSCRIBE_PROVIDER_SLOT, NOW);
 		expect(decision.applied).toBe(false);
+	});
+});
+
+describe('applyProviderOverrides', () => {
+	/** A KV holding one entry per key. */
+	const kv = (entries: Record<string, string>) => ({ get: vi.fn(async (key: string) => entries[key] ?? null) });
+	const allKeys = { OPENAI_API_KEY: 'k', DEEPGRAM_API_KEY: 'k', GEMINI_API_KEY: 'k', XAI_API_KEY: 'k', TEXT_TRANSLATION_GOOGLE_API_KEY: 'k' };
+
+	it('reads each slot by its own key and rewrites each parameter', async () => {
+		const store = kv({
+			[TRANSCRIBE_PROVIDER_SLOT.key]: j({ provider: 'deepgram', until: NOW + 1000 }),
+			[TEXT_TRANSLATION_PROVIDER_SLOT.key]: j({ provider: 'google', until: NOW + 1000 }),
+		});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const { request, applied } = await applyProviderOverrides(
+				new Request('https://example.test/transcribe?sessionId=s', { headers: { Upgrade: 'websocket' } }),
+				{ ...allKeys, CONFIG_KV: store },
+				[TRANSCRIBE_PROVIDER_SLOT, TEXT_TRANSLATION_PROVIDER_SLOT],
+				NOW,
+			);
+			const url = new URL(request.url);
+			expect(url.searchParams.get('provider')).toBe('deepgram');
+			expect(url.searchParams.get('text_translation_provider')).toBe('google');
+			expect(url.searchParams.get('sessionId')).toBe('s');
+			expect(request.headers.get('Upgrade')).toBe('websocket');
+			expect(applied).toEqual({ transcribe: 'deepgram', 'text-translation': 'google' });
+			expect(store.get).toHaveBeenCalledTimes(2);
+			expect(log).toHaveBeenCalledTimes(2);
+			expect(log.mock.calls.map((c) => c[0])).toEqual([
+				expect.stringMatching(/^Transcription provider override applied: provider=deepgram/),
+				expect.stringMatching(/^Text translation provider override applied: provider=google/),
+			]);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('applies the slots independently: one explicit parameter pins only its own slot', async () => {
+		const store = kv({
+			[TRANSCRIBE_PROVIDER_SLOT.key]: j({ provider: 'deepgram', until: NOW + 1000 }),
+			[TEXT_TRANSLATION_PROVIDER_SLOT.key]: j({ provider: 'google', until: NOW + 1000 }),
+		});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const { request, applied } = await applyProviderOverrides(
+				new Request('https://example.test/transcribe?provider=openai_custom'),
+				{ ...allKeys, CONFIG_KV: store },
+				[TRANSCRIBE_PROVIDER_SLOT, TEXT_TRANSLATION_PROVIDER_SLOT],
+				NOW,
+			);
+			expect(new URL(request.url).searchParams.get('provider')).toBe('openai_custom');
+			expect(new URL(request.url).searchParams.get('text_translation_provider')).toBe('google');
+			expect(applied).toEqual({ 'text-translation': 'google' });
+			// The pinned slot costs no KV read.
+			expect(store.get).toHaveBeenCalledTimes(1);
+			expect(store.get).toHaveBeenCalledWith(TEXT_TRANSLATION_PROVIDER_SLOT.key, expect.anything());
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('leaves the request alone and reports nothing when no slot applies', async () => {
+		const { request, applied } = await applyProviderOverrides(
+			new Request('https://example.test/translate?sessionId=s'),
+			{ ...allKeys, CONFIG_KV: kv({}) },
+			[TRANSLATE_PROVIDER_SLOT],
+			NOW,
+		);
+		expect(new URL(request.url).searchParams.has('provider')).toBe(false);
+		expect(applied).toEqual({});
+	});
+
+	it('logs a malformed entry at error and still forwards the request', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { request, applied } = await applyProviderOverrides(
+				new Request('https://example.test/translate'),
+				{ ...allKeys, CONFIG_KV: kv({ [TRANSLATE_PROVIDER_SLOT.key]: 'garbage' }) },
+				[TRANSLATE_PROVIDER_SLOT],
+				NOW,
+			);
+			expect(applied).toEqual({});
+			expect(new URL(request.url).searchParams.has('provider')).toBe(false);
+			expect(error).toHaveBeenCalledTimes(1);
+			expect(error.mock.calls[0][0]).toMatch(/^Speech-to-speech translation provider override not applied: override is not valid JSON/);
+		} finally {
+			error.mockRestore();
+		}
 	});
 });

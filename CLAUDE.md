@@ -410,7 +410,7 @@ locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PRO
 - Routes incoming `media` events to the matching connection by tag; closes connections dropped from `requests`
 - Also supports a dev `?lang=` path that seeds the initial target languages
 - Sends the server `info` message on connect (via `buildServerInfo(provider)`, where `provider` is the connection's speech-to-speech provider) and logs any inbound client `info` event, mirroring `TranscriberProxy`
-- **Provider selection.** `TranslatorProxyOptions.provider` is the connection's speech-to-speech provider (`openai` or `xai`, `src/translate/provider.ts`), resolved by `server.ts` / `worker/handleTranslate.ts` with `resolveTranslationProvider` from the `provider` URL parameter or the deployment default (`TRANSLATION_PROVIDER`); an unknown provider (a client error) refuses the upgrade with 1008 / HTTP 400 and an unavailable one (no key, a deployment problem) with 1011 / HTTP 503 (`resolveTranslationProvider`'s `kind`), since every direction would fail at connect; the close reason is cut by UTF-8 bytes (`closeReason`) because it echoes the caller's value. Every `TranslatorConnection` of the proxy gets the same provider, and target languages are normalised per provider (`normalizeTargetLanguage(lang, provider)`: OpenAI's 13-language list, any BCP-47-shaped tag for xAI)
+- **Provider selection.** `TranslatorProxyOptions.provider` is the connection's speech-to-speech provider (`openai` or `xai`, `src/translate/provider.ts`), resolved by `server.ts` / `worker/handleTranslate.ts` with `resolveTranslationProvider` from the `provider` URL parameter or the deployment default (`TRANSLATION_PROVIDER`); an unknown provider (a client error) refuses the upgrade with 1008 / HTTP 400 and an unavailable one (no key, a deployment problem) with 1011 / HTTP 503 (`resolveTranslationProvider`'s `kind`), since every direction would fail at connect; in the Worker the `provider` parameter may have been written by the operator KV override (**Provider overrides**, the `translate` slot) before the handler sees it; the close reason is cut by UTF-8 bytes (`closeReason`) because it echoes the caller's value. Every `TranslatorConnection` of the proxy gets the same provider, and target languages are normalised per provider (`normalizeTargetLanguage(lang, provider)`: OpenAI's 13-language list, any BCP-47-shaped tag for xAI)
 - **A requested direction whose connection went away is reopened on the source's next media frame.** `desired` keeps the last `sources` state; `handleMediaEvent` reopens a missing (source, language) from it, so a direction closed by the provider (xAI drops a session after ~5 min without audio and caps one at ~2 h), by the idle close, or by a failure comes back without waiting for the next `sources` event. After an `error` close, or a `rejected` one (the provider closed the session before any audio was appended: re-dialling that per frame would be a paid session start each time), the reopen is paced per direction (`REOPEN_BACKOFF_BASE_MS` 1 s, doubling to `REOPEN_BACKOFF_MAX_MS` 15 s; media inside the window is dropped), cleared by a benign close; `idle`/`remote` closes reopen at once. The `onClosed` callback carries a `TranslatorCloseReason` for this. A stale close from a connection a reconcile already replaced is ignored entirely (it must neither unregister the replacement nor touch its backoff), and the backoff of a direction dropped from `requests` is forgotten on the next `sources` event
 - Owns the monotonic mediajson wire-envelope `sequenceNumber` for outbound `media` (per-proxy = per-WebSocket, which carries all synthetic sources); the per-source RTP sequence number is the separate `chunk` field from each connection's `RtpTimestamper`
 - Re-emits each connection's talk boundaries as `talkStart` / `talkStop` events (payloads `TranslationTalkStartData` / `TranslationTalkStopData` in `src/translate/messages.ts`), drawing their `sequenceNumber` from the **same** wire-envelope counter as `audioFrame` / `media`, so a start/stop interleaves correctly with the media frames it brackets on the single outbound WebSocket. `server.ts` and `worker/handleTranslate.ts` serialize them to the `start` / `stop` mediajson messages
@@ -545,23 +545,41 @@ The `worker/` directory contains:
 - `dispatcherForwarder.ts` - the `/translate` path's Dispatcher DO socket: bounded queue while (re)connecting, reopened on the next forward, replies to a received close frame
 - `closeCode.ts` - `sendableCloseCode`, the close codes workerd will put in a close frame, shared by `sessionProxy.ts` and `dispatcherForwarder.ts`
 - `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
-- `providerOverride.ts` - the KV-backed transcription provider override (see below)
+- `providerOverride.ts` - the KV-backed provider overrides: transcription, speech-to-speech translation, text translation (see below)
 - Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
 Two routing modes:
 1. **Session mode** (`ROUTING_MODE=session`): One container per session
 2. **Pool mode** (`ROUTING_MODE=pool`): Round-robin across container pool
 
-### Provider override (`worker/providerOverride.ts`)
+### Provider overrides (`worker/providerOverride.ts`)
 
-An operator lever to move `/transcribe` to a secondary provider during a provider outage, **without
-a Worker release**. The container picks its provider from `PROVIDERS_PRIORITY`, which is baked into
-the container's environment at container start — so a variable change needs a release *and* would
-not reach an already-running container anyway. Instead the Worker rewrites the `provider` URL
-parameter per connection, which the container already parses, so **nothing container-side changes**
-(no image rebuild; this is a Worker-only deploy).
+An operator lever to move a service to a secondary provider during a provider outage, **without a
+Worker release**. Each service picks its default provider from a deploy-time variable
+(`PROVIDERS_PRIORITY`, `TRANSLATION_PROVIDER`, `TEXT_TRANSLATION_PROVIDERS_PRIORITY`), and for the
+container that variable is baked into its environment at container start — so a change needs a
+release *and* would not reach an already-running container anyway. Instead the Worker rewrites the
+service's provider URL parameter per connection, which the server already parses, so **nothing
+server-side changes** (no image rebuild; this is a Worker-only deploy).
 
-Armed by writing one KV key, `transcribe:provider-override`, in the `CONFIG_KV` namespace:
+**Every service with more than one backend has a slot** (`ProviderOverrideSlot`): its KV key, the
+URL parameter, the providers an override may name, and the credential check for one. Adding a
+backend to a service means adding it to that slot's list and `isConfigured`; adding a service with
+several backends means adding a slot and applying it where its requests are routed.
+
+| Slot | KV key | Parameter | Targets | Where applied |
+|---|---|---|---|---|
+| `transcribe` | `transcribe:provider-override` | `provider` | `openai`, `deepgram`, `gemini`, `xai` | `/transcribe` upgrades, before the container is selected |
+| `translate` | `translate:provider-override` | `provider` | `openai`, `xai` | `/translate` upgrades, before `handleTranslate` |
+| `text-translation` | `transcribe:text-translation-provider-override` | `text_translation_provider` | `openai`, `xai`, `gemini`, `google` | `/transcribe` upgrades, only when `ENABLE_TEXT_TRANSLATION=true` (the container ignores the parameter otherwise, so the read would be wasted) |
+
+`/agent` has no slot: its one endpoint is the customer's, chosen per agent. `openai_custom`,
+`dummy` and `stub` are not valid override *targets* (the first needs the caller's own URL and key;
+the other two produce nothing real). `/transcribe` and `/translate` both take `provider`, so the two
+slots are told apart by KV key, not by parameter.
+
+Armed by writing the slot's KV key in the `CONFIG_KV` namespace; the entry shape is the same for
+every slot:
 
 ```bash
 # CLOUDFLARE_ACCOUNT_ID must be set: the deploy tokens reach several accounts, and wrangler
@@ -572,6 +590,8 @@ export CLOUDFLARE_ACCOUNT_ID=<account id for this environment>
 wrangler kv key put transcribe:provider-override \
   "{\"provider\":\"deepgram\",\"until\":$(( $(date +%s) * 1000 + 7200000 )),\"reason\":\"xAI 503s\"}" \
   --namespace-id=<id> --ttl 7200 --remote
+# Speech-to-speech: the same, under translate:provider-override with provider openai or xai.
+# Text translation: under transcribe:text-translation-provider-override.
 ```
 
 The flag is `--ttl` (seconds), not `--expiration-ttl`, and `--remote` is required — without it
@@ -585,48 +605,63 @@ is rejected as malformed (at `error`), rather than being read as an override tha
 that mistake would otherwise look like a quietly armed override while traffic stayed on the failing
 provider.
 
-Three properties are load-bearing:
+Three properties are load-bearing, for every slot:
 
-- **An explicit `provider` parameter is never overridden** — checked before the KV read, so an
-  explicitly pinned connection costs nothing and cannot be redirected. This protects
-  `openai_custom`, which carries the caller's own endpoint and API key: overriding it would send
-  that customer's audio to a provider they did not choose. Production's jicofo URL template carries
-  no `provider` parameter, so the override still covers ordinary traffic.
+- **An explicit parameter is never overridden** — checked before the KV read, so an explicitly
+  pinned connection costs nothing and cannot be redirected. This protects `openai_custom`, which
+  carries the caller's own endpoint and API key: overriding it would send that customer's audio to
+  a provider they did not choose. Production's jicofo URL templates carry no provider parameters,
+  so the overrides still cover ordinary traffic. The slots are independent: a `/transcribe` request
+  naming `provider` pins only the transcription slot, and its text-translation slot is still read.
 - **Every rejection degrades to "no override"**, never to a broken session. The container closes
-  the socket with 1002 when handed an invalid or unavailable provider, so an unparseable entry, an
-  unknown provider, a provider whose API key is unset, or a KV read failure must all fall back to
-  the configured default. They log (`error` for operator mistakes) and change nothing.
+  the socket with 1002 when handed an invalid or unavailable transcription provider, and the Worker
+  refuses a `/translate` upgrade with 400/503 for one, so an unparseable entry, an unknown provider,
+  a provider whose API key is unset, or a KV read failure must all fall back to the configured
+  default. They log (`error` for operator mistakes) and change nothing. (The container does not fail
+  a session over an unusable text-translation provider; it falls back and logs. The checks guard
+  that slot against an override that silently does nothing.)
 - **`until` is mandatory and checked here at read time**, not left to KV's own expiration, which the
   edge cache can lag. Capped at `MAX_OVERRIDE_WINDOW_MS` (24h), and a longer window is *refused*
   rather than clamped — the cap exists to force a re-arm, and silently shortening it would look
   like acceptance. When an override lapses, new sessions return to the default, which re-tests the
   primary provider automatically rather than relying on anyone remembering to switch back.
 
-`openai_custom` and `dummy` are not valid override *targets*. The KV read is cached at the edge for
-`OVERRIDE_CACHE_TTL_SECONDS` (60), so arming an override takes up to a minute to propagate.
+The KV read is cached at the edge for `OVERRIDE_CACHE_TTL_SECONDS` (60), so arming an override
+takes up to a minute to propagate. A `/transcribe` upgrade with text translation on reads two keys,
+in parallel (`applyProviderOverrides`).
 
 **Scope limits worth knowing:**
-- **New connections only.** The provider is fixed when `TranscriberProxy` is constructed, and
-  session resume reuses the original parameters, so a conference already in progress stays on the
-  provider it started with until it ends.
+- **New connections only.** The provider is fixed when `TranscriberProxy` / `TranslatorProxy` is
+  constructed, and session resume reuses the original parameters, so a conference already in
+  progress stays on the provider it started with until it ends. A `/translate` direction the proxy
+  reopens (idle close, provider close) reuses the connection's provider too.
 - The monitor's URL carries no `provider` parameter, so it is overridden too and tracks what users
   actually get. To probe whether the primary has recovered, pin a check explicitly with
   `?provider=<primary>` (rule 1 makes that immune to the override).
 - A standalone container deployment with no Worker in front gets no override.
-- **Only `/transcribe` WebSocket upgrades are considered.** Health and status probes, `/agent`
-  upgrades and plain GETs are forwarded untouched, so they cost no KV read and cannot log an
-  override decision.
-- **The target provider's key must already have been set when the running containers started.**
-  The Worker checks its own current env, but a container validates against the env it was started
-  with (`buildContainerEnvVars`). Adding a provider's secret and arming the override in the same
-  breath is therefore unsafe: a container started before the secret existed still has the empty
-  value and closes its new sessions with 1002, which is exactly what the fall-back-to-default rule
-  is meant to prevent. Set the key, let the containers cycle, then arm.
+- **Only WebSocket upgrades on `/transcribe` and `/translate` are considered.** Health and status
+  probes, `/agent` upgrades and plain GETs are forwarded untouched, so they cost no KV read and
+  cannot log an override decision.
+- **For the two `/transcribe` slots, the target provider's key must already have been set when the
+  running containers started.** The Worker checks its own current env, but a container validates
+  against the env it was started with (`buildContainerEnvVars`). Adding a provider's secret and
+  arming the override in the same breath is therefore unsafe: a container started before the secret
+  existed still has the empty value and closes its new sessions with 1002, which is exactly what
+  the fall-back-to-default rule is meant to prevent. Set the key, let the containers cycle, then
+  arm. The `translate` slot has no such lag: the Worker serves `/translate` itself, so the env it
+  checks is the env the session runs with.
+- The `translate` slot's credential check uses the same fallbacks as the runtime
+  (`OPENAI_TRANSLATION_API_KEY` ?? `OPENAI_API_KEY`, `XAI_TRANSLATION_API_KEY` ?? `XAI_API_KEY`), and
+  the `text-translation` slot's the container's (`TEXT_TRANSLATION_<P>_API_KEY` ?? the provider's
+  transcription key; `google` takes its API key or credentials JSON and has no fallback).
 
-An applied override is recorded as `worker.providerOverride` in the `info` message (the container
-cannot tell an override apart from a client-supplied parameter) and logged in the Worker. That
-field rides on the `worker` block, which is only added on the dispatcher path (`USE_DISPATCHER`),
-so with pass-through routing the override is visible in the Worker log but not in `info`.
+An applied override is logged in the Worker and recorded in the `info` message, since the server
+cannot tell an override apart from a client-supplied parameter: `worker.providerOverride` for the
+`transcribe` slot and `worker.textTranslationProviderOverride` for the `text-translation` slot, on
+the `worker` block `sessionProxy.ts` adds, which exists only on the dispatcher path
+(`USE_DISPATCHER`) — with pass-through routing those two are visible in the Worker log but not in
+`info`; and `worker.providerOverride` for the `translate` slot, in the `info` the Worker-hosted
+`/translate` builds itself (`worker/translationRuntime.ts`), on every routing mode.
 
 ## Common Patterns
 
@@ -750,7 +785,7 @@ worker/
 ├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
 ├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
 ├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
-├── providerOverride.ts        # KV-backed transcription provider override (operator lever)
+├── providerOverride.ts        # KV-backed provider overrides, one slot per multi-backend service (operator lever)
 └── env.d.ts                   # Worker Env types
 
 scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
@@ -933,9 +968,9 @@ the CC panel ignores.
   "worker": {"present": true, "versionId": "...", "routingMode": "session", "colo": "VIE"}
 }
 ```
-An informational/observability message describing the running build and effective session config. The block above is a composite showing every field that can appear; several are conditional and never all co-occur — e.g. the `worker` block is added only on the Worker path, and `sourceImageTag` is emitted by any runtime that has `SOURCE_IMAGE_TAG` in its environment, which in practice is only the translate-Worker deploy (the container shown by the `cloudflare-container` runtime here omits it, since code and codec are co-versioned in one image). Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. `sourceImageTag` (emitted by any runtime with `SOURCE_IMAGE_TAG` set — in practice the translate Worker, whose WASM Opus codec is sourced from a Docker image tag chosen independently of the worker-code ref at deploy) reports that codec image tag, so a code/WASM version mismatch is visible against `gitHash`. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`, and `providerOverride` when a KV provider override changed this connection's provider — see **Provider override**) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
+An informational/observability message describing the running build and effective session config. The block above is a composite showing every field that can appear; several are conditional and never all co-occur — e.g. the `worker` block is added only on the Worker path, and `sourceImageTag` is emitted by any runtime that has `SOURCE_IMAGE_TAG` in its environment, which in practice is only the translate-Worker deploy (the container shown by the `cloudflare-container` runtime here omits it, since code and codec are co-versioned in one image). Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. `sourceImageTag` (emitted by any runtime with `SOURCE_IMAGE_TAG` set — in practice the translate Worker, whose WASM Opus codec is sourced from a Docker image tag chosen independently of the worker-code ref at deploy) reports that codec image tag, so a code/WASM version mismatch is visible against `gitHash`. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`, and `providerOverride` / `textTranslationProviderOverride` when a KV provider override changed this connection's transcription or text-translation provider — see **Provider overrides**) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
 
-The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, the connection's speech-to-speech `provider`, and a `worker` block with version/colo). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
+The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, the connection's speech-to-speech `provider`, and a `worker` block with version/colo and, when the KV `translate` override chose this connection's provider, `providerOverride` — see **Provider overrides**). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
 
 ## Environment Variables Reference
 

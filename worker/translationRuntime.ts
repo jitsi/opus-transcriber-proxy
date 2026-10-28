@@ -27,6 +27,7 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 import { parseIntOr } from '../src/translate/env';
+import type { TranslateProvider } from './providerOverride';
 import { defaultTranslationProvider, isTranslationProviderId, type TranslationProviderId } from '../src/translate/provider';
 
 // Warn at most once per isolate about these settings (the runtime is built per connection).
@@ -34,7 +35,11 @@ let warnedTalkTimeoutDisabled = false;
 let warnedBadProvider = false;
 let warnedBadIdleClose = false;
 
-export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
+/**
+ * `providerOverride` is the provider an operator override (worker/providerOverride.ts) wrote into the
+ * request, if one did; `buildServerInfo` reports it as `worker.providerOverride`.
+ */
+export function createWorkerTranslationRuntime(env: Env, request?: Request, providerOverride?: TranslateProvider): TranslationRuntime {
 	registerWorkerOpusWasm();
 	const debugEnabled = env.DEBUG === 'true';
 	const talkSilenceTimeoutMs = parseIntOr(env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS, 350);
@@ -120,6 +125,9 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			// spot a code/WASM version mismatch (the two can drift, e.g. code from a branch + WASM from `latest`).
 			if (env.SOURCE_IMAGE_TAG) info.sourceImageTag = env.SOURCE_IMAGE_TAG;
 			const worker: Record<string, unknown> = { present: true };
+			// Only when an override changed this connection's provider: `provider` above is what the
+			// connection uses either way, and cannot tell an override apart from a client parameter.
+			if (providerOverride) worker.providerOverride = providerOverride;
 			if (env.CF_VERSION_METADATA) {
 				worker.versionId = env.CF_VERSION_METADATA.id;
 				worker.versionTag = env.CF_VERSION_METADATA.tag;
