@@ -86,7 +86,7 @@ Tests are in `test/` with helpers in `test/helpers/`. The test setup uses vitest
 runs one cell of the container/worker x opus-backend x endpoint x provider matrix against the real
 server/worker process — no mocks — replaying `resources/sample.jsonl` via `scripts/replay-dump.cjs
 --ci` and asserting on the transcripts/media received. See `test/integration/MATRIX.md` for the
-full 11-cell list and required API keys — `runtime=worker` only covers `/translate` (production
+full 14-cell list and required API keys — `runtime=worker` only covers `/translate` (production
 never routes `/transcribe` through the Worker), and Gemini is excluded to keep the per-PR matrix
 smaller. Runs in CI via `.github/workflows/integration-test.yml` on every PR into `main` and on
 `workflow_dispatch` — cells without their provider's API key secret set are soft-skipped, not failed.

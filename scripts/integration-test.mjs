@@ -23,6 +23,7 @@
  * Usage:
  *   node scripts/integration-test.mjs --runtime=container|worker --opus-backend=wasm|native \
  *     --endpoint=transcribe|translate --provider=openai|deepgram|xai|dummy [--translate-lang=es]
+ *     (--endpoint=translate takes --provider=openai or xai, the speech-to-speech providers)
  *
  * Requires the relevant provider API key in the environment (e.g. OPENAI_API_KEY). If it's
  * missing, the run is soft-skipped (exit 0, logged) rather than failed — this lets the same
@@ -97,8 +98,8 @@ function parseArgs(argv) {
 			'/transcribe through the Worker (see test/integration/MATRIX.md).'
 		);
 	}
-	if (args.endpoint === 'translate' && args.provider !== 'openai') {
-		throw new Error('--endpoint=translate only supports --provider=openai (the only translation model configured).');
+	if (args.endpoint === 'translate' && !['openai', 'xai'].includes(args.provider)) {
+		throw new Error('--endpoint=translate supports --provider=openai or xai (the two speech-to-speech providers).');
 	}
 	return args;
 }
@@ -253,7 +254,8 @@ async function startWorker({ port, endpoint, provider, translateLang }) {
 	} else if (endpoint === 'transcribe') {
 		lines.push(`PROVIDERS_PRIORITY=${provider}`, `${PROVIDER_KEY_ENV[provider]}=${process.env[PROVIDER_KEY_ENV[provider]]}`);
 	} else {
-		lines.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
+		// /translate: the provider is named on the URL (?provider=), so only its key is needed.
+		lines.push(`${PROVIDER_KEY_ENV[provider]}=${process.env[PROVIDER_KEY_ENV[provider]]}`);
 	}
 	writeFileSync(envFile, lines.join('\n') + '\n');
 
@@ -311,7 +313,9 @@ async function main() {
 
 	try {
 		const wsBase = `ws://localhost:${port}/${args.endpoint}`;
-		const wsUrl = args.endpoint === 'translate' ? `${wsBase}?sendBack=true` : `${wsBase}?provider=${args.provider}&sendBack=true`;
+		// Both endpoints take ?provider=: the transcription provider on /transcribe, the speech-to-speech
+		// provider on /translate (openai or xai).
+		const wsUrl = `${wsBase}?provider=${args.provider}&sendBack=true`;
 
 		const replayArgs = [
 			path.join(REPO_ROOT, 'scripts', 'replay-dump.cjs'),
@@ -346,6 +350,13 @@ async function main() {
 			// error only shows up in the container's own logs. Worker cells already stream their
 			// output live (see startWorker), so this only applies to the container path.
 			await handle.dumpLogs?.();
+			if (args.endpoint === 'translate' && args.provider === 'xai') {
+				log(
+					'HINT: xAI realtime translation is a per-team entitlement. If the logs show HTTP 403 ' +
+						'"Realtime translation is not enabled for this team", the XAI_API_KEY in use is valid for STT but ' +
+						'its team has no access to /v1/realtime/translations; xAI enables it per team.',
+				);
+			}
 			process.exitCode = 1;
 		} else {
 			log('PASS');
