@@ -139,6 +139,8 @@ ends, usually before its audio), bills wall-clock session time idle included, an
 after ~5 min without audio, so the proxy closes an idle xAI direction itself (`TRANSLATION_IDLE_CLOSE_MS`)
 and reopens it on the participant's next frame.
 
+See [TRANSLATION_BACKENDS.md](TRANSLATION_BACKENDS.md) for the two speech-to-speech providers, their measured behaviour and how to add one.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_TRANSLATE` | `true` | Enable the `/translate` endpoint (disabled → its WebSocket upgrade is rejected with 404) |
@@ -395,7 +397,8 @@ See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md
 
 ## Documentation
 
-- [BACKENDS.md](BACKENDS.md) - Provider details and comparison
+- [BACKENDS.md](BACKENDS.md) - Transcription provider details and comparison
+- [TRANSLATION_BACKENDS.md](TRANSLATION_BACKENDS.md) - Speech-to-speech translation providers (`/translate`)
 - [CLOUDFLARE_DEPLOYMENT.md](CLOUDFLARE_DEPLOYMENT.md) - Cloudflare setup
 - [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) - External dispatcher
 - [CONTAINER_ROUTING.md](CONTAINER_ROUTING.md) - Container routing modes

@@ -1044,10 +1044,11 @@ Docker image ships under `licenses/` together with `LICENSE` and libopus's `COPY
 
 ## Keeping Documentation Current
 
-When making code changes, update `CLAUDE.md` and `BACKENDS.md` in the same commit:
+When making code changes, update `CLAUDE.md`, `BACKENDS.md` and `TRANSLATION_BACKENDS.md` in the same commit:
 
 - **CLAUDE.md** — update the relevant Key Components description, Common Patterns section, or Notes for Claude whenever behaviour, interfaces, or invariants change.
 - **BACKENDS.md** — update whenever the `TranscriptionBackend` interface changes, audio format negotiation behaviour changes, or backend-specific behaviour changes.
+- **TRANSLATION_BACKENDS.md** — the `/translate` counterpart: update whenever `TranslationProviderSpec` changes, a speech-to-speech provider's measured behaviour or configuration changes, or the close/reopen rules change.
 
 Do not leave stale descriptions. If a note says "only X happens" and you change it so Y also happens, fix the note.
 
