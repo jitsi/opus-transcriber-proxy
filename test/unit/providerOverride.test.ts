@@ -174,7 +174,7 @@ describe('the slots', () => {
 	it('each names its own KV key and the parameter the server parses', () => {
 		expect(TRANSCRIBE_PROVIDER_SLOT).toMatchObject({ key: 'transcribe:provider-override', param: 'provider' });
 		expect(TRANSLATE_PROVIDER_SLOT).toMatchObject({ key: 'translate:provider-override', param: 'provider' });
-		expect(TEXT_TRANSLATION_PROVIDER_SLOT).toMatchObject({ key: 'transcribe:text-translation-provider-override', param: 'text_translation_provider' });
+		expect(TEXT_TRANSLATION_PROVIDER_SLOT).toMatchObject({ key: 'text-translation:provider-override', param: 'text_translation_provider' });
 		// /transcribe and /translate both take `provider`, so they must be told apart by key.
 		expect(TRANSCRIBE_PROVIDER_SLOT.key).not.toBe(TRANSLATE_PROVIDER_SLOT.key);
 	});

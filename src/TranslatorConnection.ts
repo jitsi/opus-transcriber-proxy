@@ -77,11 +77,20 @@ function pcmContainsSpeech(pcmBytes: Uint8Array): boolean {
 /**
  * Why a connection closed, reported on `onClosed`: `local` (the owner called close()), `remote` (the
  * provider closed the socket without a preceding error, after taking audio), `rejected` (the provider
- * closed the socket before any audio was sent: an accepted-then-dropped session, which repeated per
- * frame would be a paid session start each time), `idle` (no media for the idle-close period), `error`
- * (a failure; `onError` fired first). The owner paces a reopen after `error` and `rejected`.
+ * closed the socket before the session was usable: during the handshake, or before
+ * `REJECTED_MAX_AUDIO_SAMPLES` of audio had been sent; an accepted-then-dropped session, which repeated
+ * per frame would be a paid session start each time), `idle` (no media for the idle-close period),
+ * `error` (a failure; `onError` fired first). The owner paces a reopen after `error` and `rejected`.
  */
 export type TranslatorCloseReason = 'local' | 'remote' | 'rejected' | 'idle' | 'error';
+
+/**
+ * A provider close after less audio than this (2 s at 24 kHz) is `rejected`, not `remote`: a session
+ * that takes a moment of audio and then drops every time is as costly to re-dial per frame as one
+ * that never took any, and a healthy provider's own closes (xAI's ~5 min idle drop and ~2 h cap)
+ * come long after it.
+ */
+const REJECTED_MAX_AUDIO_SAMPLES = 24000 * 2;
 
 export interface TranslatorConnectionOptions {
 	/** Target language code the provider accepts (e.g. "en", "es"; see provider.ts). */
@@ -392,9 +401,10 @@ export class TranslatorConnection {
 				this.log(
 					`${provider.name} WebSocket closed for tag ${this.localTag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 				);
-				// A session the provider accepted and then closed before we ever appended audio is reported as
-				// `rejected`, so the owner paces the re-dial instead of opening a new (billable) session per frame.
-				this.doClose(true, this.sentSamples === 0 ? 'rejected' : 'remote');
+				// A session the provider accepted and then closed before it was usable (mid-handshake, or after only
+				// a moment of audio) is reported as `rejected`, so the owner paces the re-dial instead of opening a
+				// new (billable) session per frame.
+				this.doClose(true, this.sentSamples < REJECTED_MAX_AUDIO_SAMPLES ? 'rejected' : 'remote');
 			});
 		} catch (error) {
 			this.logError(`Failed to create ${provider.name} WebSocket for tag ${this.localTag}:`, error);

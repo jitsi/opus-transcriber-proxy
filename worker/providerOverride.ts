@@ -162,7 +162,7 @@ export type TextTranslationOverrideProvider = (typeof TEXT_TRANSLATION_PROVIDERS
 export const TEXT_TRANSLATION_PROVIDER_SLOT: ProviderOverrideSlot<TextTranslationOverrideProvider> = {
 	id: 'text-translation',
 	label: 'Text translation provider',
-	key: 'transcribe:text-translation-provider-override',
+	key: 'text-translation:provider-override',
 	param: 'text_translation_provider',
 	providers: TEXT_TRANSLATION_PROVIDERS,
 	// The same key fallbacks src/config.ts resolves (each per-provider key falls back to the

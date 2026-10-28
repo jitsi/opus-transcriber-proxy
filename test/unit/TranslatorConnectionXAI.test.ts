@@ -256,21 +256,30 @@ describe('TranslatorConnection on xAI', () => {
 		expect(closed).toEqual(['idle']);
 	});
 
-	it('reports a provider close before any audio was sent as "rejected", after audio as "remote"', async () => {
+	it('reports a provider close before the session was usable as "rejected", after 2 s of audio as "remote"', async () => {
+		// Mid-handshake: no audio could have been sent.
 		const a = await open();
 		a.ws.fireOpen();
 		a.ws.fireMessage(sessionCreated());
-		a.ws.fireMessage(sessionUpdated());
 		a.ws.fireClose(1000);
 		expect(a.closed).toEqual(['rejected']);
 
+		// After only a moment of audio: a provider dropping every session this way must be paced too.
 		const b = await open();
 		b.ws.fireOpen();
 		b.ws.fireMessage(sessionCreated());
 		b.ws.fireMessage(sessionUpdated());
-		b.conn.handleMediaEvent(mediaEvent('55555555-a0', 1));
+		for (let i = 1; i <= 50; i++) b.conn.handleMediaEvent(mediaEvent('55555555-a0', i)); // 1 s
 		b.ws.fireClose(1000);
-		expect(b.closed).toEqual(['remote']);
+		expect(b.closed).toEqual(['rejected']);
+
+		const c = await open();
+		c.ws.fireOpen();
+		c.ws.fireMessage(sessionCreated());
+		c.ws.fireMessage(sessionUpdated());
+		for (let i = 1; i <= 101; i++) c.conn.handleMediaEvent(mediaEvent('55555555-a0', i)); // just over 2 s
+		c.ws.fireClose(1000);
+		expect(c.closed).toEqual(['remote']);
 	});
 
 	it('ignores an empty updated event and emits nothing with transcripts disabled', async () => {

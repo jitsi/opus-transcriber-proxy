@@ -485,7 +485,7 @@ export class TranslatorProxy extends Emitter {
 			const prev = this.reopenBackoff.get(key);
 			const backoffMs = prev === undefined ? REOPEN_BACKOFF_BASE_MS : Math.min(prev.backoffMs * 2, REOPEN_BACKOFF_MAX_MS);
 			this.reopenBackoff.set(key, { notBefore: Date.now() + backoffMs, backoffMs });
-			this.runtime.logger.info(`translation direction ${key} ${reason === 'rejected' ? 'was closed by the provider before any audio' : 'failed'}; reopening on media not before ${backoffMs}ms`);
+			this.runtime.logger.info(`translation direction ${key} ${reason === 'rejected' ? 'was closed by the provider before it was usable' : 'failed'}; reopening on media not before ${backoffMs}ms`);
 			return;
 		}
 		this.reopenBackoff.delete(key);
@@ -499,12 +499,11 @@ export class TranslatorProxy extends Emitter {
 
 	/** Drop the reopen pacing and idle state of every direction `gone` says is no longer wanted. */
 	private forgetDirections(gone: (inputSourceName: string, language: string) => boolean): void {
-		for (const set of [this.reopenBackoff, this.idleClosed] as Array<Map<string, unknown> | Set<string>>) {
-			for (const key of set.keys()) {
-				const dot = key.lastIndexOf('.');
-				if (gone(key.slice(0, dot), key.slice(dot + 1))) {
-					set.delete(key);
-				}
+		for (const key of [...this.reopenBackoff.keys(), ...this.idleClosed]) {
+			const dot = key.lastIndexOf('.');
+			if (gone(key.slice(0, dot), key.slice(dot + 1))) {
+				this.reopenBackoff.delete(key);
+				this.idleClosed.delete(key);
 			}
 		}
 	}
