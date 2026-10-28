@@ -123,6 +123,8 @@ A `TranslatorConnection` reports why it closed, and the proxy decides from that 
 |---|---|---|
 | `local` | the proxy closed it (dropped from `sources`) | no |
 | `remote` | the provider closed an established session (xAI's idle drop or session cap) | next media frame |
+
+A `remote` close is reopened at once, unpaced: an established session that the provider ends is normally its idle drop or session cap, and pacing it would clip the first second of speech after every one. The trade-off is that a provider which accepts the handshake, carries more than 2 s of audio and then drops every session is re-dialled once per round trip, each a billed session start on xAI. The handshake timeout and the `rejected` pacing do not cover that case; if it ever shows up, the fix is a floor on session lifetime below which a `remote` close is paced too.
 | `idle` | the proxy's idle close | next media frame, not on a `sources` event |
 | `rejected` | the provider closed it before it was usable (young, little audio) | next media frame, paced 1-15 s |
 | `error` | a failure (`onError` fired first) | next media frame, paced 1-15 s |
