@@ -77,9 +77,10 @@ function pcmContainsSpeech(pcmBytes: Uint8Array): boolean {
 /**
  * Why a connection closed, reported on `onClosed`: `local` (the owner called close()), `remote` (the
  * provider closed the socket without a preceding error, after taking audio), `rejected` (the provider
- * closed the socket before the session was usable: during the handshake, or before
- * `REJECTED_MAX_AUDIO_SAMPLES` of audio had been sent; an accepted-then-dropped session, which repeated
- * per frame would be a paid session start each time), `idle` (no media for the idle-close period),
+ * closed the socket before the session was usable: within `REJECTED_MAX_SESSION_AGE_MS` of creation and
+ * before `REJECTED_MAX_AUDIO_SAMPLES` of audio had been sent, so during the handshake or right after it;
+ * an accepted-then-dropped session, which repeated per frame would be a paid session start each
+ * time), `idle` (no media for the idle-close period),
  * `error` (a failure; `onError` fired first). The owner paces a reopen after `error` and `rejected`.
  */
 export type TranslatorCloseReason = 'local' | 'remote' | 'rejected' | 'idle' | 'error';
@@ -91,6 +92,13 @@ export type TranslatorCloseReason = 'local' | 'remote' | 'rejected' | 'idle' | '
  * come long after it.
  */
 const REJECTED_MAX_AUDIO_SAMPLES = 24000 * 2;
+
+/**
+ * ...and only when the connection is younger than this. A direction that stayed open for minutes with
+ * little or no audio (a muted participant with the idle close disabled) and was then dropped by the
+ * provider's own idle timeout was a healthy session, not a refused one, and reopens at once.
+ */
+const REJECTED_MAX_SESSION_AGE_MS = 10_000;
 
 export interface TranslatorConnectionOptions {
 	/** Target language code the provider accepts (e.g. "en", "es"; see provider.ts). */
@@ -136,6 +144,8 @@ export class TranslatorConnection {
 	private readonly idleCloseMs: number;
 	private idleTimer?: ReturnType<typeof setInterval>;
 	private idleSince = Date.now();
+	private readonly createdAt = Date.now();
+	private sessionUsableReported = false;
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingFramesOverflowed = false;
 	private pendingAudioData: Uint8Array = new Uint8Array(0);
@@ -165,6 +175,12 @@ export class TranslatorConnection {
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string, reason: TranslatorCloseReason) => void = undefined;
+	/**
+	 * Fired once, when the session has taken `REJECTED_MAX_AUDIO_SAMPLES` of audio: the point past which a
+	 * provider close is `remote` rather than `rejected`. The owner clears the direction's reopen backoff on
+	 * it, so an isolated failure hours later starts from the base wait again instead of a doubled one.
+	 */
+	onSessionUsable?: (tag: string) => void = undefined;
 	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
 	/**
 	 * A translated Opus frame to forward. `audioLevel` is the frame's RFC 6464 level (0 = full scale .. 127 = silence)
@@ -401,10 +417,12 @@ export class TranslatorConnection {
 				this.log(
 					`${provider.name} WebSocket closed for tag ${this.localTag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 				);
-				// A session the provider accepted and then closed before it was usable (mid-handshake, or after only
-				// a moment of audio) is reported as `rejected`, so the owner paces the re-dial instead of opening a
-				// new (billable) session per frame.
-				this.doClose(true, this.sentSamples < REJECTED_MAX_AUDIO_SAMPLES ? 'rejected' : 'remote');
+				// A session the provider accepted and then closed before it was usable (mid-handshake, or right after
+				// with only a moment of audio) is reported as `rejected`, so the owner paces the re-dial instead of
+				// opening a new (billable) session per frame. One that lived longer was healthy, however little audio
+				// it carried.
+				const rejected = this.sentSamples < REJECTED_MAX_AUDIO_SAMPLES && Date.now() - this.createdAt < REJECTED_MAX_SESSION_AGE_MS;
+				this.doClose(true, rejected ? 'rejected' : 'remote');
 			});
 		} catch (error) {
 			this.logError(`Failed to create ${provider.name} WebSocket for tag ${this.localTag}:`, error);
@@ -637,6 +655,10 @@ export class TranslatorConnection {
 			}));
 			// Bill only audio actually appended to the provider (see reportUsageDelta).
 			this.sentSamples += sampleCount;
+			if (!this.sessionUsableReported && this.sentSamples >= REJECTED_MAX_AUDIO_SAMPLES) {
+				this.sessionUsableReported = true;
+				this.onSessionUsable?.(this.localTag);
+			}
 			this.metricBatcher.increment({
 				name: 'backend_audio_sent',
 				worker: 'opus-transcriber-proxy',
@@ -659,6 +681,9 @@ export class TranslatorConnection {
 	}
 
 	private handleProviderMessage(data: any): void {
+		// xAI does not answer our Close frame, so its socket's listeners outlive doClose by about a second; an
+		// `error` event it sends in that window is not this direction's failure and must not count as one.
+		if (this.isClosed) return;
 		const provider = this.provider;
 		let parsedMessage;
 		try {
@@ -945,7 +970,7 @@ export class TranslatorConnection {
 			this.handshakeTimer = undefined;
 		}
 		if (this.idleTimer !== undefined) {
-			clearInterval(this.idleTimer as unknown as number);
+			clearInterval(this.idleTimer);
 			this.idleTimer = undefined;
 		}
 

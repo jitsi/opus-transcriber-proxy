@@ -117,6 +117,15 @@ describe('normalizeTargetLanguage', () => {
 		expect(() => normalizeTargetLanguage('', 'xai')).toThrow(/Unsupported/);
 		expect(() => normalizeTargetLanguage('klingon please', 'xai')).toThrow(/BCP-47/);
 	});
+
+	it('does not treat prototype properties as language names', () => {
+		// `__proto__` and `constructor` are truthy lookups on a plain object; they must not come back as a "language".
+		for (const name of ['__proto__', 'constructor', 'toString']) {
+			expect(() => normalizeTargetLanguage(name, 'openai')).toThrow(/Unsupported/);
+			if (name === 'toString') continue; // a valid BCP-47-shaped tag for xAI, sent as given
+			expect(() => normalizeTargetLanguage(name, 'xai')).toThrow(/Unsupported/);
+		}
+	});
 });
 
 describe('resolveConfiguredTranslationProvider', () => {

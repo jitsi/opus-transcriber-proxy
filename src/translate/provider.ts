@@ -110,10 +110,16 @@ const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
 	swedish: 'sv',
 };
 
+/** The ISO code for an English language name, or undefined. An own-property lookup: `__proto__` or
+ * `constructor` as a requested language must not come back as an object. */
+function languageNameToIso(name: string): string | undefined {
+	return Object.prototype.hasOwnProperty.call(LANGUAGE_NAME_TO_ISO, name) ? LANGUAGE_NAME_TO_ISO[name] : undefined;
+}
+
 function normalizeOpenAITargetLanguage(input: string): string {
 	const lower = input.trim().toLowerCase();
 	if (OPENAI_TARGET_LANGUAGES.has(lower)) return lower;
-	const mapped = LANGUAGE_NAME_TO_ISO[lower];
+	const mapped = languageNameToIso(lower);
 	if (mapped && OPENAI_TARGET_LANGUAGES.has(mapped)) return mapped;
 	throw new Error(
 		`Unsupported target language "${input}". Supported: ${Array.from(OPENAI_TARGET_LANGUAGES).join(', ')}`,
@@ -126,7 +132,7 @@ function normalizeOpenAITargetLanguage(input: string): string {
 // acceptance was probed only with bare two-letter codes and BCP-47 is case-insensitive anyway.
 function normalizeXAITargetLanguage(input: string): string {
 	const trimmed = input.trim();
-	const mapped = LANGUAGE_NAME_TO_ISO[trimmed.toLowerCase()];
+	const mapped = languageNameToIso(trimmed.toLowerCase());
 	if (mapped) return mapped;
 	if (isValidTargetLanguage(trimmed)) {
 		const [primary, ...rest] = trimmed.split('-');

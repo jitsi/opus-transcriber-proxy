@@ -257,7 +257,9 @@ export class TranslatorProxy extends Emitter {
 		this.desired = desired;
 		// Forget the reopen pacing and idle state of directions no longer requested, so the maps do not
 		// grow with every participant who ever joined a long-lived socket.
-		this.forgetDirections((inputSourceName, language) => !desired.get(inputSourceName)?.has(language));
+		this.forgetDirections(
+			(inputSourceName, language) => !desired.get(inputSourceName)?.has(language) && !this.devLanguages.has(language),
+		);
 
 		// Close any session no longer requested.
 		for (const [inputSourceName, byLanguage] of this.connections) {
@@ -414,6 +416,13 @@ export class TranslatorProxy extends Emitter {
 		};
 		conn.onError = (_tag, error) => {
 			this.emit('error', outputTag, error);
+		};
+		// The session has carried enough audio to count as healthy: a later failure starts the pacing from
+		// the base wait again, instead of doubling a backoff left over from a failure long before.
+		conn.onSessionUsable = () => {
+			if (this.connections.get(inputSourceName)?.get(language) === conn) {
+				this.reopenBackoff.delete(`${inputSourceName}.${language}`);
+			}
 		};
 		conn.onTranscription = (transcript, targetLanguage, isInterim) => {
 			this.emit('transcription', { transcript, targetLanguage, tag: inputSourceName, isInterim });

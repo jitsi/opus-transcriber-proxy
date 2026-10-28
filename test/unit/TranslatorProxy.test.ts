@@ -427,6 +427,33 @@ describe('TranslatorProxy (sources model)', () => {
 			expect(MockedConnection).toHaveBeenCalledTimes(2);
 		});
 
+		it('a session that carried 2 s of audio clears its backoff, so a later isolated failure starts from 1 s', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error'); // 1 s
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			const second = MockedConnection.mock.instances[1];
+			second.onSessionUsable('523834112-a0');
+			second.onClosed('523834112-a0', 'error'); // back to 1 s, not 2 s
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('a sources event does not forget the backoff of a dev-path direction', () => {
+			new TranslatorProxy(mockWebSocket, { initialLanguages: ['es'] }, mockRuntime);
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			MockedConnection.mock.instances[0].onClosed('spk-1', 'error');
+			mockWebSocket.emit('message', { data: sourcesMessage([], []) });
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1); // still inside the 1 s backoff
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+		});
+
 		it('forgets the backoff of a direction the bridge drops from requests', () => {
 			const first = requestOne();
 			first.onClosed('523834112-a0', 'error');

@@ -282,6 +282,41 @@ describe('TranslatorConnection on xAI', () => {
 		expect(c.closed).toEqual(['remote']);
 	});
 
+	it('a long-lived session dropped with little audio is "remote": it was healthy, not refused', async () => {
+		// A muted participant with the idle close disabled, dropped by xAI's own ~5 min idle timeout.
+		const { ws, closed } = await open({ idleCloseMs: 0 });
+		ws.fireOpen();
+		ws.fireMessage(sessionCreated());
+		ws.fireMessage(sessionUpdated());
+		await vi.advanceTimersByTimeAsync(300_000);
+		ws.fireClose(1000);
+		expect(closed).toEqual(['remote']);
+	});
+
+	it('reports the session usable once, after 2 s of audio', async () => {
+		const { conn, ws } = await open();
+		const usable = vi.fn();
+		conn.onSessionUsable = usable;
+		ws.fireOpen();
+		ws.fireMessage(sessionCreated());
+		ws.fireMessage(sessionUpdated());
+		for (let i = 1; i <= 99; i++) conn.handleMediaEvent(mediaEvent('55555555-a0', i));
+		expect(usable).not.toHaveBeenCalled();
+		for (let i = 100; i <= 150; i++) conn.handleMediaEvent(mediaEvent('55555555-a0', i));
+		expect(usable).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores provider messages after close: xAI does not answer our Close frame', async () => {
+		const { conn, ws, errors, runtime } = await open();
+		ws.fireOpen();
+		ws.fireMessage(sessionCreated());
+		ws.fireMessage(sessionUpdated());
+		conn.close();
+		ws.fireMessage(JSON.stringify({ type: 'error', error: { message: 'session closed' } }));
+		expect(errors).toEqual([]);
+		expect(runtime.logger.error).not.toHaveBeenCalled();
+	});
+
 	it('ignores an empty updated event and emits nothing with transcripts disabled', async () => {
 		const { ws, transcripts } = await open({ emitTranscripts: false });
 		ws.fireOpen();

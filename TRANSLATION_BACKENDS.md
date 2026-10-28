@@ -113,7 +113,7 @@ Everything else is provider-neutral and lives in `TranslatorConnection` and `Tra
 - RTP timing from the `RtpTimestamper`
 - Audio levels for the bridge's ssrc-audio-level extension
 - Usage reporting from the audio actually appended to the provider
-- Reopening a direction whose session went away on the source's next media frame, paced after a failure or a session the provider dropped before it was usable (mid-handshake or within the first 2 s of audio)
+- Reopening a direction whose session went away on the source's next media frame, paced after a failure or a session the provider dropped before it was usable (within 10 s of creation and under 2 s of audio); the pacing is cleared once a session has carried 2 s of audio
 
 ### Close Reasons
 
@@ -122,9 +122,9 @@ A `TranslatorConnection` reports why it closed, and the proxy decides from that 
 | Reason | Meaning | Reopen |
 |---|---|---|
 | `local` | the proxy closed it (dropped from `sources`) | no |
-| `remote` | the provider closed it after taking audio (xAI's idle drop or session cap) | next media frame |
+| `remote` | the provider closed an established session (xAI's idle drop or session cap) | next media frame |
 | `idle` | the proxy's idle close | next media frame, not on a `sources` event |
-| `rejected` | the provider closed it before it was usable | next media frame, paced 1-15 s |
+| `rejected` | the provider closed it before it was usable (young, little audio) | next media frame, paced 1-15 s |
 | `error` | a failure (`onError` fired first) | next media frame, paced 1-15 s |
 
 ## Adding a New Backend
