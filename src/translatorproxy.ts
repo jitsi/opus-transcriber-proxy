@@ -15,6 +15,8 @@
  */
 
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
+import type { TranslatorCloseReason } from './TranslatorConnection';
+import { defaultTranslationProvider, type TranslationProviderId } from './translate/provider';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 import { reportTranslationUsage } from './usage-reporter';
@@ -26,7 +28,12 @@ export interface TranslatorProxyOptions {
 	 * NOT use this — it drives synthetic sources via `sources` control events.
 	 */
 	initialLanguages?: string[];
-	provider?: string;
+	/**
+	 * Speech-to-speech provider for every direction of this connection (the `provider` URL
+	 * parameter), validated by the caller with resolveTranslationProvider. Undefined → the
+	 * deployment default (`runtime.config.provider`, else `openai`).
+	 */
+	provider?: TranslationProviderId;
 	/**
 	 * Translation usage token (the JVB-forwarded `X-Translation-Token`). Threaded to
 	 * the usage reporter so reported translation usage can be attributed downstream.
@@ -35,9 +42,16 @@ export interface TranslatorProxyOptions {
 	translationToken?: string;
 }
 
+// Per-direction reopen backoff after a connection failed (ms): base, doubling, capped. A direction whose
+// connection closed with an error, or was closed by the provider before it ever took audio, is not re-dialled
+// on the very next 20 ms frame, or an outage would turn into one connect attempt (a billable session start on
+// xAI) per frame per direction. A benign close (idle, or a provider-side close after audio flowed) is not paced.
+const REOPEN_BACKOFF_BASE_MS = 1000;
+const REOPEN_BACKOFF_MAX_MS = 15000;
+
 /**
  * Bridges a single export WebSocket (the bridge's dedicated translation socket)
- * to one or more OpenAI translation sessions.
+ * to one or more provider translation sessions (OpenAI or xAI, see ./translate/provider.ts).
  *
  * Driven by the JVB via the `sources` control event (PR jitsi/jitsi-videobridge#2419):
  *   {"event":"sources","exports":["523834112-a0"],"requests":["523834112-a0.en"]}
@@ -69,8 +83,22 @@ export class TranslatorProxy extends Emitter {
 	 */
 	private connections: Map<string, Map<string, TranslatorConnection>>;
 
+	/**
+	 * The authoritative desired state from the last `sources` event: input source name ->
+	 * (language -> request string, the output tag). A direction whose connection has gone away (the
+	 * provider closed it, the idle close, a failure) is reopened from here on the source's next
+	 * media frame, so a muted participant or a provider's session limit does not end translation
+	 * until the next `sources` event happens to arrive.
+	 */
+	private desired: Map<string, Map<string, string>> = new Map();
+
+	/** `${source}.${language}` -> { notBefore, backoffMs } for directions whose connection failed. */
+	private reopenBackoff: Map<string, { notBefore: number; backoffMs: number }> = new Map();
+
 	/** Dev/replay path only: languages applied to every incoming source. */
 	private devLanguages: Set<string>;
+
+	private readonly provider: TranslationProviderId;
 
 	/**
 	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
@@ -86,6 +114,7 @@ export class TranslatorProxy extends Emitter {
 		this.runtime = runtime;
 		this.connections = new Map<string, Map<string, TranslatorConnection>>();
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
+		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
 
 		this.ws.addEventListener('close', () => {
 			this.closeAllConnections();
@@ -176,11 +205,11 @@ export class TranslatorProxy extends Emitter {
 	/**
 	 * Send the server `info` message to the connected client right after connect (mirrors the
 	 * transcription path). Carries git hash / runtime / deployment details; the CF Worker augments
-	 * it in-place with a `worker` block. Translation always runs on OpenAI, so the provider is fixed.
+	 * it in-place with a `worker` block. `provider` names the speech-to-speech provider of this connection.
 	 */
 	private sendServerInfo(): void {
 		try {
-			const info = this.runtime.buildServerInfo();
+			const info = this.runtime.buildServerInfo(this.provider);
 			if (info === undefined) {
 				return;
 			}
@@ -217,6 +246,15 @@ export class TranslatorProxy extends Emitter {
 				desired.set(inputSourceName, byLanguage);
 			}
 			byLanguage.set(language, request);
+		}
+		this.desired = desired;
+		// Forget the reopen pacing of directions no longer requested, so the map does not grow with every
+		// participant who ever joined a long-lived socket.
+		for (const key of this.reopenBackoff.keys()) {
+			const dot = key.lastIndexOf('.');
+			if (!desired.get(key.slice(0, dot))?.has(key.slice(dot + 1))) {
+				this.reopenBackoff.delete(key);
+			}
 		}
 
 		// Close any session no longer requested.
@@ -304,7 +342,7 @@ export class TranslatorProxy extends Emitter {
 			return undefined;
 		}
 		try {
-			return normalizeTargetLanguage(language);
+			return normalizeTargetLanguage(language, this.provider);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.runtime.logger.warn(`Ignoring translation request with unsupported language "${language}": ${msg}`);
@@ -337,6 +375,7 @@ export class TranslatorProxy extends Emitter {
 			inputSourceName,
 			{
 				targetLanguage: language,
+				provider: this.provider,
 				...(token
 					? {
 							onUsageReport: (durationSeconds: number, targetLanguage: string) =>
@@ -350,14 +389,19 @@ export class TranslatorProxy extends Emitter {
 			this.runtime,
 		);
 
-		conn.onClosed = () => {
+		conn.onClosed = (_tag, reason) => {
 			const map = this.connections.get(inputSourceName);
-			if (map !== undefined) {
-				map.delete(language);
-				if (map.size === 0) {
-					this.connections.delete(inputSourceName);
-				}
+			// Only act if this connection is still the registered one: a reconcile may already have closed it
+			// and registered a replacement under the same key, and a late close from the old socket must then
+			// neither unregister the replacement nor touch the direction's reopen backoff.
+			if (map === undefined || map.get(language) !== conn) {
+				return;
 			}
+			map.delete(language);
+			if (map.size === 0) {
+				this.connections.delete(inputSourceName);
+			}
+			this.noteClosed(inputSourceName, language, reason);
 		};
 		conn.onError = (_tag, error) => {
 			this.emit('error', outputTag, error);
@@ -398,7 +442,18 @@ export class TranslatorProxy extends Emitter {
 
 		// Dev/replay path: lazily ensure a session for every active dev language for this source.
 		for (const language of this.devLanguages) {
-			this.ensureConnection(tag, language, `${tag}.${language}`);
+			if (this.mayReopen(tag, language)) {
+				this.ensureConnection(tag, language, `${tag}.${language}`);
+			}
+		}
+		// Reopen any requested direction whose connection has gone away (see `desired`).
+		const requested = this.desired.get(tag);
+		if (requested !== undefined) {
+			for (const [language, request] of requested) {
+				if (this.connections.get(tag)?.get(language) === undefined && this.mayReopen(tag, language)) {
+					this.ensureConnection(tag, language, request);
+				}
+			}
 		}
 
 		const byLanguage = this.connections.get(tag);
@@ -408,6 +463,32 @@ export class TranslatorProxy extends Emitter {
 		for (const conn of byLanguage.values()) {
 			conn.handleMediaEvent(parsedMessage);
 		}
+	}
+
+	/**
+	 * Record how a direction's connection ended, for the reopen pacing: a failure arms (and doubles)
+	 * the direction's backoff; a benign close clears it. Logged at info so a direction cycling on
+	 * idle closes is visible without being an error.
+	 */
+	private noteClosed(inputSourceName: string, language: string, reason: TranslatorCloseReason | undefined): void {
+		const key = `${inputSourceName}.${language}`;
+		if (reason === 'error' || reason === 'rejected') {
+			const prev = this.reopenBackoff.get(key);
+			const backoffMs = prev === undefined ? REOPEN_BACKOFF_BASE_MS : Math.min(prev.backoffMs * 2, REOPEN_BACKOFF_MAX_MS);
+			this.reopenBackoff.set(key, { notBefore: Date.now() + backoffMs, backoffMs });
+			this.runtime.logger.info(`translation direction ${key} ${reason === 'rejected' ? 'was closed by the provider before any audio' : 'failed'}; reopening on media not before ${backoffMs}ms`);
+			return;
+		}
+		this.reopenBackoff.delete(key);
+		if (reason === 'idle' || reason === 'remote') {
+			this.runtime.logger.info(`translation direction ${key} closed (${reason}); reopens on the source's next media`);
+		}
+	}
+
+	/** Whether a direction with no connection may be (re)opened now, per its failure backoff. */
+	private mayReopen(inputSourceName: string, language: string): boolean {
+		const entry = this.reopenBackoff.get(`${inputSourceName}.${language}`);
+		return entry === undefined || Date.now() >= entry.notBefore;
 	}
 
 	private activeConnectionCount(): number {

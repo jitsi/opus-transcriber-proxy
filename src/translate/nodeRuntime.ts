@@ -29,6 +29,7 @@ import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
 import { provideBase64 } from './base64';
 import { parseIntOr } from './env';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
+import { defaultTranslationProvider, isTranslationProviderId } from './provider';
 
 // Buffer-based base64 for the per-frame hot path: 20-100x faster than the portable atob/btoa
 // fallback, and available on every Node the container runs (node:22 lacks Uint8Array.toBase64).
@@ -44,8 +45,9 @@ provideBase64(
 	},
 );
 
-// Warn at most once per process if talk-end detection is disabled (see below).
+// Warn at most once per process about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
+let warnedBadProvider = false;
 
 export function createNodeTranslationRuntime(): TranslationRuntime {
 	const talkSilenceTimeoutMs = parseIntOr(process.env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS, 350);
@@ -56,11 +58,21 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 				'endpoint (no boundary event) translated sources will never report sending=false until the connection closes.',
 		);
 	}
+	const configuredProvider = config.translation.provider;
+	if (configuredProvider && !isTranslationProviderId(configuredProvider) && !warnedBadProvider) {
+		warnedBadProvider = true;
+		logger.error(`TRANSLATION_PROVIDER=${configuredProvider} is not a known speech-to-speech provider (openai, xai); using openai`);
+	}
 	return {
 		logger,
 		config: {
+			provider: isTranslationProviderId(configuredProvider) ? configuredProvider : 'openai',
 			openaiApiKey: config.translation.apiKey,
 			translationModel: config.translation.model,
+			xaiApiKey: config.translation.xaiApiKey,
+			xaiTranslationUrl: config.translation.xaiUrl,
+			xaiVoice: config.translation.xaiVoice,
+			idleCloseMs: config.translation.idleCloseMs,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
 			translationUsageUrl: config.translation.usageUrl,
@@ -78,10 +90,10 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			};
 		},
 		createOutboundWebSocket(url: string, options?: OutboundWebSocketOptions): IWebSocket {
-			// Node authenticates via the OpenAI subprotocol (the global WebSocket can't set headers).
+			// Node authenticates via the provider's auth subprotocol (the global WebSocket can't set headers).
 			const protocols = [...(options?.protocols ?? [])];
 			if (options?.bearerToken) {
-				protocols.push(`openai-insecure-api-key.${options.bearerToken}`);
+				protocols.push(`${options.authSubprotocolPrefix ?? 'openai-insecure-api-key.'}${options.bearerToken}`);
 			}
 			return new WebSocket(url, protocols) as unknown as IWebSocket;
 		},
@@ -91,9 +103,8 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 		createOpusEncoder(config_) {
 			return new OpusEncoder(config_);
 		},
-		buildServerInfo() {
-			// Translation always runs on OpenAI, so the reported provider is fixed.
-			return buildServerInfo({ provider: 'openai' });
+		buildServerInfo(provider) {
+			return buildServerInfo({ provider: provider ?? defaultTranslationProvider(this.config) });
 		},
 	};
 }

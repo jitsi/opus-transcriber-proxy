@@ -27,9 +27,12 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 import { parseIntOr } from '../src/translate/env';
+import { defaultTranslationProvider, isTranslationProviderId, type TranslationProviderId } from '../src/translate/provider';
 
-// Warn at most once per isolate if talk-end detection is disabled (see below).
+// Warn at most once per isolate about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
+let warnedBadProvider = false;
+let warnedBadIdleClose = false;
 
 export function createWorkerTranslationRuntime(env: Env, request?: Request): TranslationRuntime {
 	registerWorkerOpusWasm();
@@ -41,6 +44,20 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			'TRANSLATION_TALK_SILENCE_TIMEOUT_MS <= 0 disables talk-end detection; on the /v1/realtime/translations ' +
 				'endpoint (no boundary event) translated sources will never report sending=false until the connection closes.',
 		);
+	}
+	const configuredProvider = env.TRANSLATION_PROVIDER?.toLowerCase();
+	if (configuredProvider && !isTranslationProviderId(configuredProvider) && !warnedBadProvider) {
+		warnedBadProvider = true; // the runtime is built per connection; one line per isolate, not per connect
+		console.error(`TRANSLATION_PROVIDER=${configuredProvider} is not a known speech-to-speech provider (openai, xai); using openai`);
+	}
+	const provider: TranslationProviderId = isTranslationProviderId(configuredProvider) ? configuredProvider : 'openai';
+	// Unset or malformed → undefined, so the provider default applies (as the container's parseIntOrUndefined does);
+	// a typo must not silently disable the idle close that bounds xAI's wall-clock billing.
+	const idleCloseParsed = env.TRANSLATION_IDLE_CLOSE_MS !== undefined ? parseInt(env.TRANSLATION_IDLE_CLOSE_MS, 10) : NaN;
+	const idleCloseMs = Number.isFinite(idleCloseParsed) ? idleCloseParsed : undefined;
+	if (env.TRANSLATION_IDLE_CLOSE_MS !== undefined && idleCloseMs === undefined && !warnedBadIdleClose) {
+		warnedBadIdleClose = true;
+		console.warn(`TRANSLATION_IDLE_CLOSE_MS=${env.TRANSLATION_IDLE_CLOSE_MS} is not a number; using the provider default`);
 	}
 	return {
 		logger: {
@@ -54,8 +71,13 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 			error: (m, e) => (e === undefined ? console.error(m) : console.error(m, e)),
 		},
 		config: {
+			provider,
 			openaiApiKey: env.OPENAI_TRANSLATION_API_KEY || env.OPENAI_API_KEY || '',
 			translationModel: env.OPENAI_TRANSLATION_MODEL || 'gpt-realtime-translate',
+			xaiApiKey: env.XAI_TRANSLATION_API_KEY || env.XAI_API_KEY || '',
+			xaiTranslationUrl: env.XAI_TRANSLATION_URL || undefined,
+			xaiVoice: env.XAI_TRANSLATION_VOICE || undefined,
+			idleCloseMs,
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,
 			translationUsageUrl: env.TRANSLATION_USAGE_URL || '',
@@ -77,7 +99,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 		createOpusEncoder(config) {
 			return new OpusEncoderWasm(config);
 		},
-		buildServerInfo() {
+		buildServerInfo(connectionProvider) {
 			// The Worker-hosted /translate path never touches the container, so the container's info
 			// (and sessionProxy.ts's in-place augmentation of it) does not apply here — build the equivalent
 			// message directly. Mirrors src/serverInfo.ts, with a `worker` block for the Worker runtime.
@@ -86,8 +108,8 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request): Tra
 				application: 'opus-transcriber-proxy',
 				gitHash: GIT_HASH,
 				runtime: 'cloudflare-worker',
-				// Translation always runs on OpenAI, so the reported provider is fixed.
-				provider: 'openai',
+				// The speech-to-speech provider of this connection (`?provider=` or the deployment default).
+				provider: connectionProvider ?? defaultTranslationProvider(this.config),
 				// Whether this deployment is configured to report per-customer usage (URL set). A flag,
 				// not the URL itself — enough to answer "is usage reporting on for this worker?" from the
 				// peer's logs without echoing the endpoint into them.

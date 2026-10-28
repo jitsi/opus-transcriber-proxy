@@ -127,14 +127,29 @@ Set environment variables or use a `.env` file:
 
 ### Translation (`/translate`)
 
-Speech-to-speech translation via OpenAI's realtime translations endpoint (`gpt-realtime-translate`).
+Speech-to-speech translation, through one of two providers that speak the same realtime
+"session" protocol: OpenAI's realtime translations endpoint (`gpt-realtime-translate`, the default)
+or xAI's (`grok-realtime-translation-fast`). The deployment picks a default with
+`TRANSLATION_PROVIDER`; a connection can pick the other with the `provider` URL parameter
+(`/translate?provider=xai`). A provider is available when its key is set; an upgrade that names an
+unavailable one is refused. Differences that show: OpenAI accepts 13 target languages
+(en, es, pt, fr, ja, ru, zh, de, ko, hi, id, vi, it) and emits a transcript final only at the end of
+a talk; xAI accepts any BCP-47 tag, emits a final per source phrase (about 1.5 s after the phrase
+ends, usually before its audio), bills wall-clock session time idle included, and drops a session
+after ~5 min without audio, so the proxy closes an idle xAI direction itself (`TRANSLATION_IDLE_CLOSE_MS`)
+and reopens it on the participant's next frame.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_TRANSLATE` | `true` | Enable the `/translate` endpoint (disabled → its WebSocket upgrade is rejected with 404) |
 | `TRANSLATE_TRANSCRIPTS` | `true` | Emit target-language transcripts (`false` → translated audio only) |
-| `OPENAI_TRANSLATION_MODEL` | `gpt-realtime-translate` | Speech-to-speech translation model |
-| `OPENAI_TRANSLATION_API_KEY` | (falls back to `OPENAI_API_KEY`) | Separate API key for translation |
+| `TRANSLATION_PROVIDER` | `openai` | Speech-to-speech provider for connections that name none: `openai` or `xai` |
+| `OPENAI_TRANSLATION_MODEL` | `gpt-realtime-translate` | OpenAI speech-to-speech translation model |
+| `OPENAI_TRANSLATION_API_KEY` | (falls back to `OPENAI_API_KEY`) | Separate API key for OpenAI translation |
+| `XAI_TRANSLATION_API_KEY` | (falls back to `XAI_API_KEY`) | API key for xAI translation; the team must have the realtime-translation entitlement (403 "not enabled for this team" otherwise). Unset → `xai` is unavailable |
+| `XAI_TRANSLATION_URL` | `wss://api.x.ai/v1/realtime/translations` | xAI realtime translations endpoint |
+| `XAI_TRANSLATION_VOICE` | (unset, xAI's default `Ara`) | xAI TTS voice id for the translated speech |
+| `TRANSLATION_IDLE_CLOSE_MS` | (unset: never for OpenAI, `120000` for xAI) | Close a direction with no media for this long and reopen it on the next frame; `0` disables |
 | `TRANSLATION_USAGE_URL` | (unset) | Endpoint that receives translated-audio duration usage reports; unset → usage reporting is a no-op |
 | `TRANSLATION_USAGE_REPORT_INTERVAL_MS` | `15000` | Interval between incremental usage reports for an open translation direction; `<= 0` reports only the final delta at close |
 | `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` | `350` | Silence (ms past projected media playout) before a translated "talk" ends and a `sending=false` notification is emitted to clients. Must exceed the 100 ms RtpTimestamper gap threshold; `<= 0` disables end-of-talk detection — unsafe on the translations endpoint (which sends no boundary event), where a talk would then never end until the connection closes |

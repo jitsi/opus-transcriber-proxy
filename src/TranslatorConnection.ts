@@ -20,18 +20,26 @@ import { unrefTimer } from './translate/timers';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
+import {
+	defaultTranslationProvider,
+	getTranslationProvider,
+	normalizeTargetLanguage,
+	type TranslationProviderId,
+	type TranslationProviderSpec,
+} from './translate/provider';
 
-// The dedicated speech-to-speech translation endpoint. The model (default
-// gpt-realtime-translate, overridable via OPENAI_TRANSLATION_MODEL) is supplied
-// as a query param. Returns translated audio plus transcript deltas; requires
-// tier 1+ access. Docs: https://developers.openai.com/api/docs/models/gpt-realtime-translate
-const OPENAI_TRANSLATIONS_ENDPOINT = 'wss://api.openai.com/v1/realtime/translations';
+// The provider endpoints, protocol differences and session configuration live in ./translate/provider.ts.
+export { normalizeTargetLanguage };
 
-// Caps on audio buffered before the decoder/OpenAI socket are ready. These bound per-connection
+// Caps on audio buffered before the decoder/provider socket are ready. These bound per-connection
 // memory if init stalls; with N (source, language) pairs the worst case is N times these values.
-// 10 s of 24 kHz 16-bit mono PCM (~480 KB) before the OpenAI socket opens — connect is normally
+// 10 s of 24 kHz 16-bit mono PCM (~480 KB) before the provider session is ready — connect is normally
 // sub-second, so hitting this means the socket is stuck and the buffered audio is stale anyway.
 const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
+// A provider with a `session` handshake (xAI) must answer `session.created` and `session.updated`
+// within this long of the socket opening, or the direction is failed: audio buffers behind the
+// handshake, so a session that never becomes ready would otherwise hold the direction open, silent.
+const HANDSHAKE_TIMEOUT_MS = 10_000;
 // ~10 s of 20 ms Opus frames queued while the WASM decoder initialises.
 const MAX_PENDING_OPUS_FRAMES = 500;
 // RTP ticks per emitted Opus frame (48000 Hz * 20 ms = 960). The talk-stop timestamp is one past the end of the run:
@@ -66,47 +74,20 @@ function pcmContainsSpeech(pcmBytes: Uint8Array): boolean {
 	return rms > SPEECH_RMS_THRESHOLD;
 }
 
-// Supported target languages for the gpt-realtime-translate endpoint.
-// From https://github.com/openai/openai-cookbook examples/voice_solutions/realtime_translation_guide/.
-const SUPPORTED_TARGET_LANGUAGES = new Set([
-	'en', 'es', 'pt', 'fr', 'ja', 'ru', 'zh', 'de', 'ko', 'hi', 'id', 'vi', 'it',
-]);
-
-const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
-	english: 'en',
-	spanish: 'es',
-	portuguese: 'pt',
-	french: 'fr',
-	japanese: 'ja',
-	russian: 'ru',
-	chinese: 'zh',
-	mandarin: 'zh',
-	german: 'de',
-	korean: 'ko',
-	hindi: 'hi',
-	indonesian: 'id',
-	vietnamese: 'vi',
-	italian: 'it',
-};
-
 /**
- * Normalise a `?lang=` URL parameter to the 2-letter ISO code the
- * /v1/realtime/translations endpoint expects. Accepts both ISO codes
- * ("en", "es") and full English names ("english", "spanish").
+ * Why a connection closed, reported on `onClosed`: `local` (the owner called close()), `remote` (the
+ * provider closed the socket without a preceding error, after taking audio), `rejected` (the provider
+ * closed the socket before any audio was sent: an accepted-then-dropped session, which repeated per
+ * frame would be a paid session start each time), `idle` (no media for the idle-close period), `error`
+ * (a failure; `onError` fired first). The owner paces a reopen after `error` and `rejected`.
  */
-export function normalizeTargetLanguage(input: string): string {
-	const lower = input.trim().toLowerCase();
-	if (SUPPORTED_TARGET_LANGUAGES.has(lower)) return lower;
-	const mapped = LANGUAGE_NAME_TO_ISO[lower];
-	if (mapped && SUPPORTED_TARGET_LANGUAGES.has(mapped)) return mapped;
-	throw new Error(
-		`Unsupported target language "${input}". Supported: ${Array.from(SUPPORTED_TARGET_LANGUAGES).join(', ')}`,
-	);
-}
+export type TranslatorCloseReason = 'local' | 'remote' | 'rejected' | 'idle' | 'error';
 
 export interface TranslatorConnectionOptions {
-	/** ISO 2-letter target language code (e.g. "en", "es"). */
+	/** Target language code the provider accepts (e.g. "en", "es"; see provider.ts). */
 	targetLanguage: string;
+	/** Speech-to-speech provider; undefined → the runtime's default (`openai`). */
+	provider?: TranslationProviderId;
 	/**
 	 * Called periodically with the audio duration translated since the previous
 	 * report, plus a final delta on close; the deltas sum to this direction's total.
@@ -116,7 +97,7 @@ export interface TranslatorConnectionOptions {
 	 * endpoint sums each report's `duration_seconds`, so periodic deltas are
 	 * billing-equivalent to one cumulative report. Reporting-agnostic — the proxy
 	 * wires this to the usage reporter. `durationSeconds` is derived from the input
-	 * audio appended to OpenAI (24 kHz PCM).
+	 * audio appended to the provider (24 kHz PCM).
 	 */
 	onUsageReport?: (durationSeconds: number, targetLanguage: string) => void;
 }
@@ -137,7 +118,15 @@ export class TranslatorConnection {
 	private isClosed = false;
 	private opusDecoder?: IOpusDecoder<24000>;
 	private opusEncoder?: IOpusEncoder;
-	private openaiWebSocket?: IWebSocket;
+	private providerWebSocket?: IWebSocket;
+	// Fails the direction if a `session` handshake does not complete (see HANDSHAKE_TIMEOUT_MS).
+	private handshakeTimer?: ReturnType<typeof setTimeout>;
+	// Idle close (see TranslationRuntimeConfig.idleCloseMs): the period, the periodic check, and when
+	// media last arrived (creation time until the first frame, so a direction that never gets audio
+	// is closed too).
+	private readonly idleCloseMs: number;
+	private idleTimer?: ReturnType<typeof setInterval>;
+	private idleSince = Date.now();
 	private pendingOpusFrames: Uint8Array[] = [];
 	private pendingFramesOverflowed = false;
 	private pendingAudioData: Uint8Array = new Uint8Array(0);
@@ -153,7 +142,7 @@ export class TranslatorConnection {
 
 	private totalSamplesSent: number = 0;
 	private lastLoggedSecond: number = 0;
-	// Samples actually appended to OpenAI — the billable translated audio. Distinct from
+	// Samples actually appended to the provider — the billable translated audio. Distinct from
 	// totalSamplesSent (which counts all decoded audio, including frames dropped before the socket
 	// opens); usage is billed from this so a stalled/never-connected session that drops its buffered
 	// audio isn't charged. See reportUsageDelta / sendAudioToOpenAI.
@@ -166,7 +155,7 @@ export class TranslatorConnection {
 	private readonly rtpTimestamper = new RtpTimestamper();
 
 	onError?: (tag: string, error: any) => void = undefined;
-	onClosed?: (tag: string) => void = undefined;
+	onClosed?: (tag: string, reason: TranslatorCloseReason) => void = undefined;
 	onTranscription?: (transcript: string, targetLanguage: string, isInterim: boolean) => void = undefined;
 	/**
 	 * A translated Opus frame to forward. `audioLevel` is the frame's RFC 6464 level (0 = full scale .. 127 = silence)
@@ -192,11 +181,12 @@ export class TranslatorConnection {
 	private lastFrameTimestamp = 0;
 	private talkStartTimestamp = 0;
 	private talkBytes = 0;
-	// Accumulated transcript for the current run. The /v1/realtime/translations endpoint streams
-	// session.output_transcript.delta events that are INCREMENTAL FRAGMENTS (append-only, e.g. " sin", "color",
-	// "periód", "ica") — NOT a cumulative hypothesis — and it sends no transcript-done event. So the fragments are
-	// concatenated here and the whole run is emitted as the final at the talk-stop boundary (finalizePendingTranscript),
-	// then reset. Empty when nothing is pending. See the transcript handling in handleOpenAIMessage.
+	// Accumulated transcript for the current run. Both providers stream session.output_transcript.delta events
+	// that are INCREMENTAL FRAGMENTS (append-only, e.g. " sin", "color", "periód", "ica") — NOT a cumulative
+	// hypothesis. OpenAI sends no transcript-done event, so the fragments are concatenated here and the whole run
+	// is emitted as the final at the talk-stop boundary (finalizePendingTranscript), then reset. xAI sends a
+	// per-segment `session.output_transcript.updated` final (provider.serverTranscriptFinals), which is emitted
+	// as the final at once and resets the buffer. Empty when nothing is pending. See handleProviderMessage.
 	private transcriptBuffer = '';
 	// Debounce timer that ends the talk once BOTH output audio and (when enabled) the transcript have gone quiet
 	// for talkSilenceTimeoutMs; re-armed on each audio frame and each transcript delta. talkDeadline is its absolute
@@ -231,6 +221,7 @@ export class TranslatorConnection {
 
 	private options: TranslatorConnectionOptions;
 	private readonly runtime: TranslationRuntime;
+	private readonly provider: TranslationProviderSpec;
 	private metricBatcher: MetricBatcher;
 
 	constructor(tag: string, options: TranslatorConnectionOptions, runtime: TranslationRuntime) {
@@ -238,9 +229,17 @@ export class TranslatorConnection {
 		this.localTag = tag;
 		this.options = options;
 		this.runtime = runtime;
+		this.provider = getTranslationProvider(options.provider ?? defaultTranslationProvider(runtime.config), runtime.config);
 		this.measureLatency = runtime.config.debug;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
+		this.idleCloseMs = runtime.config.idleCloseMs ?? this.provider.defaultIdleCloseMs;
 		this.metricBatcher = runtime.createMetricBatcher();
+
+		if (this.idleCloseMs > 0) {
+			// Check a few times per period rather than re-arming a timer on every 20 ms frame.
+			this.idleTimer = setInterval(() => this.checkIdle(), Math.max(1000, Math.floor(this.idleCloseMs / 4)));
+			unrefTimer(this.idleTimer);
+		}
 
 		// Report usage incrementally (periodic deltas) while the direction is open, but only when a
 		// reporter is wired AND an interval is configured — dev/replay sessions pass no onUsageReport
@@ -255,7 +254,7 @@ export class TranslatorConnection {
 		this.initializeOpusEncoder();
 		// Deferred to a microtask so the proxy has wired onError/onClosed by the time it runs — otherwise a
 		// synchronous failure in `new WebSocket` (e.g. a bad URL) would have no callback to report through.
-		queueMicrotask(() => this.initializeOpenAIWebSocket());
+		queueMicrotask(() => this.initializeProviderWebSocket());
 	}
 
 	private log(message: string): void {
@@ -287,7 +286,7 @@ export class TranslatorConnection {
 			this.decoderStatus = 'failed';
 			// Notify before doClose() detaches the callbacks.
 			this.onError?.(this.localTag, `Error initializing Opus decoder: ${error instanceof Error ? error.message : String(error)}`);
-			this.doClose(true);
+			this.doClose(true, 'error');
 		}
 	}
 
@@ -318,91 +317,121 @@ export class TranslatorConnection {
 			// translated audio, so tear the connection down (matching the decoder path) instead of leaving it
 			// open and silently dropping every translated frame.
 			this.onError?.(this.localTag, `Error initializing Opus encoder: ${error instanceof Error ? error.message : String(error)}`);
-			this.doClose(true);
+			this.doClose(true, 'error');
 		}
 	}
 
-	private initializeOpenAIWebSocket(): void {
+	private initializeProviderWebSocket(): void {
 		// The connection may have been torn down (doClose) before this deferred init runs.
 		if (this.isClosed) {
 			return;
 		}
+		const provider = this.provider;
 		try {
-			const apiKey = this.runtime.config.openaiApiKey;
-			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(this.runtime.config.translationModel)}`;
-			// The runtime applies the bearer token the way its transport allows (Node → subprotocol,
+			// The runtime applies the bearer token the way its transport allows (Node → auth subprotocol,
 			// Worker → Authorization header); only one form is sent (OpenAI rejects both).
-			const openaiWs = this.runtime.createOutboundWebSocket(wsUrl, {
-				protocols: ['realtime'],
-				bearerToken: apiKey,
+			const ws = this.runtime.createOutboundWebSocket(provider.url, {
+				protocols: [...provider.protocols],
+				bearerToken: provider.apiKey,
+				authSubprotocolPrefix: provider.authSubprotocolPrefix,
 			});
 
-			this.log(`Opening OpenAI WebSocket for translation to ${this.options.targetLanguage}`);
+			this.log(`Opening ${provider.name} WebSocket for translation to ${this.options.targetLanguage}`);
 
-			this.openaiWebSocket = openaiWs;
+			this.providerWebSocket = ws;
 
-			openaiWs.addEventListener('open', () => {
-				this.log(`OpenAI WebSocket connected for translation to ${this.options.targetLanguage}`);
-				this.connectionStatus = 'connected';
-
-				// Canonical session schema for /v1/realtime/translations, per
-				// openai/openai-cookbook examples/voice_solutions/realtime_translation_guide/.
-				// Target language goes under audio.output.language as a 2-letter
-				// ISO code. The endpoint deliberately rejects session.instructions,
-				// session.type, session.output_modalities, voice, etc. — the model
-				// is purpose-built and intentionally unprompt-able to keep it
-				// translation-only (per the cookbook guide).
-				const sessionConfig = {
-					type: 'session.update',
-					session: {
-						audio: {
-							output: {
-								language: this.options.targetLanguage,
-							},
-						},
-					},
-				};
-
-				openaiWs.send(JSON.stringify(sessionConfig));
-				this.processPendingAudioData();
+			ws.addEventListener('open', () => {
+				this.log(`${provider.name} WebSocket connected for translation to ${this.options.targetLanguage}`);
+				if (provider.handshake === 'open') {
+					// OpenAI: configure and stream at once.
+					ws.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+					this.markConnected();
+					return;
+				}
+				// xAI: the server opens with `session.created`; `session.update` is answered with
+				// `session.updated`, and audio may only follow that (see handleProviderMessage).
+				this.handshakeTimer = setTimeout(() => {
+					if (this.isClosed || this.connectionStatus !== 'pending') return;
+					this.logError(`${provider.name} session not ready ${HANDSHAKE_TIMEOUT_MS}ms after connect for tag ${this.localTag}`);
+					this.runtime.writeMetric({
+						name: `${provider.id}_api_error`,
+						worker: 'opus-transcriber-proxy',
+						errorType: 'handshake_timeout',
+					});
+					this.onError?.(this.localTag, `${provider.name} session handshake timed out`);
+					this.doClose(true, 'error');
+				}, HANDSHAKE_TIMEOUT_MS);
+				unrefTimer(this.handshakeTimer);
 			});
 
-			openaiWs.addEventListener('message', (event) => {
-				this.handleOpenAIMessage(event.data);
+			ws.addEventListener('message', (event) => {
+				this.handleProviderMessage(event.data);
 			});
 
-			openaiWs.addEventListener('error', (event) => {
+			ws.addEventListener('error', (event) => {
 				const errorMessage = (event as { message?: string; }).message ?? 'WebSocket error';
-				this.logError(`OpenAI WebSocket error for tag ${this.localTag}: ${errorMessage}`);
+				if (this.isClosed) {
+					// Our own close() in flight: xAI does not answer the client's Close frame, so the socket ends
+					// 1006 with an error event about a second later. Not a provider failure, so not an error line.
+					this.log(`${provider.name} WebSocket error after close for tag ${this.localTag}: ${errorMessage}`);
+					return;
+				}
+				this.logError(`${provider.name} WebSocket error for tag ${this.localTag}: ${errorMessage}`);
 				this.runtime.writeMetric({
-					name: 'openai_api_error',
+					name: `${provider.id}_api_error`,
 					worker: 'opus-transcriber-proxy',
 					errorType: 'websocket_error',
 				});
 				// Notify before doClose() detaches the callbacks. doClose() is idempotent, so the close event
 				// that always follows an error is a no-op.
-				this.onError?.(this.localTag, `Error connecting to OpenAI service: ${errorMessage}`);
-				this.doClose(true);
+				this.onError?.(this.localTag, `Error connecting to ${provider.name} service: ${errorMessage}`);
+				this.doClose(true, 'error');
 			});
 
-			openaiWs.addEventListener('close', (event) => {
+			ws.addEventListener('close', (event) => {
 				this.log(
-					`OpenAI WebSocket closed for tag ${this.localTag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
+					`${provider.name} WebSocket closed for tag ${this.localTag}: code=${event.code} reason=${event.reason || 'none'} wasClean=${event.wasClean}`,
 				);
-				this.doClose(true);
+				// A session the provider accepted and then closed before we ever appended audio is reported as
+				// `rejected`, so the owner paces the re-dial instead of opening a new (billable) session per frame.
+				this.doClose(true, this.sentSamples === 0 ? 'rejected' : 'remote');
 			});
 		} catch (error) {
-			this.logError(`Failed to create OpenAI WebSocket for tag ${this.localTag}:`, error);
+			this.logError(`Failed to create ${provider.name} WebSocket for tag ${this.localTag}:`, error);
 			this.runtime.writeMetric({
-				name: 'openai_api_error',
+				name: `${provider.id}_api_error`,
 				worker: 'opus-transcriber-proxy',
 				errorType: 'connection_failed',
 			});
 			this.connectionStatus = 'failed';
 			// Notify before doClose() detaches the callbacks, then tear down so the proxy removes this session.
-			this.onError?.(this.localTag, `Failed to connect to OpenAI service: ${error instanceof Error ? error.message : String(error)}`);
-			this.doClose(true);
+			this.onError?.(this.localTag, `Failed to connect to ${provider.name} service: ${error instanceof Error ? error.message : String(error)}`);
+			this.doClose(true, 'error');
 		}
+	}
+
+	/** The provider session is ready for audio: flush what buffered while it was pending. */
+	private markConnected(): void {
+		if (this.handshakeTimer !== undefined) {
+			clearTimeout(this.handshakeTimer);
+			this.handshakeTimer = undefined;
+		}
+		this.connectionStatus = 'connected';
+		this.processPendingAudioData();
+	}
+
+	/** Close the direction if no media has arrived for idleCloseMs (see TranslationRuntimeConfig). */
+	private checkIdle(): void {
+		if (this.isClosed) return;
+		// Not while translated audio is still playing out: translation lags the source by seconds, so a
+		// speaker who finishes and mutes would otherwise have the tail of the last utterance cut off.
+		if (this.talkActive) return;
+		const idleFor = Date.now() - this.idleSince;
+		if (idleFor < this.idleCloseMs) return;
+		this.runtime.logger.info(
+			`[${this.connectionId}] Closing idle translation direction for tag ${this.localTag} (${this.options.targetLanguage}): no media for ${idleFor}ms`,
+		);
+		this.doClose(true, 'idle');
 	}
 
 	handleMediaEvent(mediaEvent: any): void {
@@ -417,6 +446,7 @@ export class TranslatorConnection {
 		}
 
 		this._lastMediaTime = Date.now();
+		this.idleSince = this._lastMediaTime;
 
 		let opusFrame: Uint8Array;
 
@@ -546,9 +576,9 @@ export class TranslatorConnection {
 			this.lastInputAppendAt = now;
 		}
 
-		if (this.connectionStatus === 'connected' && this.openaiWebSocket) {
+		if (this.connectionStatus === 'connected' && this.providerWebSocket) {
 			const encodedAudio = safeToBase64(audioData);
-			this.sendAudioToOpenAI(encodedAudio, samplesSent);
+			this.sendAudioToProvider(encodedAudio, samplesSent);
 		} else if (this.connectionStatus === 'pending') {
 			if (this.pendingAudioData.length + audioData.length <= MAX_PENDING_PCM_BYTES) {
 				const merged = new Uint8Array(this.pendingAudioData.length + audioData.length);
@@ -580,29 +610,28 @@ export class TranslatorConnection {
 		}
 	}
 
-	private sendAudioToOpenAI(encodedAudio: string, sampleCount: number): void {
-		if (!this.openaiWebSocket) {
+	private sendAudioToProvider(encodedAudio: string, sampleCount: number): void {
+		if (!this.providerWebSocket) {
 			this.logError(`No websocket available for tag: ${this.localTag}`);
 			return;
 		}
 
 		try {
-			// The /v1/realtime/translations endpoint requires the "session."
-			// prefix on client message types. Only session.update,
-			// session.input_audio_buffer.append, and session.close are accepted.
+			// Both providers' translation endpoints take the "session."-prefixed client message types:
+			// only session.update, session.input_audio_buffer.append and session.close are accepted.
 			// VAD and response triggering are handled server-side automatically.
-			this.openaiWebSocket.send(JSON.stringify({
+			this.providerWebSocket.send(JSON.stringify({
 				type: 'session.input_audio_buffer.append',
 				audio: encodedAudio,
 			}));
-			// Bill only audio actually appended to OpenAI (see reportUsageDelta).
+			// Bill only audio actually appended to the provider (see reportUsageDelta).
 			this.sentSamples += sampleCount;
 			this.metricBatcher.increment({
 				name: 'backend_audio_sent',
 				worker: 'opus-transcriber-proxy',
 			});
 		} catch (error) {
-			this.logError(`Failed to send audio to OpenAI for tag ${this.localTag}`, error);
+			this.logError(`Failed to send audio to ${this.provider.name} for tag ${this.localTag}`, error);
 		}
 	}
 
@@ -615,15 +644,16 @@ export class TranslatorConnection {
 		const encodedAudio = safeToBase64(this.pendingAudioData);
 		this.pendingAudioData = new Uint8Array(0);
 
-		this.sendAudioToOpenAI(encodedAudio, flushedSamples);
+		this.sendAudioToProvider(encodedAudio, flushedSamples);
 	}
 
-	private handleOpenAIMessage(data: any): void {
+	private handleProviderMessage(data: any): void {
+		const provider = this.provider;
 		let parsedMessage;
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			this.logError(`Failed to parse OpenAI message as JSON for tag ${this.localTag}:`, parseError);
+			this.logError(`Failed to parse ${provider.name} message as JSON for tag ${this.localTag}:`, parseError);
 			return;
 		}
 
@@ -631,7 +661,25 @@ export class TranslatorConnection {
 		// non-text frame, or the literal "null"). Guard against it so the WS
 		// message listener never throws and crashes the process.
 		if (parsedMessage === null || typeof parsedMessage !== 'object' || typeof parsedMessage.type !== 'string') {
-			this.log(`Ignoring non-object/typeless OpenAI message for tag ${this.localTag}`);
+			this.log(`Ignoring non-object/typeless ${provider.name} message for tag ${this.localTag}`);
+			return;
+		}
+
+		// Session handshake (xAI): `session.created` opens the exchange, `session.updated` confirms our
+		// configuration and permits audio. OpenAI echoes a `session.updated` too, but it is connected on
+		// open already, so this only acts while the connection is still pending.
+		if (parsedMessage.type === 'session.created') {
+			this.log(`[${this.options.targetLanguage}] ${provider.name} session created: ${JSON.stringify(parsedMessage.session ?? {})}`);
+			if (provider.handshake === 'session' && this.providerWebSocket && this.connectionStatus === 'pending') {
+				this.providerWebSocket.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+			}
+			return;
+		}
+		if (parsedMessage.type === 'session.updated') {
+			this.log(`[${this.options.targetLanguage}] ${provider.name} session updated: ${JSON.stringify(parsedMessage.session ?? {})}`);
+			if (this.connectionStatus === 'pending') {
+				this.markConnected();
+			}
 			return;
 		}
 
@@ -679,8 +727,9 @@ export class TranslatorConnection {
 		if (parsedMessage.type === 'session.output_transcript.delta') {
 			// Deltas are incremental fragments (append-only), not a cumulative hypothesis. Forward each as an
 			// interim (server.ts gates on `sendBack`/`sendBackInterim`) and concatenate into the run buffer so the
-			// whole utterance can be emitted as the final at the talk-stop boundary (the translations endpoint sends
-			// no transcript-done event; see finalizePendingTranscript). Suppressed when transcripts disabled.
+			// whole utterance can be emitted as the final at the talk-stop boundary (OpenAI sends no transcript-done
+			// event; see finalizePendingTranscript) or replaced by the provider's own final below. Suppressed when
+			// transcripts disabled.
 			if (this.runtime.config.emitTranscripts && typeof parsedMessage.delta === 'string' && parsedMessage.delta) {
 				this.onTranscription?.(parsedMessage.delta, this.options.targetLanguage, /* isInterim */ true);
 				this.transcriptBuffer += parsedMessage.delta;
@@ -694,22 +743,39 @@ export class TranslatorConnection {
 			return;
 		}
 
-		// The /v1/realtime/translations endpoint carries no transcript-done event and no per-utterance boundary
-		// event (audio-done / response.done): it streams deltas continuously, so the transcript final and the
-		// talk-stop are both driven by the silence timer (see finalizePendingTranscript / armTalkSilenceTimer).
+		// A per-segment transcript final (xAI). Its `text` is the segment's whole translation (measured equal to
+		// the concatenated deltas), so emit it as the final now and drop the buffered fragments, instead of
+		// waiting for the talk-stop silence. It lands ~1.5 s after the source phrase ends and typically before
+		// the segment's audio, so the subtitle leads the translated speech. Neither provider sends a per-segment
+		// AUDIO boundary, so the talk-stop stays silence-driven (armTalkSilenceTimer).
+		if (parsedMessage.type === 'session.output_transcript.updated') {
+			if (provider.serverTranscriptFinals && this.runtime.config.emitTranscripts) {
+				const text = typeof parsedMessage.text === 'string' ? parsedMessage.text.trim() : '';
+				this.transcriptBuffer = '';
+				if (text) {
+					this.log(`[${this.options.targetLanguage}] transcript final (segment ${parsedMessage.segment_id ?? '?'}): ${text}`);
+					this.onTranscription?.(text, this.options.targetLanguage, /* isInterim */ false);
+				}
+			}
+			return;
+		}
+
+		// Neither provider sends a per-utterance AUDIO boundary event (audio-done / response.done): output audio
+		// streams as deltas, so the talk-stop is driven by the silence timer (armTalkSilenceTimer), and for OpenAI
+		// so is the transcript final (finalizePendingTranscript).
 
 		this.log(`[${this.options.targetLanguage}] Received event: ${parsedMessage.type}`);
 
 		if (parsedMessage.type === 'error') {
-			this.logError(`OpenAI sent error message for ${this.localTag}: ${data}`);
+			this.logError(`${provider.name} sent error message for ${this.localTag}: ${data}`);
 			this.runtime.writeMetric({
-				name: 'openai_api_error',
+				name: `${provider.id}_api_error`,
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
 			// Notify before doClose() detaches the callbacks.
-			this.onError?.(this.localTag, `OpenAI service sent error message: ${data}`);
-			this.doClose(true);
+			this.onError?.(this.localTag, `${provider.name} service sent error message: ${data}`);
+			this.doClose(true, 'error');
 		}
 	}
 
@@ -792,6 +858,14 @@ export class TranslatorConnection {
 		if (this.transcriptBuffer === '') {
 			return;
 		}
+		// A provider that sends its own per-segment finals (xAI) owns finalization: publishing the buffered
+		// deltas here as well would print the segment twice when the silence timer lands between the deltas
+		// and the `updated` event. The deltas were already forwarded as interims; at close a segment whose
+		// final never arrived is dropped rather than guessed.
+		if (this.provider.serverTranscriptFinals) {
+			this.transcriptBuffer = '';
+			return;
+		}
 		const transcript = this.transcriptBuffer;
 		this.transcriptBuffer = '';
 		this.log(`[${this.options.targetLanguage}] transcript final: ${transcript}`);
@@ -826,7 +900,7 @@ export class TranslatorConnection {
 		this.onTalkStop?.(this.localTag, stopTimestamp, { bytesSent: this.talkBytes, duration });
 	}
 
-	// Report the audio duration translated (appended to OpenAI) since the previous report. Fired on a
+	// Report the audio duration translated (appended to the provider) since the previous report. Fired on a
 	// timer while open and once more at close to flush the remainder; the deltas sum to sentSamples / 24000.
 	private reportUsageDelta(): void {
 		const total = this.sentSamples;
@@ -844,14 +918,23 @@ export class TranslatorConnection {
 	}
 
 	close(): void {
-		this.doClose(false);
+		this.doClose(false, 'local');
 	}
 
-	private doClose(notify: boolean): void {
+	private doClose(notify: boolean, reason: TranslatorCloseReason): void {
 		if (this.isClosed) {
 			return;
 		}
 		this.isClosed = true;
+
+		if (this.handshakeTimer !== undefined) {
+			clearTimeout(this.handshakeTimer);
+			this.handshakeTimer = undefined;
+		}
+		if (this.idleTimer !== undefined) {
+			clearInterval(this.idleTimer as unknown as number);
+			this.idleTimer = undefined;
+		}
 
 		// Stop the periodic usage timer and flush the final remaining delta for this direction. Every
 		// teardown path (proxy reconcile, ws close, error) funnels through here, and the isClosed guard
@@ -867,7 +950,7 @@ export class TranslatorConnection {
 		// connection goes away. Fired while onTalkStop is still attached, before the detach below.
 		this.endTalk();
 
-		// Detach callbacks before teardown so a late OpenAI event firing during close() can't re-emit on the
+		// Detach callbacks before teardown so a late provider event firing during close() can't re-emit on the
 		// proxy. Keep onClosed locally so we can notify exactly once after everything is torn down.
 		const onClosed = this.onClosed;
 		this.onClosed = undefined;
@@ -886,11 +969,11 @@ export class TranslatorConnection {
 		this.opusDecoder = undefined;
 		this.opusEncoder?.free();
 		this.opusEncoder = undefined;
-		this.openaiWebSocket?.close();
-		this.openaiWebSocket = undefined;
+		this.providerWebSocket?.close();
+		this.providerWebSocket = undefined;
 
 		if (notify) {
-			onClosed?.(this.localTag);
+			onClosed?.(this.localTag, reason);
 		}
 	}
 }

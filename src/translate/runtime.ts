@@ -23,6 +23,7 @@
 
 import type { IOpusDecoder, OpusDecoderOptions } from '../OpusDecoder/opusTypes';
 import type { IOpusEncoder, OpusEncoderConfig } from '../OpusEncoder/opusEncoderTypes';
+import type { TranslationProviderId } from './provider';
 
 /** Minimal logger surface used by the translation core (a subset of the Winston logger's API). */
 export interface Logger {
@@ -47,25 +48,47 @@ export interface IWebSocket {
 	readonly readyState?: number;
 }
 
-/** Options for opening the outbound WebSocket to the OpenAI realtime endpoint. */
+/** Options for opening the outbound WebSocket to a provider's realtime endpoint. */
 export interface OutboundWebSocketOptions {
 	/** Required subprotocols (e.g. `realtime`), NOT including any auth. */
 	protocols?: string[];
 	/**
 	 * Bearer token for auth. Each runtime applies it the way its transport allows — Node via the
-	 * `openai-insecure-api-key.<token>` subprotocol (the global WebSocket can't set headers), a Worker
+	 * `<authSubprotocolPrefix><token>` subprotocol (the global WebSocket can't set headers), a Worker
 	 * via the `Authorization: Bearer` header on its fetch-upgrade. Only one form is sent, never both
 	 * (OpenAI rejects receiving both).
 	 */
 	bearerToken?: string;
+	/**
+	 * Prefix of the auth subprotocol for runtimes that cannot set headers: `openai-insecure-api-key.`
+	 * (the default) or `xai-insecure-api-key.`.
+	 */
+	authSubprotocolPrefix?: string;
 }
 
 /** Effective translation configuration, resolved by each runtime from its own environment. */
 export interface TranslationRuntimeConfig {
+	/**
+	 * The speech-to-speech provider a connection uses when its `provider` URL parameter names none
+	 * (`TRANSLATION_PROVIDER`; default `openai`). See ./provider.ts.
+	 */
+	provider?: TranslationProviderId;
 	/** OpenAI API key for the translations endpoint. */
 	openaiApiKey: string;
-	/** Speech-to-speech translation model. */
+	/** OpenAI speech-to-speech translation model. */
 	translationModel: string;
+	/** xAI API key for its realtime translations endpoint (`XAI_TRANSLATION_API_KEY` ?? `XAI_API_KEY`). Unset → `xai` unavailable. */
+	xaiApiKey?: string;
+	/** Override of the xAI realtime translations URL (`XAI_TRANSLATION_URL`). */
+	xaiTranslationUrl?: string;
+	/** xAI TTS voice id (`XAI_TRANSLATION_VOICE`); unset → xAI's default voice. */
+	xaiVoice?: string;
+	/**
+	 * Close a direction that has received no media for this long (ms), to be reopened on the
+	 * participant's next frame (`TRANSLATION_IDLE_CLOSE_MS`). Unset → the provider's default (0 for
+	 * OpenAI, XAI_DEFAULT_IDLE_CLOSE_MS for xAI, which bills idle wall-clock time); 0 disables.
+	 */
+	idleCloseMs?: number;
 	/** Emit target-language transcripts (false → translated audio only). */
 	emitTranscripts: boolean;
 	/** Enable debug-only latency instrumentation. */
@@ -115,15 +138,16 @@ export interface TranslationRuntime {
 	writeMetric(metric: Record<string, unknown>): void;
 	/** Create a per-connection metric batcher. */
 	createMetricBatcher(): MetricBatcher;
-	/** Open the outbound WebSocket to OpenAI. */
+	/** Open the outbound WebSocket to the translation provider. */
 	createOutboundWebSocket(url: string, options?: OutboundWebSocketOptions): IWebSocket;
 	/** Create the Opus decoder for the selected backend. */
 	createOpusDecoder(options: OpusDecoderOptions<24000>): IOpusDecoder<24000>;
 	/** Create the Opus encoder for the selected backend. */
 	createOpusEncoder(config: OpusEncoderConfig): IOpusEncoder;
 	/**
-	 * Build the server `info` message sent to the bridge on connect (build hash, runtime, deployment).
-	 * Returns undefined to skip sending it. The Worker may augment/replace this.
+	 * Build the server `info` message sent to the bridge on connect (build hash, runtime, deployment,
+	 * and the translation provider this connection uses). Returns undefined to skip sending it. The
+	 * Worker may augment/replace this.
 	 */
-	buildServerInfo(): Record<string, unknown> | undefined;
+	buildServerInfo(provider?: TranslationProviderId): Record<string, unknown> | undefined;
 }

@@ -52,6 +52,14 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.OPENAI_TRANSLATION_MODEL && { OPENAI_TRANSLATION_MODEL: env.OPENAI_TRANSLATION_MODEL }),
 		// Optional separate key for translation; when unset the container falls back to OPENAI_API_KEY.
 		...(env.OPENAI_TRANSLATION_API_KEY && { OPENAI_TRANSLATION_API_KEY: env.OPENAI_TRANSLATION_API_KEY }),
+		// Speech-to-speech provider selection and the xAI translation settings (a standalone container
+		// serving /translate itself; in the CF deployment the Worker serves /translate). Forwarded only
+		// when set, so the container defaults (openai; XAI_API_KEY as the xAI key) apply otherwise.
+		...(env.TRANSLATION_PROVIDER && { TRANSLATION_PROVIDER: env.TRANSLATION_PROVIDER }),
+		...(env.TRANSLATION_IDLE_CLOSE_MS && { TRANSLATION_IDLE_CLOSE_MS: env.TRANSLATION_IDLE_CLOSE_MS }),
+		...(env.XAI_TRANSLATION_API_KEY && { XAI_TRANSLATION_API_KEY: env.XAI_TRANSLATION_API_KEY }),
+		...(env.XAI_TRANSLATION_URL && { XAI_TRANSLATION_URL: env.XAI_TRANSLATION_URL }),
+		...(env.XAI_TRANSLATION_VOICE && { XAI_TRANSLATION_VOICE: env.XAI_TRANSLATION_VOICE }),
 		...(env.ENABLE_TRANSCRIBE && { ENABLE_TRANSCRIBE: env.ENABLE_TRANSCRIBE }),
 		...(env.ENABLE_TRANSLATE && { ENABLE_TRANSLATE: env.ENABLE_TRANSLATE }),
 		// Text translation of transcripts (the /transcribe path, which the container serves).

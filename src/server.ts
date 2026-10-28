@@ -28,6 +28,7 @@ import { DialResolution, ResolvedDial, resolveDial } from './agent/dial';
 import { assertPublicEndpointHost } from './agent/endpointGuard';
 import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-filtering-agent';
 import { normalizeTargetLanguage } from './TranslatorConnection';
+import { resolveTranslationProvider } from './translate/provider';
 import { createNodeTranslationRuntime } from './translate/nodeRuntime';
 import { buildTranslationMediaMessage, buildTranslationTalkStartMessage, buildTranslationTalkStopMessage, buildTranslationTranscriptMessage, type TranslationTalkStartData, type TranslationTalkStopData } from './translate/messages';
 import type { IWebSocket } from './translate/runtime';
@@ -609,14 +610,19 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 	const { url } = parameters;
 	const sendBack = parameters.sendBack;
 
-	// Translation always uses the OpenAI Realtime endpoint; without a key every TranslatorConnection would fail
-	// immediately, so reject the upgrade with a clear signal for operators. (config.translation.apiKey falls
-	// back to OPENAI_API_KEY when OPENAI_TRANSLATION_API_KEY is unset.)
-	if (!config.translation.apiKey) {
-		logger.error('Rejecting /translate connection: OpenAI API key not configured');
-		ws.close(1011, 'OpenAI API key not configured');
+	const runtime = createNodeTranslationRuntime();
+
+	// The speech-to-speech provider: `?provider=` or the deployment default. Without its key every
+	// TranslatorConnection would fail immediately, so reject the upgrade with a clear signal for operators.
+	const resolved = resolveTranslationProvider(parameters.provider, runtime.config);
+	if (resolved.error !== undefined) {
+		logger.error(`Rejecting /translate connection: ${resolved.error}`);
+		// 1008 (policy) for a client naming an unknown provider, 1011 for a deployment missing a key.
+		// closeReason cuts by UTF-8 bytes: the message echoes the caller's value, and ws throws above 123 bytes.
+		ws.close(resolved.kind === 'invalid' ? 1008 : 1011, closeReason(resolved.error));
 		return;
 	}
+	const provider = resolved.provider;
 
 	// Seed the initially-active target languages from `?lang=` for the dev/replay path only.
 	// The JVB connects without `lang` and drives synthetic sources via `sources` control events.
@@ -628,7 +634,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 				.split(',')
 				.map((l) => l.trim())
 				.filter((l) => l.length > 0)
-				.map((l) => normalizeTargetLanguage(l));
+				.map((l) => normalizeTargetLanguage(l, provider));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error(`Rejecting /translate connection: ${msg}`);
@@ -641,8 +647,8 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 
 	const translateSession = new TranslatorProxy(
 		ws as unknown as IWebSocket,
-		{ initialLanguages, provider: parameters.provider, translationToken },
-		createNodeTranslationRuntime(),
+		{ initialLanguages, provider, translationToken },
+		runtime,
 	);
 	activeTranslateSessions.add(translateSession);
 

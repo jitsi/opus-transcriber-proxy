@@ -352,6 +352,18 @@ export const config = {
 		apiKey: process.env.OPENAI_TRANSLATION_API_KEY || process.env.OPENAI_API_KEY || '',
 		// Endpoint for live-translation audio-duration usage reports. Unset → reporting is a no-op.
 		usageUrl: process.env.TRANSLATION_USAGE_URL || '',
+		// Speech-to-speech provider used when a connection names none (`?provider=`): openai (default)
+		// or xai. Validated in nodeRuntime.ts. See src/translate/provider.ts for the differences.
+		provider: process.env.TRANSLATION_PROVIDER?.toLowerCase() || 'openai',
+		// xAI realtime translation. The key falls back to the transcription key, like the OpenAI one;
+		// unset → the xai provider is unavailable.
+		xaiApiKey: process.env.XAI_TRANSLATION_API_KEY || process.env.XAI_API_KEY || '',
+		xaiUrl: process.env.XAI_TRANSLATION_URL || undefined,
+		// xAI TTS voice id; unset → xAI's default voice (Ara).
+		xaiVoice: process.env.XAI_TRANSLATION_VOICE || undefined,
+		// Close a direction with no media for this long (ms) and reopen it on the next frame. Unset →
+		// per provider: never for OpenAI, 120 s for xAI, which bills idle wall-clock time. 0 disables.
+		idleCloseMs: parseIntOrUndefined(process.env.TRANSLATION_IDLE_CLOSE_MS),
 	},
 
 	server: {

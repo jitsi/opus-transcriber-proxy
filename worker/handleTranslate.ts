@@ -26,6 +26,7 @@
 import type { Env } from './env';
 import { TranslatorProxy } from '../src/translatorproxy';
 import { normalizeTargetLanguage } from '../src/TranslatorConnection';
+import { resolveTranslationProvider } from '../src/translate/provider';
 import type { IWebSocket } from '../src/translate/runtime';
 import {
 	buildTranslationMediaMessage,
@@ -45,12 +46,19 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 	}
 
 	const runtime = createWorkerTranslationRuntime(env, request);
-	if (!runtime.config.openaiApiKey) {
-		console.error('Rejecting /translate: OpenAI API key not configured');
-		return new Response('OpenAI API key not configured', { status: 503 });
-	}
-
 	const url = new URL(request.url);
+
+	// The speech-to-speech provider: `?provider=` or the deployment default. Without its key every
+	// direction would fail immediately, so refuse the upgrade with a clear signal for operators.
+	const resolved = resolveTranslationProvider(url.searchParams.get('provider') ?? undefined, runtime.config);
+	if (resolved.error !== undefined) {
+		console.error(`Rejecting /translate: ${resolved.error}`);
+		// A client naming an unknown provider is its own mistake (400); a deployment with no key for the
+		// provider is ours (503), and the bridge may retry that one.
+		return new Response(resolved.error, { status: resolved.kind === 'invalid' ? 400 : 503 });
+	}
+	const provider = resolved.provider;
+
 	const sendBack = url.searchParams.get('sendBack') === 'true';
 	const sendBackInterim = url.searchParams.get('sendBackInterim') === 'true';
 	// Dispatcher output, matching the container path: query param first, env var fallback.
@@ -67,7 +75,7 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 				.split(',')
 				.map((l) => l.trim())
 				.filter((l) => l.length > 0)
-				.map((l) => normalizeTargetLanguage(l));
+				.map((l) => normalizeTargetLanguage(l, provider));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			return new Response(msg, { status: 400 });
@@ -83,7 +91,7 @@ export function handleTranslate(request: Request, env: Env, ctx: ExecutionContex
 	const server = pair[1];
 	server.accept();
 
-	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages, translationToken }, runtime);
+	const proxy = new TranslatorProxy(server as unknown as IWebSocket, { initialLanguages, provider, translationToken }, runtime);
 	const dispatcher = useDispatcher && env.DISPATCHER_DO ? createDispatcherForwarder(env, sessionId) : null;
 
 	proxy.on('audioFrame', (data: {
