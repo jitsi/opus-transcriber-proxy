@@ -424,8 +424,9 @@ export class TranslatorConnection {
 	private checkIdle(): void {
 		if (this.isClosed) return;
 		// Not while translated audio is still playing out: translation lags the source by seconds, so a
-		// speaker who finishes and mutes would otherwise have the tail of the last utterance cut off.
-		if (this.talkActive) return;
+		// speaker who finishes and mutes would otherwise have the tail of the last utterance cut off. With
+		// the talk timer disabled a talk never ends, so it cannot be allowed to hold the direction open.
+		if (this.talkActive && this.talkSilenceTimeoutMs > 0) return;
 		const idleFor = Date.now() - this.idleSince;
 		if (idleFor < this.idleCloseMs) return;
 		this.runtime.logger.info(
@@ -748,8 +749,10 @@ export class TranslatorConnection {
 		// waiting for the talk-stop silence. It lands ~1.5 s after the source phrase ends and typically before
 		// the segment's audio, so the subtitle leads the translated speech. Neither provider sends a per-segment
 		// AUDIO boundary, so the talk-stop stays silence-driven (armTalkSilenceTimer).
-		if (parsedMessage.type === 'session.output_transcript.updated') {
-			if (provider.serverTranscriptFinals && this.runtime.config.emitTranscripts) {
+		// On a provider without server finals the event falls through to the generic debug line below, so
+		// an endpoint that starts sending it is visible when debugging.
+		if (parsedMessage.type === 'session.output_transcript.updated' && provider.serverTranscriptFinals) {
+			if (this.runtime.config.emitTranscripts) {
 				const text = typeof parsedMessage.text === 'string' ? parsedMessage.text.trim() : '';
 				this.transcriptBuffer = '';
 				if (text) {

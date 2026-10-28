@@ -94,6 +94,13 @@ export class TranslatorProxy extends Emitter {
 
 	/** `${source}.${language}` -> { notBefore, backoffMs } for directions whose connection failed. */
 	private reopenBackoff: Map<string, { notBefore: number; backoffMs: number }> = new Map();
+	/**
+	 * Directions ("{source}.{language}") closed by the idle close and not reopened since. A `sources`
+	 * event does not reopen them: on a wall-clock-billed provider that would start a paid session for a
+	 * muted participant on every join or leave in the conference, to be idle-closed again. The source's
+	 * next media frame reopens them, as for any other close.
+	 */
+	private idleClosed: Set<string> = new Set();
 
 	/** Dev/replay path only: languages applied to every incoming source. */
 	private devLanguages: Set<string>;
@@ -248,14 +255,9 @@ export class TranslatorProxy extends Emitter {
 			byLanguage.set(language, request);
 		}
 		this.desired = desired;
-		// Forget the reopen pacing of directions no longer requested, so the map does not grow with every
-		// participant who ever joined a long-lived socket.
-		for (const key of this.reopenBackoff.keys()) {
-			const dot = key.lastIndexOf('.');
-			if (!desired.get(key.slice(0, dot))?.has(key.slice(dot + 1))) {
-				this.reopenBackoff.delete(key);
-			}
-		}
+		// Forget the reopen pacing and idle state of directions no longer requested, so the maps do not
+		// grow with every participant who ever joined a long-lived socket.
+		this.forgetDirections((inputSourceName, language) => !desired.get(inputSourceName)?.has(language));
 
 		// Close any session no longer requested.
 		for (const [inputSourceName, byLanguage] of this.connections) {
@@ -271,9 +273,14 @@ export class TranslatorProxy extends Emitter {
 			}
 		}
 
-		// Open any newly-requested session.
+		// Open any newly-requested session. A direction the idle close ended, or one whose last connection
+		// failed and is in its reopen backoff, is left to the source's next media frame (handleMediaEvent):
+		// `sources` fires on every join and leave, and re-dialling on each would defeat both.
 		for (const [inputSourceName, byLanguage] of desired) {
 			for (const [language, request] of byLanguage) {
+				if (this.idleClosed.has(`${inputSourceName}.${language}`) || !this.mayReopen(inputSourceName, language)) {
+					continue;
+				}
 				this.ensureConnection(inputSourceName, language, request);
 			}
 		}
@@ -323,6 +330,7 @@ export class TranslatorProxy extends Emitter {
 			return;
 		}
 		this.devLanguages.delete(normalized);
+		this.forgetDirections((inputSourceName, language) => language === normalized && !this.desired.get(inputSourceName)?.has(language));
 		for (const [inputSourceName, byLanguage] of this.connections) {
 			const conn = byLanguage.get(normalized);
 			if (conn !== undefined) {
@@ -366,6 +374,7 @@ export class TranslatorProxy extends Emitter {
 		if (existing !== undefined) {
 			return existing;
 		}
+		this.idleClosed.delete(`${inputSourceName}.${language}`);
 
 		// Wire the usage reporter only when a token is present (the JVB-forwarded X-Translation-Token).
 		// Without a token there is nothing to attribute, so we pass no onUsageReport at all — that also
@@ -480,8 +489,23 @@ export class TranslatorProxy extends Emitter {
 			return;
 		}
 		this.reopenBackoff.delete(key);
+		if (reason === 'idle') {
+			this.idleClosed.add(key);
+		}
 		if (reason === 'idle' || reason === 'remote') {
 			this.runtime.logger.info(`translation direction ${key} closed (${reason}); reopens on the source's next media`);
+		}
+	}
+
+	/** Drop the reopen pacing and idle state of every direction `gone` says is no longer wanted. */
+	private forgetDirections(gone: (inputSourceName: string, language: string) => boolean): void {
+		for (const set of [this.reopenBackoff, this.idleClosed] as Array<Map<string, unknown> | Set<string>>) {
+			for (const key of set.keys()) {
+				const dot = key.lastIndexOf('.');
+				if (gone(key.slice(0, dot), key.slice(dot + 1))) {
+					set.delete(key);
+				}
+			}
 		}
 	}
 

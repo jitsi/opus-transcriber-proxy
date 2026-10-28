@@ -16,6 +16,7 @@
 
 import dotenv from 'dotenv';
 import { validateTags } from './utils';
+import { parseIntOrUndefined } from './translate/env';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -46,12 +47,6 @@ function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	} catch {
 		return defaultValue;
 	}
-}
-
-function parseIntOrUndefined(value: string | undefined): number | undefined {
-	if (value === undefined || value === '') return undefined;
-	const parsed = parseInt(value, 10);
-	return isNaN(parsed) ? undefined : parsed;
 }
 
 function parseFloatOrUndefined(value: string | undefined): number | undefined {

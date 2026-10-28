@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
 	getTranslationProvider,
 	isTranslationProviderAvailable,
 	normalizeTargetLanguage,
+	resolveConfiguredTranslationProvider,
 	resolveTranslationProvider,
 	XAI_DEFAULT_IDLE_CLOSE_MS,
 	XAI_TRANSLATIONS_ENDPOINT,
@@ -108,10 +109,30 @@ describe('normalizeTargetLanguage', () => {
 
 	it('xai: accepts any BCP-47-shaped tag and English names, rejects free text', () => {
 		expect(normalizeTargetLanguage('nl', 'xai')).toBe('nl');
-		expect(normalizeTargetLanguage('zh-CN', 'xai')).toBe('zh-cn');
+		// The primary subtag is lowercased; region/script subtags keep the caller's case.
+		expect(normalizeTargetLanguage('ZH-CN', 'xai')).toBe('zh-CN');
+		expect(normalizeTargetLanguage(' zh-Hant ', 'xai')).toBe('zh-Hant');
 		expect(normalizeTargetLanguage('Dutch', 'xai')).toBe('nl');
 		expect(normalizeTargetLanguage('ceb', 'xai')).toBe('ceb');
 		expect(() => normalizeTargetLanguage('', 'xai')).toThrow(/Unsupported/);
 		expect(() => normalizeTargetLanguage('klingon please', 'xai')).toThrow(/BCP-47/);
+	});
+});
+
+describe('resolveConfiguredTranslationProvider', () => {
+	it('defaults to openai when unset, accepts a known provider case-insensitively', () => {
+		const warn = vi.fn();
+		expect(resolveConfiguredTranslationProvider(undefined, warn)).toBe('openai');
+		expect(resolveConfiguredTranslationProvider('', warn)).toBe('openai');
+		expect(resolveConfiguredTranslationProvider('XAI', warn)).toBe('xai');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('falls back to openai on an unknown value and warns once per process', () => {
+		const warn = vi.fn();
+		expect(resolveConfiguredTranslationProvider('deepgram', warn)).toBe('openai');
+		expect(resolveConfiguredTranslationProvider('deepgram', warn)).toBe('openai');
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][0]).toMatch(/TRANSLATION_PROVIDER=deepgram.*openai, xai/);
 	});
 });

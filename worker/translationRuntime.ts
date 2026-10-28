@@ -26,13 +26,12 @@ import { OpusEncoderWasm } from '../src/OpusEncoder/OpusEncoderWasm';
 import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
-import { parseIntOr } from '../src/translate/env';
+import { parseIntOr, parseIntOrUndefined } from '../src/translate/env';
 import type { TranslateProvider } from './providerOverride';
-import { defaultTranslationProvider, isTranslationProviderId, type TranslationProviderId } from '../src/translate/provider';
+import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from '../src/translate/provider';
 
 // Warn at most once per isolate about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
-let warnedBadProvider = false;
 let warnedBadIdleClose = false;
 
 /**
@@ -50,17 +49,11 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request, prov
 				'endpoint (no boundary event) translated sources will never report sending=false until the connection closes.',
 		);
 	}
-	const configuredProvider = env.TRANSLATION_PROVIDER?.toLowerCase();
-	if (configuredProvider && !isTranslationProviderId(configuredProvider) && !warnedBadProvider) {
-		warnedBadProvider = true; // the runtime is built per connection; one line per isolate, not per connect
-		console.error(`TRANSLATION_PROVIDER=${configuredProvider} is not a known speech-to-speech provider (openai, xai); using openai`);
-	}
-	const provider: TranslationProviderId = isTranslationProviderId(configuredProvider) ? configuredProvider : 'openai';
-	// Unset or malformed → undefined, so the provider default applies (as the container's parseIntOrUndefined does);
+	const provider = resolveConfiguredTranslationProvider(env.TRANSLATION_PROVIDER, (m) => console.error(m));
+	// Unset or malformed → undefined, so the provider default applies (the same helper the container uses);
 	// a typo must not silently disable the idle close that bounds xAI's wall-clock billing.
-	const idleCloseParsed = env.TRANSLATION_IDLE_CLOSE_MS !== undefined ? parseInt(env.TRANSLATION_IDLE_CLOSE_MS, 10) : NaN;
-	const idleCloseMs = Number.isFinite(idleCloseParsed) ? idleCloseParsed : undefined;
-	if (env.TRANSLATION_IDLE_CLOSE_MS !== undefined && idleCloseMs === undefined && !warnedBadIdleClose) {
+	const idleCloseMs = parseIntOrUndefined(env.TRANSLATION_IDLE_CLOSE_MS);
+	if (env.TRANSLATION_IDLE_CLOSE_MS && idleCloseMs === undefined && !warnedBadIdleClose) {
 		warnedBadIdleClose = true;
 		console.warn(`TRANSLATION_IDLE_CLOSE_MS=${env.TRANSLATION_IDLE_CLOSE_MS} is not a number; using the provider default`);
 	}

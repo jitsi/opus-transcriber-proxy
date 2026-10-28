@@ -33,6 +33,7 @@
 //   idle direction is closed proactively (`defaultIdleCloseMs`) and reopened on the next frame.
 
 import type { TranslationRuntimeConfig } from './runtime';
+import { isValidTargetLanguage } from '../textTranslate/TextTranslator';
 
 export type TranslationProviderId = 'openai' | 'xai';
 
@@ -109,11 +110,6 @@ const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
 	swedish: 'sv',
 };
 
-// A BCP-47-shaped tag: 2-3 letter primary subtag plus optional subtags (region, script, ...), e.g.
-// `es`, `zh-cn`, `pt-BR`. xAI documents "any non-empty tag" but a free-form string would let a typo
-// through to a paid session, so the shape is checked.
-const BCP47_RE = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i;
-
 function normalizeOpenAITargetLanguage(input: string): string {
 	const lower = input.trim().toLowerCase();
 	if (OPENAI_TARGET_LANGUAGES.has(lower)) return lower;
@@ -124,12 +120,19 @@ function normalizeOpenAITargetLanguage(input: string): string {
 	);
 }
 
+// xAI documents "any non-empty tag", but a free-form string would let a typo through to a paid session,
+// so the tag must have the BCP-47 shape jitsi-meet sends (the same check as text translation's). The
+// primary subtag is lowercased; the rest keep the caller's case (`zh-CN`, `zh-Hant`), since xAI's
+// acceptance was probed only with bare two-letter codes and BCP-47 is case-insensitive anyway.
 function normalizeXAITargetLanguage(input: string): string {
-	const lower = input.trim().toLowerCase();
-	const mapped = LANGUAGE_NAME_TO_ISO[lower];
+	const trimmed = input.trim();
+	const mapped = LANGUAGE_NAME_TO_ISO[trimmed.toLowerCase()];
 	if (mapped) return mapped;
-	if (BCP47_RE.test(lower)) return lower;
-	throw new Error(`Unsupported target language "${input}": expected a BCP-47 language tag such as "es" or "zh-cn"`);
+	if (isValidTargetLanguage(trimmed)) {
+		const [primary, ...rest] = trimmed.split('-');
+		return [primary.toLowerCase(), ...rest].join('-');
+	}
+	throw new Error(`Unsupported target language "${input}": expected a BCP-47 language tag such as "es" or "zh-CN"`);
 }
 
 /**
@@ -145,6 +148,24 @@ export function normalizeTargetLanguage(input: string, provider: TranslationProv
 /** The provider the deployment defaults to when a connection names none. */
 export function defaultTranslationProvider(config: TranslationRuntimeConfig): TranslationProviderId {
 	return config.provider ?? 'openai';
+}
+
+let warnedUnknownConfiguredProvider = false;
+
+/**
+ * The deployment's configured provider (`TRANSLATION_PROVIDER`), case-insensitively: unset → openai;
+ * an unknown value → openai too, reported through `warn` once per process or isolate (the runtimes
+ * are built per connection, so the check runs on every connect).
+ */
+export function resolveConfiguredTranslationProvider(raw: string | undefined, warn: (message: string) => void): TranslationProviderId {
+	const lower = raw?.trim().toLowerCase();
+	if (!lower) return 'openai';
+	if (isTranslationProviderId(lower)) return lower;
+	if (!warnedUnknownConfiguredProvider) {
+		warnedUnknownConfiguredProvider = true;
+		warn(`TRANSLATION_PROVIDER=${raw} is not a known speech-to-speech provider (${TRANSLATION_PROVIDERS.join(', ')}); using openai`);
+	}
+	return 'openai';
 }
 
 /** Whether a provider has the credentials it needs in this deployment. */

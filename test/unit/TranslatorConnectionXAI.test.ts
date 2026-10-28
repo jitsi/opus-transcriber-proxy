@@ -312,6 +312,17 @@ describe('TranslatorConnection on xAI', () => {
 		expect(ws.close).toHaveBeenCalled();
 	});
 
+	it('with the talk timer disabled a never-ending talk does not hold an idle direction open', async () => {
+		const { conn, ws, closed } = await open({ talkSilenceTimeoutMs: 0 });
+		ws.fireOpen();
+		ws.fireMessage(sessionCreated());
+		ws.fireMessage(sessionUpdated());
+		conn.handleMediaEvent(mediaEvent('55555555-a0', 1));
+		ws.fireMessage(audioDelta()); // starts a talk that, with no timer, never ends
+		await vi.advanceTimersByTimeAsync(150_000);
+		expect(closed).toEqual(['idle']);
+	});
+
 	it('TRANSLATION_IDLE_CLOSE_MS=0 disables the idle close for xAI too', async () => {
 		const { closed } = await open({ idleCloseMs: 0 });
 		await vi.advanceTimersByTimeAsync(600_000);

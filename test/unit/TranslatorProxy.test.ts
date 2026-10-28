@@ -399,6 +399,34 @@ describe('TranslatorProxy (sources model)', () => {
 			expect(MockedConnection).toHaveBeenCalledTimes(2);
 		});
 
+		it('a sources event does not reopen a direction the idle close ended; the next media frame does', () => {
+			// On a wall-clock-billed provider, reopening on every join/leave would start a paid session for
+			// each muted participant each time, only to be idle-closed again.
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'idle');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0', 'other-a0'], ['523834112-a0.en', 'other-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2); // only the new direction opened
+			expect(createdPairs()[1]).toEqual(['other-a0', 'en']);
+
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+			expect(createdPairs()[2]).toEqual(['523834112-a0', 'en']);
+			// Reopened, so a later sources event treats it as an ordinary live direction again.
+			MockedConnection.mock.instances[2].onClosed('523834112-a0', 'remote');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0', 'other-a0'], ['523834112-a0.en', 'other-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(4);
+		});
+
+		it('a sources event does not re-dial a direction inside its reopen backoff', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+		});
+
 		it('forgets the backoff of a direction the bridge drops from requests', () => {
 			const first = requestOne();
 			first.onClosed('523834112-a0', 'error');
