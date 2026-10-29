@@ -36,6 +36,10 @@ describe('agent dial resolution', () => {
 		expect(resolveDial({ status: 'gone' }, true)).toEqual({ kind: 'permanent', reason: 'agent no longer exists', report: false });
 	});
 
+	it('is permanent without a report when the conference cannot be routed: the report could not be either', () => {
+		expect(resolveDial({ status: 'unroutable', reason: 'conference cannot be routed: x' }, true)).toEqual({ kind: 'permanent', reason: 'conference cannot be routed: x', report: false });
+	});
+
 	it('is permanent with a report for an agent config the relay cannot act on', () => {
 		expect(resolveDialConfig({ ...ok, mediaFormat: { encoding: 'audio/pcmu' } }, true)).toEqual({ kind: 'permanent', reason: 'unsupported media format audio/pcmu', report: true });
 		expect(resolveDialConfig({ ...ok, fanIn: 'loudest' }, true)).toEqual({ kind: 'permanent', reason: 'unsupported fan-in loudest', report: true });

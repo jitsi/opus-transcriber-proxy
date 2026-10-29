@@ -20,29 +20,43 @@ import { validateTags } from './utils';
 // Load environment variables from .env file
 dotenv.config();
 
-/**
- * An env var restricted to a fixed set of values. A value outside the set falls back to the default
- * with a warning on stderr (config loads before the logger), rather than being cast and silently
- * misread: an operator who sets XAI_ENCODING=pcm should learn that it meant nothing.
- */
-/** An absolute URL, or empty when unset; anything else is a configuration error, reported at startup. */
-function absoluteUrlOrEmpty(name: string, raw: string | undefined): string {
-	const value = raw || '';
-	if (value) {
-		try {
-			new URL(value);
-		} catch {
-			throw new Error(`${name} must be an absolute URL, got ${JSON.stringify(value)}`);
-		}
-	}
-	return value;
+/** What loading the config warned about: said on stderr here (the logger does not exist yet) and again once the server listens. */
+export const configWarnings: string[] = [];
+
+function warnConfig(message: string): void {
+	console.warn(message);
+	configWarnings.push(message);
 }
 
+/**
+ * An http(s) URL, or empty when unset. Checked only while `checked` (the feature reading it is on), and an unusable
+ * value is dropped with a warning rather than thrown: the Worker hands the variable to every container, so a typo
+ * would otherwise crash-loop the fleet, the endpoints that never read it included.
+ */
+function httpUrlOrEmpty(name: string, raw: string | undefined, checked: boolean): string {
+	const value = raw || '';
+	if (!value || !checked) return value;
+	let protocol: string | undefined;
+	try {
+		protocol = new URL(value).protocol;
+	} catch {
+		// reported below
+	}
+	if (protocol === 'http:' || protocol === 'https:') return value;
+	warnConfig(`${name}=${JSON.stringify(value)} is not an http(s) URL; ignoring it`);
+	return '';
+}
+
+/**
+ * An env var restricted to a fixed set of values. A value outside the set falls back to the default
+ * with a warning, rather than being cast and silently misread: an operator who sets XAI_ENCODING=pcm
+ * should learn that it meant nothing.
+ */
 function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
 	if (raw === undefined || raw.trim() === '') return fallback;
 	const value = raw.trim().toLowerCase(); // XAI_ENCODING=Opus means opus
 	if ((allowed as readonly string[]).includes(value)) return value as T;
-	console.warn(`${name}=${JSON.stringify(raw)} is not one of ${allowed.join('|')}; using ${fallback}`);
+	warnConfig(`${name}=${JSON.stringify(raw)} is not one of ${allowed.join('|')}; using ${fallback}`);
 	return fallback;
 }
 
@@ -251,8 +265,9 @@ export const config = {
 		// Base URL of the provisioning API's internal routes (prosody's /voice-agent or the JaaS gateway). The
 		// gateway fetches each agent's dial config from it by id (GET dial) and reports the media leg to it (POST
 		// status): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
-		// Unset, only the dev ?endpoint= path can dial and the agent never advances past jicofo's `connecting`.
-		provisioningUrl: absoluteUrlOrEmpty('AGENT_PROVISIONING_URL', process.env.AGENT_PROVISIONING_URL),
+		// Unset (or not an http(s) URL, dropped with a warning while ENABLE_AGENT is on), only the dev ?endpoint= path can
+		// dial and the agent never advances past jicofo's `connecting`.
+		provisioningUrl: httpUrlOrEmpty('AGENT_PROVISIONING_URL', process.env.AGENT_PROVISIONING_URL, process.env.ENABLE_AGENT === 'true'),
 		provisioningToken: process.env.AGENT_PROVISIONING_TOKEN || '',
 		// Host header override for a prosody that routes HTTP by virtual host.
 		provisioningHost: process.env.AGENT_PROVISIONING_HOST || '',

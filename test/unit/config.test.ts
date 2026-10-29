@@ -56,6 +56,9 @@ describe('config', () => {
 		delete process.env.DEEPGRAM_DIARIZE;
 		delete process.env.GEMINI_MODEL;
 		delete process.env.GEMINI_TRANSCRIPTION_PROMPT;
+		delete process.env.ENABLE_AGENT;
+		delete process.env.AGENT_PROVISIONING_URL;
+		delete process.env.AGENT_PROVISIONING_ROUTING;
 	});
 
 	// Restore original env after all tests
@@ -153,6 +156,49 @@ describe('config', () => {
 			const { config } = await import('../../src/config');
 
 			expect(config.providersPriority).toEqual(['openai', 'deepgram', 'gemini']);
+		});
+	});
+
+	describe('agent provisioning', () => {
+		it('keeps an http(s) AGENT_PROVISIONING_URL', async () => {
+			process.env.ENABLE_AGENT = 'true';
+			process.env.AGENT_PROVISIONING_URL = 'https://signal-api.example/voice-agent';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.provisioningUrl).toBe('https://signal-api.example/voice-agent');
+			expect(configWarnings).toEqual([]);
+		});
+
+		it('drops an AGENT_PROVISIONING_URL that is not an http(s) URL with a warning while the agent is on, rather than failing to load', async () => {
+			for (const bad of ['localhost:5280/voice-agent', 'wss://signal-api.example/voice-agent', 'not a url']) {
+				vi.resetModules();
+				const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+				process.env.ENABLE_AGENT = 'true';
+				process.env.AGENT_PROVISIONING_URL = bad;
+				const { config, configWarnings } = await import('../../src/config');
+				expect(config.agent.provisioningUrl).toBe('');
+				expect(configWarnings).toEqual([expect.stringContaining('AGENT_PROVISIONING_URL')]);
+				expect(warn).toHaveBeenCalledWith(configWarnings[0]);
+				warn.mockRestore();
+			}
+		});
+
+		it('leaves AGENT_PROVISIONING_URL unchecked while the agent endpoint is off', async () => {
+			process.env.AGENT_PROVISIONING_URL = 'not a url';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.provisioningUrl).toBe('not a url');
+			expect(configWarnings).toEqual([]);
+		});
+
+		it('falls back to direct routing for an unknown AGENT_PROVISIONING_ROUTING, with a warning', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.AGENT_PROVISIONING_ROUTING = 'nginx';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.provisioningRouting).toBe('direct');
+			expect(configWarnings).toEqual([expect.stringContaining('AGENT_PROVISIONING_ROUTING')]);
+			warn.mockRestore();
+			vi.resetModules();
+			process.env.AGENT_PROVISIONING_ROUTING = 'HAProxy';
+			expect((await import('../../src/config')).config.agent.provisioningRouting).toBe('haproxy');
 		});
 	});
 

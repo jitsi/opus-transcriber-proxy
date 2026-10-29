@@ -36,13 +36,16 @@ export interface AgentDialConfig {
 /** The outcome of fetching a dial config, so the caller can tell a retryable failure from a permanent one. */
 export type DialConfigResult =
 	| { status: 'ok'; config: AgentDialConfig }
-	/** 404: the agent no longer exists. */
+	/** 404 for the agent: it no longer exists. */
 	| { status: 'gone' }
 	/**
 	 * The API could not be reached, answered with an error other than 404, or answered with something that is not a
-	 * dial config. All are the API's problem rather than the agent's, so worth retrying.
+	 * dial config. All are the API's problem rather than the agent's, so worth retrying. With haproxy routing a 404
+	 * saying the room is unknown counts here too: the call reached a shard that does not hold the room.
 	 */
-	| { status: 'unavailable'; reason: string };
+	| { status: 'unavailable'; reason: string }
+	/** The conference names nothing haproxy routing can place (see [conferenceRoute]), so no request was made. */
+	| { status: 'unroutable'; reason: string };
 
 export interface ProvisioningResponse {
 	status: number;
@@ -57,8 +60,8 @@ export interface ProvisioningClientOptions {
 	/**
 	 * How the API is reached. `direct` (default): `<url>/<route>`, one prosody or a gateway that routes by itself.
 	 * `haproxy`: a sharded deployment behind its HAProxy, which picks the shard holding the room from the URL, so the
-	 * tenant goes in front of the base path and the room into a `room` query parameter:
-	 * `https://<signal-api host>/<tenant>/voice-agent/dial?room=<room>&conference=…`.
+	 * tenant goes in front of the base path and the room into a `room` query parameter, appended last:
+	 * `https://<signal-api host>/<tenant>/voice-agent/dial?conference=…&agentId=…&room=<room>`.
 	 */
 	routing?: ProvisioningRouting;
 	/** Bearer presented on the internal routes (the component's `voice_agent_status_secret`). */
@@ -83,7 +86,8 @@ export interface ProvisioningClientOptions {
  * the bridge connects (`GET dial`), so the customer endpoint and its secret never travel through room metadata,
  * jicofo or the bridge, and it posts the media leg's lifecycle (`POST status`): the gateway is the only component
  * that sees the customer socket, so it owns `active` (socket open), `failed` (dial failed) and `ended` (agent
- * sent `end`). Status reports get one retry on a transport error or 5xx; a 404 means the agent is already gone.
+ * sent `end`). Status reports retry a transport error or 5xx with backoff; a 404 means the agent is already gone
+ * (under haproxy routing, also that the shard reached does not hold the room).
  */
 export class ProvisioningClient {
 	private readonly request: (method: 'GET' | 'POST', path: string, body?: string) => Promise<ProvisioningResponse>;
@@ -93,18 +97,15 @@ export class ProvisioningClient {
 
 	constructor(private readonly options: ProvisioningClientOptions) {
 		this.routing = options.routing ?? 'direct';
-		if (this.routing !== 'direct' && this.routing !== 'haproxy') {
-			throw new Error(`provisioning routing must be "direct" or "haproxy", got ${JSON.stringify(options.routing)}`);
-		}
 		this.basePath = this.routing === 'haproxy' && options.url ? new URL(options.url).pathname.replace(/\/+$/, '') : '';
 		this.request = options.request ?? ((method, path, body) => this.send(method, path, body));
 	}
 
 	/**
 	 * The request path for a route about `conference`. With haproxy routing it is absolute on the API's origin:
-	 * `/<tenant>/<base path>/<route>?…&room=<room>`, the form HAProxy keys its stick table on (tenant from the path,
-	 * room from the parameter), so the call lands on the shard where the meeting is. The room is spelled as the
-	 * meeting URL spells it (a URL component, not a form field: HAProxy compares bytes and only normalises %25).
+	 * `/<tenant>/<base path>/<route>?…&room=<room>`, the form HAProxy keys its stick table on: the tenant from the
+	 * path and the room from the parameter, both lower-cased, `%25` normalised to `%` and nothing else decoded. So
+	 * the room must be spelled byte for byte as the meeting's own connection spells it (see [conferenceRoute]).
 	 */
 	private route(path: string, conference: string): string {
 		if (this.routing !== 'haproxy') {
@@ -116,15 +117,38 @@ export class ProvisioningClient {
 		}
 		const { tenant, room } = conferenceRoute(conference);
 		const [pathname, query = ''] = path.split('?');
-		// Both encoded: the tenant must stay one path segment and the room one query value, whatever the name holds.
-		return `${tenant ? `/${encodeURIComponent(tenant)}` : ''}${this.basePath}/${pathname}?${query ? `${query}&` : ''}room=${encodeURIComponent(room)}`;
+		// The tenant stays one path segment whatever the name holds; the room is a form field, as jitsi-meet sends it.
+		return `${tenant ? `/${encodeURIComponent(tenant)}` : ''}${this.basePath}/${pathname}?${query ? `${query}&` : ''}${new URLSearchParams({ room })}`;
+	}
+
+	/**
+	 * Whether a 404 says the room, not the agent, is unknown. Under haproxy routing that most likely means the call
+	 * reached a shard without the room (a breakout room, or a spelling HAProxy keys differently from the meeting's),
+	 * worth saying with the path that was tried; the shard that held a meeting answers the same once the meeting is
+	 * over, which cannot be told apart here. One prosody answers it only in that last case, when the agent is gone
+	 * too, so under direct routing it is not looked at.
+	 */
+	private roomNotFound(label: string, response: ProvisioningResponse, path: string): boolean {
+		if (this.routing !== 'haproxy') {
+			return false;
+		}
+		let error: unknown;
+		try {
+			error = (JSON.parse(response.body) as { error?: unknown })?.error;
+		} catch {
+			return false;
+		}
+		if (typeof error !== 'string' || !/room not found/i.test(error)) {
+			return false;
+		}
+		this.options.logger.warn(`${label}: ${path} answered 404 ${JSON.stringify(error)}, the shard reached does not hold the room (or the meeting is over)`);
+		return true;
 	}
 
 	get enabled(): boolean {
 		return this.options.url !== '';
 	}
 
-	/** The dial config for an agent, or undefined when the API is not configured, the agent is gone, or the fetch failed. */
 	/** The dial config, or undefined when there is none to act on (see [fetchDialConfig] for why). */
 	async dialConfig(conference: string, agentId: string): Promise<AgentDialConfig | undefined> {
 		const result = await this.fetchDialConfig(conference, agentId);
@@ -136,15 +160,27 @@ export class ProvisioningClient {
 			return { status: 'unavailable', reason: 'no provisioning API configured' };
 		}
 		const label = `agent ${agentId}`;
+		let path: string;
+		try {
+			path = this.route(`dial?conference=${encodeURIComponent(conference)}&agentId=${encodeURIComponent(agentId)}`, conference);
+		} catch (error) {
+			// Nothing a retry would change, and a status report could not be routed either.
+			const reason = error instanceof Error ? error.message : String(error);
+			this.options.logger.warn(`Dial config fetch for ${label} cannot be routed: ${reason}`);
+			return { status: 'unroutable', reason: `conference cannot be routed: ${reason}` };
+		}
 		let response: ProvisioningResponse;
 		try {
-			response = await this.request('GET', this.route(`dial?conference=${encodeURIComponent(conference)}&agentId=${encodeURIComponent(agentId)}`, conference));
+			response = await this.request('GET', path);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			this.options.logger.warn(`Dial config fetch for ${label} failed: ${reason}`);
 			return { status: 'unavailable', reason: `provisioning API unreachable: ${reason}` };
 		}
 		if (response.status === 404) {
+			if (this.roomNotFound(label, response, path)) {
+				return { status: 'unavailable', reason: 'provisioning API does not know the room on the shard reached' };
+			}
 			this.options.logger.info(`Dial config fetch for ${label}: agent no longer exists`);
 			return { status: 'gone' };
 		}
@@ -210,18 +246,23 @@ export class ProvisioningClient {
 		const maxAttempts = this.options.maxAttempts ?? 5;
 		const baseDelayMs = this.options.retryDelayMs ?? 1000;
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			let status: number;
+			let response: ProvisioningResponse | undefined;
 			try {
-				status = (await this.request('POST', path, body)).status;
+				response = await this.request('POST', path, body);
 			} catch (error) {
-				status = -1;
 				this.options.logger.warn(`Status report for ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
+			const status = response?.status ?? -1;
 			if (status >= 200 && status < 300) {
 				return;
 			}
-			if (status === 404) {
-				this.options.logger.info(`Status report for ${label}: agent no longer exists`);
+			if (response?.status === 404) {
+				if (this.roomNotFound(label, response, path)) {
+					// The same token reaches the same shard again; the give-up is what makes the misroute countable.
+					this.options.onReportGivenUp?.(state);
+				} else {
+					this.options.logger.info(`Status report for ${label}: agent no longer exists`);
+				}
 				return;
 			}
 			if (attempt < maxAttempts) {
@@ -274,30 +315,49 @@ export class ProvisioningClient {
 }
 
 /**
- * The tenant and room of a conference as the meeting URL spells them, lower-cased. Accepts the MUC JID jicofo
- * sends (`room@conference.<domain>`, `[tenant]room@…` on a multi-tenant deployment) and the public form
- * (`<tenant>/<room>` or `<room>`).
+ * The tenant and room of a conference, spelled for HAProxy's stick token: the tenant lower-cased, the room as
+ * jitsi-meet puts it on the meeting's own `?room=` (decoded, a malformed escape kept as typed, NFKC-normalised,
+ * lower-cased; the caller form-encodes it the way `URLSearchParams` does there). The MUC JID's node is that
+ * name percent-encoded, so it is decoded here. Accepts the JID jicofo sends (`room@conference.<domain>`,
+ * `[tenant]room@…` on a multi-tenant deployment) and the public form (`<tenant>/<room>` or `<room>`).
  */
 export function conferenceRoute(conference: string): { tenant?: string; room: string } {
 	let tenant: string | undefined;
 	let room: string;
-	const at = conference.indexOf('@');
+	const trimmed = conference.trim();
+	const at = trimmed.indexOf('@');
 	if (at !== -1) {
-		// Lower-cased like HAProxy's own X-Group/X-Room (`%[path,lower]`, `%[url_param(room),lower]`).
-		const node = conference.slice(0, at).toLowerCase();
+		const node = trimmed.slice(0, at);
 		const match = /^\[([^\]]*)\](.*)$/.exec(node);
 		[tenant, room] = match ? [match[1], match[2]] : [undefined, node];
 	} else {
-		const trimmed = conference.trim().replace(/^\/+|\/+$/g, '').toLowerCase();
-		const slash = trimmed.indexOf('/');
-		[tenant, room] = slash === -1 ? [undefined, trimmed] : [trimmed.slice(0, slash), trimmed.slice(slash + 1)];
+		const path = trimmed.replace(/^\/+|\/+$/g, '');
+		const slash = path.indexOf('/');
+		[tenant, room] = slash === -1 ? [undefined, path] : [path.slice(0, slash), path.slice(slash + 1)];
+		if (room.includes('/')) {
+			// Which slash separates the tenant is anyone's guess; a room's own slash arrives encoded in a JID.
+			throw new Error(`conference ${JSON.stringify(conference)} does not name one room`);
+		}
 	}
-	// A room is one name and a tenant one path segment; anything else would change the request, not pick a shard.
-	if (!room || room.includes('/')) {
+	room = normalizeRoom(room);
+	if (!room) {
 		throw new Error(`conference ${JSON.stringify(conference)} does not name one room`);
 	}
+	tenant = tenant?.toLowerCase();
+	// A tenant is one path segment; `.` and `..` would change the request, not pick a shard.
 	if (tenant !== undefined && (!tenant || tenant === '.' || tenant === '..')) {
 		throw new Error(`conference ${JSON.stringify(conference)} does not name a tenant`);
 	}
 	return tenant === undefined ? { room } : { tenant, room };
+}
+
+/** jitsi-meet's `getNormalizedRoomName`: decoded when it decodes, then NFKC and lower case. */
+function normalizeRoom(spelled: string): string {
+	let room = spelled;
+	try {
+		room = decodeURIComponent(spelled);
+	} catch {
+		// Not an encoded name, only one that looks like it; jitsi-meet keeps it as typed too.
+	}
+	return room.normalize('NFKC').toLowerCase();
 }

@@ -31,9 +31,9 @@ export interface ResolvedDial {
 
 /**
  * How an /agent upgrade is answered. A transient failure (the provisioning API unavailable or answering garbage)
- * refuses the upgrade with HTTP 400, which the bridge retries. A permanent one (the agent gone, an agent config the
- * relay cannot act on) is accepted and closed with the terminal code, so the bridge stops redialing, and is reported
- * `failed` once when it is the agent's config that is wrong.
+ * refuses the upgrade with HTTP 400, which the bridge retries. A permanent one (the agent gone, a conference the
+ * relay cannot route, an agent config the relay cannot act on) is accepted and closed with the terminal code, so the
+ * bridge stops redialing, and is reported `failed` once when it is the agent's config that is wrong.
  */
 export type DialResolution =
 	| { kind: 'dial'; dial: ResolvedDial }
@@ -46,6 +46,9 @@ export function resolveDial(result: DialConfigResult, requireWss: boolean): Dial
 			return { kind: 'transient', reason: result.reason };
 		case 'gone':
 			return { kind: 'permanent', reason: 'agent no longer exists', report: false };
+		case 'unroutable':
+			// A status report could not be routed either, so none is attempted.
+			return { kind: 'permanent', reason: result.reason, report: false };
 		case 'ok':
 			return resolveDialConfig(result.config, requireWss);
 	}
