@@ -142,4 +142,5 @@ export interface Env {
 	AGENT_PROVISIONING_URL?: string;
 	AGENT_PROVISIONING_TOKEN?: string;
 	AGENT_PROVISIONING_HOST?: string;
+	AGENT_PROVISIONING_ROUTING?: string;
 }

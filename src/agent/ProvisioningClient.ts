@@ -49,9 +49,18 @@ export interface ProvisioningResponse {
 	body: string;
 }
 
+export type ProvisioningRouting = 'direct' | 'haproxy';
+
 export interface ProvisioningClientOptions {
 	/** Base URL of the provisioning API's internal routes (prosody's `/voice-agent`, or the JaaS gateway). Empty disables. */
 	url: string;
+	/**
+	 * How the API is reached. `direct` (default): `<url>/<route>`, one prosody or a gateway that routes by itself.
+	 * `haproxy`: a sharded deployment behind its HAProxy, which picks the shard holding the room from the URL, so the
+	 * tenant goes in front of the base path and the room into a `room` query parameter:
+	 * `https://<signal-api host>/<tenant>/voice-agent/dial?room=<room>&conference=…`.
+	 */
+	routing?: ProvisioningRouting;
 	/** Bearer presented on the internal routes (the component's `voice_agent_status_secret`). */
 	token?: string;
 	/** Host header override, for a prosody that routes HTTP by virtual host. */
@@ -78,9 +87,37 @@ export interface ProvisioningClientOptions {
  */
 export class ProvisioningClient {
 	private readonly request: (method: 'GET' | 'POST', path: string, body?: string) => Promise<ProvisioningResponse>;
+	private readonly routing: ProvisioningRouting;
+	/** The API's path under its origin, for haproxy routing (the tenant goes in front of it). */
+	private readonly basePath: string;
 
 	constructor(private readonly options: ProvisioningClientOptions) {
+		this.routing = options.routing ?? 'direct';
+		if (this.routing !== 'direct' && this.routing !== 'haproxy') {
+			throw new Error(`provisioning routing must be "direct" or "haproxy", got ${JSON.stringify(options.routing)}`);
+		}
+		this.basePath = this.routing === 'haproxy' && options.url ? new URL(options.url).pathname.replace(/\/+$/, '') : '';
 		this.request = options.request ?? ((method, path, body) => this.send(method, path, body));
+	}
+
+	/**
+	 * The request path for a route about `conference`. With haproxy routing it is absolute on the API's origin:
+	 * `/<tenant>/<base path>/<route>?…&room=<room>`, the form HAProxy keys its stick table on (tenant from the path,
+	 * room from the parameter), so the call lands on the shard where the meeting is. The room is spelled as the
+	 * meeting URL spells it (a URL component, not a form field: HAProxy compares bytes and only normalises %25).
+	 */
+	private route(path: string, conference: string): string {
+		if (this.routing !== 'haproxy') {
+			return path;
+		}
+		if (/@breakout\./.test(conference)) {
+			// A breakout room's JID names nothing HAProxy knows; the main room is not on this leg's URL.
+			this.options.logger.warn(`haproxy routing cannot place breakout room ${conference}: routed by its own id`);
+		}
+		const { tenant, room } = conferenceRoute(conference);
+		const [pathname, query = ''] = path.split('?');
+		// Both encoded: the tenant must stay one path segment and the room one query value, whatever the name holds.
+		return `${tenant ? `/${encodeURIComponent(tenant)}` : ''}${this.basePath}/${pathname}?${query ? `${query}&` : ''}room=${encodeURIComponent(room)}`;
 	}
 
 	get enabled(): boolean {
@@ -101,7 +138,7 @@ export class ProvisioningClient {
 		const label = `agent ${agentId}`;
 		let response: ProvisioningResponse;
 		try {
-			response = await this.request('GET', `dial?conference=${encodeURIComponent(conference)}&agentId=${encodeURIComponent(agentId)}`);
+			response = await this.request('GET', this.route(`dial?conference=${encodeURIComponent(conference)}&agentId=${encodeURIComponent(agentId)}`, conference));
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			this.options.logger.warn(`Dial config fetch for ${label} failed: ${reason}`);
@@ -159,6 +196,15 @@ export class ProvisioningClient {
 		}
 		const body = JSON.stringify({ conference, agentId, state, ...(reason ? { reason } : {}) });
 		const label = `agent ${agentId} in ${conference} (${state})`;
+		let path: string;
+		try {
+			path = this.route('status', conference);
+		} catch (error) {
+			// A conference that cannot be routed never will be; retrying would only repeat the log line.
+			this.options.logger.warn(`Status report for ${label} cannot be routed: ${error instanceof Error ? error.message : String(error)}`);
+			this.options.onReportGivenUp?.(state);
+			return;
+		}
 		// The route is idempotent and forward-only, so retrying is safe; a report that gives up leaves the agent in
 		// the wrong state for good (connecting with media flowing, or active after it ended), so try for a while.
 		const maxAttempts = this.options.maxAttempts ?? 5;
@@ -166,7 +212,7 @@ export class ProvisioningClient {
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			let status: number;
 			try {
-				status = (await this.request('POST', 'status', body)).status;
+				status = (await this.request('POST', path, body)).status;
 			} catch (error) {
 				status = -1;
 				this.options.logger.warn(`Status report for ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -188,6 +234,7 @@ export class ProvisioningClient {
 	}
 
 	private send(method: 'GET' | 'POST', path: string, body?: string): Promise<ProvisioningResponse> {
+		// A relative route resolves under the base path; an absolute one (haproxy routing) under the origin.
 		const url = new URL(path, this.options.url.replace(/\/+$/, '') + '/');
 		const transport = url.protocol === 'https:' ? https : http;
 		const timeoutMs = this.options.timeoutMs ?? 5000;
@@ -224,4 +271,33 @@ export class ProvisioningClient {
 			request.end(body);
 		});
 	}
+}
+
+/**
+ * The tenant and room of a conference as the meeting URL spells them, lower-cased. Accepts the MUC JID jicofo
+ * sends (`room@conference.<domain>`, `[tenant]room@…` on a multi-tenant deployment) and the public form
+ * (`<tenant>/<room>` or `<room>`).
+ */
+export function conferenceRoute(conference: string): { tenant?: string; room: string } {
+	let tenant: string | undefined;
+	let room: string;
+	const at = conference.indexOf('@');
+	if (at !== -1) {
+		// Lower-cased like HAProxy's own X-Group/X-Room (`%[path,lower]`, `%[url_param(room),lower]`).
+		const node = conference.slice(0, at).toLowerCase();
+		const match = /^\[([^\]]*)\](.*)$/.exec(node);
+		[tenant, room] = match ? [match[1], match[2]] : [undefined, node];
+	} else {
+		const trimmed = conference.trim().replace(/^\/+|\/+$/g, '').toLowerCase();
+		const slash = trimmed.indexOf('/');
+		[tenant, room] = slash === -1 ? [undefined, trimmed] : [trimmed.slice(0, slash), trimmed.slice(slash + 1)];
+	}
+	// A room is one name and a tenant one path segment; anything else would change the request, not pick a shard.
+	if (!room || room.includes('/')) {
+		throw new Error(`conference ${JSON.stringify(conference)} does not name one room`);
+	}
+	if (tenant !== undefined && (!tenant || tenant === '.' || tenant === '..')) {
+		throw new Error(`conference ${JSON.stringify(conference)} does not name a tenant`);
+	}
+	return tenant === undefined ? { room } : { tenant, room };
 }

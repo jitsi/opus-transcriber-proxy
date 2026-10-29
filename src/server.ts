@@ -111,6 +111,7 @@ function provisioning(): ProvisioningClient {
 		url: config.agent.provisioningUrl,
 		token: config.agent.provisioningToken,
 		host: config.agent.provisioningHost,
+		routing: config.agent.provisioningRouting,
 		logger,
 		onReportGivenUp: (state) => getInstruments().agentStatusReportsGivenUpTotal.add(1, { state }),
 	});

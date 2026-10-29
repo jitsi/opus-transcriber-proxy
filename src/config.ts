@@ -25,6 +25,19 @@ dotenv.config();
  * with a warning on stderr (config loads before the logger), rather than being cast and silently
  * misread: an operator who sets XAI_ENCODING=pcm should learn that it meant nothing.
  */
+/** An absolute URL, or empty when unset; anything else is a configuration error, reported at startup. */
+function absoluteUrlOrEmpty(name: string, raw: string | undefined): string {
+	const value = raw || '';
+	if (value) {
+		try {
+			new URL(value);
+		} catch {
+			throw new Error(`${name} must be an absolute URL, got ${JSON.stringify(value)}`);
+		}
+	}
+	return value;
+}
+
 function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
 	if (raw === undefined || raw.trim() === '') return fallback;
 	const value = raw.trim().toLowerCase(); // XAI_ENCODING=Opus means opus
@@ -239,10 +252,13 @@ export const config = {
 		// gateway fetches each agent's dial config from it by id (GET dial) and reports the media leg to it (POST
 		// status): active when the customer socket opens, failed when the dial fails, ended on the agent's end.
 		// Unset, only the dev ?endpoint= path can dial and the agent never advances past jicofo's `connecting`.
-		provisioningUrl: process.env.AGENT_PROVISIONING_URL || '',
+		provisioningUrl: absoluteUrlOrEmpty('AGENT_PROVISIONING_URL', process.env.AGENT_PROVISIONING_URL),
 		provisioningToken: process.env.AGENT_PROVISIONING_TOKEN || '',
 		// Host header override for a prosody that routes HTTP by virtual host.
 		provisioningHost: process.env.AGENT_PROVISIONING_HOST || '',
+		// "haproxy": the API sits behind a sharded deployment's HAProxy, which routes each call to the shard holding
+		// the room from the tenant path prefix and a ?room= parameter the client adds. Default "direct".
+		provisioningRouting: oneOf('AGENT_PROVISIONING_ROUTING', process.env.AGENT_PROVISIONING_ROUTING, ['direct', 'haproxy'] as const, 'direct'),
 	},
 
 	// Text translation: translate each final transcript into the target languages the bridge

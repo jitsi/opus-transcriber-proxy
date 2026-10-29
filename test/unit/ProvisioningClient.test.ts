@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, vi } from 'vitest';
-import { ProvisioningClient, ProvisioningResponse } from '../../src/agent/ProvisioningClient';
+import { ProvisioningClient, ProvisioningResponse, conferenceRoute } from '../../src/agent/ProvisioningClient';
 
 type Reply = ProvisioningResponse | Error;
 
@@ -34,6 +36,117 @@ function client(replies: Reply[]) {
 	const c = new ProvisioningClient({ url: 'http://prosody:5280/voice-agent', token: 't', logger, request, retryDelayMs: 0, onReportGivenUp });
 	return { c, request, calls, logger, onReportGivenUp };
 }
+
+describe('conferenceRoute', () => {
+	it('reads tenant and room from a MUC JID, lower-cased', () => {
+		expect(conferenceRoute('[Acme]Room1@conference.stage.8x8.vc')).toEqual({ tenant: 'acme', room: 'room1' });
+		expect(conferenceRoute('standup@conference.meet.jitsi')).toEqual({ room: 'standup' });
+		expect(conferenceRoute('team%20sync@conference.meet.jitsi')).toEqual({ room: 'team%20sync' });
+	});
+
+	it('reads the public form too', () => {
+		expect(conferenceRoute('Acme/Room1')).toEqual({ tenant: 'acme', room: 'room1' });
+		expect(conferenceRoute('/standup/')).toEqual({ room: 'standup' });
+	});
+
+	it('refuses what is not one tenant and one room', () => {
+		expect(() => conferenceRoute('[acme]@conference.x')).toThrow(/does not name one room/);
+		expect(() => conferenceRoute('a/b/c')).toThrow(/does not name one room/);
+		expect(() => conferenceRoute('[]room@conference.x')).toThrow(/does not name a tenant/);
+		expect(() => conferenceRoute('../voice-agent')).toThrow(/does not name a tenant/);
+		expect(() => conferenceRoute('')).toThrow(/does not name one room/);
+	});
+});
+
+describe('ProvisioningClient with haproxy routing', () => {
+	function routed(replies: Reply[], url = 'https://signal-api-meet-stage-8x8.jitsi.net/voice-agent') {
+		const calls: Array<{ method: string; path: string }> = [];
+		const request = vi.fn(async (method: 'GET' | 'POST', path: string) => {
+			calls.push({ method, path });
+			return replies.shift() ?? { status: 200, body: '' };
+		});
+		const c = new ProvisioningClient({ url, routing: 'haproxy', token: 't', logger: { info: vi.fn(), warn: vi.fn() }, request, retryDelayMs: 0 });
+		return { c, calls };
+	}
+
+	it('puts the tenant before the base path and the room in the query, for dial and status', async () => {
+		const { c, calls } = routed([{ status: 200, body: JSON.stringify({ endpoint: { url: 'wss://bot.example/ws' } }) }, { status: 200, body: '' }]);
+		await c.dialConfig('[acme]room1@conference.stage.8x8.vc', 'agent-1');
+		await c.report('[acme]room1@conference.stage.8x8.vc', 'agent-1', 'active');
+		expect(calls[0].path).toBe('/acme/voice-agent/dial?conference=%5Bacme%5Droom1%40conference.stage.8x8.vc&agentId=agent-1&room=room1');
+		expect(calls[1].path).toBe('/acme/voice-agent/status?room=room1');
+	});
+
+	it('has no tenant prefix for a plain room and keeps a deeper base path', async () => {
+		const { c, calls } = routed([{ status: 200, body: '' }], 'https://gateway.example/v1/voice-agent');
+		await c.report('standup@conference.meet.jitsi', 'agent-1', 'ended');
+		expect(calls[0].path).toBe('/v1/voice-agent/status?room=standup');
+	});
+
+	it('spells the room as the meeting URL does: bare punctuation, encoded names doubled up, never form-encoded', async () => {
+		const { c, calls } = routed([{ status: 200, body: '' }, { status: 200, body: '' }]);
+		await c.report('[acme]room(1)@conference.stage.8x8.vc', 'agent-1', 'ended');
+		await c.report('team%20sync@conference.meet.jitsi', 'agent-1', 'ended');
+		expect(calls[0].path).toBe('/acme/voice-agent/status?room=room(1)');
+		expect(calls[1].path).toBe('/voice-agent/status?room=team%2520sync');
+	});
+
+	it('warns once per report that a breakout room cannot be placed, retries included', async () => {
+		const logger = { info: vi.fn(), warn: vi.fn() };
+		const replies: ProvisioningResponse[] = [{ status: 503, body: '' }, { status: 503, body: '' }, { status: 200, body: '' }];
+		const request = vi.fn(async () => replies.shift() ?? { status: 200, body: '' });
+		const c = new ProvisioningClient({ url: 'https://signal-api.example/voice-agent', routing: 'haproxy', logger, request, retryDelayMs: 0 });
+		await c.report('6f1c-breakout@breakout.stage.8x8.vc', 'agent-1', 'ended');
+		expect(request).toHaveBeenCalledTimes(3);
+		expect(logger.warn.mock.calls.filter((call) => /cannot place breakout room/.test(String(call[0])))).toHaveLength(1);
+	});
+
+	it('keeps a hostile tenant inside one path segment', async () => {
+		const { c, calls } = routed([{ status: 200, body: '' }]);
+		await c.report('[a/../b?x#y]room@conference.x', 'agent-1', 'ended');
+		expect(calls[0].path).toBe('/a%2F..%2Fb%3Fx%23y/voice-agent/status?room=room');
+	});
+
+	it('gives up at once, without a request, on a conference it cannot route', async () => {
+		const logger = { info: vi.fn(), warn: vi.fn() };
+		const onReportGivenUp = vi.fn();
+		const request = vi.fn(async () => ({ status: 200, body: '' }));
+		const c = new ProvisioningClient({ url: 'https://signal-api.example/voice-agent', routing: 'haproxy', logger, request, retryDelayMs: 0, onReportGivenUp });
+		await c.report('[acme]@conference.x', 'agent-1', 'active');
+		expect(request).not.toHaveBeenCalled();
+		expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/cannot be routed/));
+		expect(onReportGivenUp).toHaveBeenCalledWith('active');
+		expect(await c.fetchDialConfig('a/b/c', 'agent-1')).toEqual({ status: 'unavailable', reason: expect.stringMatching(/does not name one room/) });
+	});
+
+	it('resolves the routed path on the API origin and keeps the Host override, over a real socket', async () => {
+		const seen: Array<{ url?: string; host?: string }> = [];
+		const server = http.createServer((req, res) => {
+			seen.push({ url: req.url, host: req.headers.host });
+			res.statusCode = 200;
+			res.end('');
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const port = (server.address() as AddressInfo).port;
+		try {
+			const logger = { info: vi.fn(), warn: vi.fn() };
+			const viaHaproxy = new ProvisioningClient({ url: `http://127.0.0.1:${port}/voice-agent/`, routing: 'haproxy', host: 'signal-api.example', token: 't', logger, retryDelayMs: 0 });
+			await viaHaproxy.report('[acme]room1@conference.x', 'agent-1', 'active');
+			const direct = new ProvisioningClient({ url: `http://127.0.0.1:${port}/v1/voice-agent/`, token: 't', logger, retryDelayMs: 0 });
+			await direct.report('room1@conference.x', 'agent-1', 'active');
+			expect(seen).toEqual([
+				{ url: '/acme/voice-agent/status?room=room1', host: 'signal-api.example' },
+				{ url: '/v1/voice-agent/status', host: `127.0.0.1:${port}` },
+			]);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it('refuses an unknown routing', () => {
+		expect(() => new ProvisioningClient({ url: 'https://x/voice-agent', routing: 'nginx' as 'direct', logger: { info: vi.fn(), warn: vi.fn() } })).toThrow(/routing must be/);
+	});
+});
 
 describe('ProvisioningClient', () => {
 	describe('report', () => {
