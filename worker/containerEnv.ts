@@ -20,7 +20,7 @@
  * `worker` block merged into the container's `info` message.
  */
 import type { Env } from './env';
-import type { OverridableProvider } from './providerOverride';
+import type { AppliedOverrides } from './providerOverride';
 
 /**
  * CONTAINER_INSTANCE_NAME for the container, from the name this Durable Object was looked up by.
@@ -52,6 +52,14 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
 		...(env.OPENAI_TRANSLATION_MODEL && { OPENAI_TRANSLATION_MODEL: env.OPENAI_TRANSLATION_MODEL }),
 		// Optional separate key for translation; when unset the container falls back to OPENAI_API_KEY.
 		...(env.OPENAI_TRANSLATION_API_KEY && { OPENAI_TRANSLATION_API_KEY: env.OPENAI_TRANSLATION_API_KEY }),
+		// Speech-to-speech provider selection and the xAI translation settings (a standalone container
+		// serving /translate itself; in the CF deployment the Worker serves /translate). Forwarded only
+		// when set, so the container defaults (openai; XAI_API_KEY as the xAI key) apply otherwise.
+		...(env.TRANSLATION_PROVIDER && { TRANSLATION_PROVIDER: env.TRANSLATION_PROVIDER }),
+		...(env.TRANSLATION_IDLE_CLOSE_MS && { TRANSLATION_IDLE_CLOSE_MS: env.TRANSLATION_IDLE_CLOSE_MS }),
+		...(env.XAI_TRANSLATION_API_KEY && { XAI_TRANSLATION_API_KEY: env.XAI_TRANSLATION_API_KEY }),
+		...(env.XAI_TRANSLATION_URL && { XAI_TRANSLATION_URL: env.XAI_TRANSLATION_URL }),
+		...(env.XAI_TRANSLATION_VOICE && { XAI_TRANSLATION_VOICE: env.XAI_TRANSLATION_VOICE }),
 		...(env.ENABLE_TRANSCRIBE && { ENABLE_TRANSCRIBE: env.ENABLE_TRANSCRIBE }),
 		...(env.ENABLE_TRANSLATE && { ENABLE_TRANSLATE: env.ENABLE_TRANSLATE }),
 		// Text translation of transcripts (the /transcribe path, which the container serves).
@@ -168,18 +176,20 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
  * cannot know about (deployed Worker version, the colo/location that handled the request, the
  * routing mode). Merged in-place into the container's info before forwarding to the client.
  *
- * `providerOverride` is present only when an operator override actually changed this connection's
- * provider. The container reports the provider it used either way, but it cannot tell an override
- * apart from a client-supplied parameter — so recording it here is what makes an active override
- * visible in the peer's logs (JVB logs the info message verbatim).
+ * `providerOverride` and `textTranslationProviderOverride` are present only when an operator
+ * override (worker/providerOverride.ts) actually changed this connection's transcription or
+ * text-translation provider. The container reports the providers it used either way, but it cannot
+ * tell an override apart from a client-supplied parameter — so recording them here is what makes an
+ * active override visible in the peer's logs (JVB logs the info message verbatim).
  */
-export function buildWorkerInfo(request: Request, env: Env, providerOverride?: OverridableProvider): Record<string, unknown> {
+export function buildWorkerInfo(request: Request, env: Env, overrides?: AppliedOverrides): Record<string, unknown> {
 	const cf = (request.cf || {}) as Record<string, unknown>;
 	const worker: Record<string, unknown> = {
 		present: true,
 		routingMode: env.ROUTING_MODE || 'session',
 	};
-	if (providerOverride) worker.providerOverride = providerOverride;
+	if (overrides?.transcribe) worker.providerOverride = overrides.transcribe;
+	if (overrides?.['text-translation']) worker.textTranslationProviderOverride = overrides['text-translation'];
 	if (env.CF_VERSION_METADATA) {
 		worker.versionId = env.CF_VERSION_METADATA.id;
 		worker.versionTag = env.CF_VERSION_METADATA.tag;

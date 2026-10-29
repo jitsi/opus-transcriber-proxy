@@ -30,6 +30,8 @@ const CORE_FILES = [
 	'src/usage-reporter.ts',
 	'src/RtpTimestamper.ts',
 	'src/translate/runtime.ts',
+	'src/translate/provider.ts',
+	'src/textTranslate/TextTranslator.ts',
 	'src/translate/emitter.ts',
 	'src/translate/base64.ts',
 	'src/translate/messages.ts',

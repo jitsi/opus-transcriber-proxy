@@ -117,4 +117,13 @@ describe('buildWorkerInfo', () => {
 		expect(info).not.toHaveProperty('city');
 		expect(info).not.toHaveProperty('versionId');
 	});
+
+	it('records the applied overrides, each under its own field, and nothing when none applied', () => {
+		expect(buildWorkerInfo(request(), env(), {})).not.toHaveProperty('providerOverride');
+		expect(buildWorkerInfo(request(), env(), { transcribe: 'deepgram' })).toMatchObject({ providerOverride: 'deepgram' });
+		expect(buildWorkerInfo(request(), env(), { transcribe: 'deepgram' })).not.toHaveProperty('textTranslationProviderOverride');
+		expect(buildWorkerInfo(request(), env(), { 'text-translation': 'google' })).toMatchObject({ textTranslationProviderOverride: 'google' });
+		// The translate slot is reported by the Worker's own /translate info, never through this builder.
+		expect(buildWorkerInfo(request(), env(), { translate: 'xai' })).not.toHaveProperty('providerOverride');
+	});
 });

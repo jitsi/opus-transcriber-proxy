@@ -86,7 +86,7 @@ Tests are in `test/` with helpers in `test/helpers/`. The test setup uses vitest
 runs one cell of the container/worker x opus-backend x endpoint x provider matrix against the real
 server/worker process — no mocks — replaying `resources/sample.jsonl` via `scripts/replay-dump.cjs
 --ci` and asserting on the transcripts/media received. See `test/integration/MATRIX.md` for the
-full 11-cell list and required API keys — `runtime=worker` only covers `/translate` (production
+full 14-cell list and required API keys — `runtime=worker` only covers `/translate` (production
 never routes `/transcribe` through the Worker), and Gemini is excluded to keep the per-PR matrix
 smaller. Runs in CI via `.github/workflows/integration-test.yml` on every PR into `main` and on
 `workflow_dispatch` — cells without their provider's API key secret set are soft-skipped, not failed.
@@ -409,20 +409,24 @@ locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PRO
 - Reconciles `sources` control events (`exports` = sender source names, `requests` = synthetic `<source>.<language>` names) into one `TranslatorConnection` per (source, language)
 - Routes incoming `media` events to the matching connection by tag; closes connections dropped from `requests`
 - Also supports a dev `?lang=` path that seeds the initial target languages
-- Sends the server `info` message on connect (via `buildServerInfo`, provider fixed to `openai`) and logs any inbound client `info` event, mirroring `TranscriberProxy`
+- Sends the server `info` message on connect (via `buildServerInfo(provider)`, where `provider` is the connection's speech-to-speech provider) and logs any inbound client `info` event, mirroring `TranscriberProxy`
+- **Provider selection.** `TranslatorProxyOptions.provider` is the connection's speech-to-speech provider (`openai` or `xai`, `src/translate/provider.ts`), resolved by `server.ts` / `worker/handleTranslate.ts` with `resolveTranslationProvider` from the `provider` URL parameter or the deployment default (`TRANSLATION_PROVIDER`); an unknown provider (a client error) refuses the upgrade with 1008 / HTTP 400 and an unavailable one (no key, a deployment problem) with 1011 / HTTP 503 (`resolveTranslationProvider`'s `kind`), since every direction would fail at connect; in the Worker the `provider` parameter may have been written by the operator KV override (**Provider overrides**, the `translate` slot) before the handler sees it; the close reason is cut by UTF-8 bytes (`closeReason`) because it echoes the caller's value. Every `TranslatorConnection` of the proxy gets the same provider, and target languages are normalised per provider (`normalizeTargetLanguage(lang, provider)`: OpenAI's 13-language list, lowercased; for xAI any tag with the BCP-47 shape `isValidTargetLanguage` accepts, primary subtag lowercased and the rest as given, `zh-CN`); the deployment default comes from `resolveConfiguredTranslationProvider` (`TRANSLATION_PROVIDER`, unknown → openai with one warning), shared by both runtimes
+- **A requested direction whose connection went away is reopened on the source's next media frame.** `desired` keeps the last `sources` state; `handleMediaEvent` reopens a missing (source, language) from it, so a direction closed by the provider (xAI drops a session after ~5 min without audio and caps one at ~2 h), by the idle close, or by a failure comes back without waiting for the next `sources` event. After an `error` close, or a `rejected` one (the provider closed the session within 30 s of creation: mid-handshake, right after it, or after a short run of audio; re-dialling that per frame or per round trip would be a paid session start each time), the reopen is paced per direction (`REOPEN_BACKOFF_BASE_MS` 1 s, doubling to `REOPEN_BACKOFF_MAX_MS` 15 s; media inside the window is dropped), cleared by a benign close and once a reopened session has carried 2 s of audio (`onSessionUsable`), so an isolated failure hours later starts from the base wait again; `idle`/`remote` closes reopen at once. The `onClosed` callback carries a `TranslatorCloseReason` for this. A `sources` event opens only the directions that are new: one in its reopen backoff, or one the idle close ended and no frame has reopened since (`idleClosed`), is left to the next media frame, because `sources` fires on every join and leave and re-dialling on each would start a paid wall-clock-billed session for every muted participant each time. A stale close from a connection a reconcile already replaced is ignored entirely (it must neither unregister the replacement nor touch its backoff), and the backoff of a direction dropped from `requests` is forgotten on the next `sources` event
 - Owns the monotonic mediajson wire-envelope `sequenceNumber` for outbound `media` (per-proxy = per-WebSocket, which carries all synthetic sources); the per-source RTP sequence number is the separate `chunk` field from each connection's `RtpTimestamper`
 - Re-emits each connection's talk boundaries as `talkStart` / `talkStop` events (payloads `TranslationTalkStartData` / `TranslationTalkStopData` in `src/translate/messages.ts`), drawing their `sequenceNumber` from the **same** wire-envelope counter as `audioFrame` / `media`, so a start/stop interleaves correctly with the media frames it brackets on the single outbound WebSocket. `server.ts` and `worker/handleTranslate.ts` serialize them to the `start` / `stop` mediajson messages
 - `emitTranscripts` (`runtime.config.emitTranscripts`; Node resolves it from `config.translation.transcripts`, default true) controls whether target-language transcripts are emitted
 
 **TranslatorConnection** (`src/TranslatorConnection.ts`)
 - Manages one (source, language) translation stream
-- Decodes the speaker's Opus to PCM (`OpusDecoder`), forwards it to an OpenAI Realtime translations session (model `config.translation.model` / `OPENAI_TRANSLATION_MODEL`; key `config.translation.apiKey` = `OPENAI_TRANSLATION_API_KEY` ?? `OPENAI_API_KEY`), and re-encodes the returned translated PCM to Opus (`OpusEncoder`, with **DTX enabled** so libopus's VAD flags comfort-noise/silence frames — see talk boundaries below) for the return path
-- Emits translated Opus frames (`onAudioFrame(tag, chunk, timestamp, payload, audioLevel, vad)`) and the translated (target-language) transcript (`onTranscription(transcript, targetLanguage, isInterim)`) — transcript **deltas** are `isInterim: true` and are incremental fragments (append-only, not a cumulative hypothesis). The `/v1/realtime/translations` endpoint sends no transcript-done event, so the **final** is the run's fragments concatenated and emitted at the talk-stop silence boundary (`finalizePendingTranscript`) and on close. Both suppressed when `emitTranscripts === false`
+- **Two providers, one code path.** The provider-specific parts live in a `TranslationProviderSpec` (`src/translate/provider.ts`, `getTranslationProvider`): endpoint URL, key, requested subprotocols, the Node auth-subprotocol prefix (`openai-insecure-api-key.` / `xai-insecure-api-key.`; the Worker sends an `Authorization` header instead), the `session.update` payload, the handshake, whether the server sends transcript finals, the idle-close default, and language normalisation. OpenAI (`handshake: 'open'`): `session.update` on socket open, audio at once, `protocols: ['realtime']`. xAI (`handshake: 'session'`): the server speaks first with `session.created`, the connection answers `session.update`, and audio is held in the pending-PCM buffer until `session.updated` (`markConnected`); `HANDSHAKE_TIMEOUT_MS` (10 s) fails the direction if that never comes. xAI gets **no** subprotocol requested: with header auth it echoes none and a client that asked for one fails the handshake. Measured live (2026-10-27, `grok-realtime-translation-fast`): xAI's output audio is one burst per ~400 ms-endpointed source phrase at 7-900x real time, nothing during input silence; 100 ms appends behave like 20 ms ones; it never sent the documented `segment.usage`; and it does not answer the client's Close frame (the socket ends 1006 about a second later, logged at debug once `isClosed`)
+- Decodes the speaker's Opus to PCM (`OpusDecoder`), forwards it to the provider's realtime translations session (OpenAI: model `config.translation.model` / `OPENAI_TRANSLATION_MODEL`, key `config.translation.apiKey` = `OPENAI_TRANSLATION_API_KEY` ?? `OPENAI_API_KEY`; xAI: key `XAI_TRANSLATION_API_KEY` ?? `XAI_API_KEY`, `XAI_TRANSLATION_URL`, optional `XAI_TRANSLATION_VOICE`), and re-encodes the returned translated PCM to Opus (`OpusEncoder`, with **DTX enabled** so libopus's VAD flags comfort-noise/silence frames — see talk boundaries below) for the return path
+- Emits translated Opus frames (`onAudioFrame(tag, chunk, timestamp, payload, audioLevel, vad)`) and the translated (target-language) transcript (`onTranscription(transcript, targetLanguage, isInterim)`) — transcript **deltas** are `isInterim: true` and are incremental fragments (append-only, not a cumulative hypothesis) on both providers. OpenAI's endpoint sends no transcript-done event, so its **final** is the run's fragments concatenated and emitted at the talk-stop silence boundary (`finalizePendingTranscript`) and on close. xAI sends a per-segment `session.output_transcript.updated` whose `text` equals the concatenated deltas (measured), so with `provider.serverTranscriptFinals` that text is emitted as the final at once and the buffer reset, and `finalizePendingTranscript` publishes nothing on that provider (the silence timer landing between the deltas and the `updated` would otherwise print the segment twice; at close a segment whose final never came is dropped); it lands ~1.5 s after the source phrase ends and 0.3-6 s **before** the segment's audio (TTS queues behind a continuous speaker), so the subtitle leads the translated speech. Both suppressed when `emitTranscripts === false`
 - Emits **talk boundaries** around each contiguous run of translated audio (a "talk"): `onTalkStart(tag, timestamp)` on the run's first frame (timestamp = that frame's RTP timestamp) and `onTalkStop(tag, timestamp, mediaInfo)` when the translated **voice** goes silent. The `/v1/realtime/translations` endpoint sends **no per-utterance boundary event** (only `session.output_audio.delta` + `session.closed`) and its output audio is *continuous* — a live mic's ambient noise keeps OpenAI emitting, so "audio present" is not a voice signal. Instead the encoder runs with **Opus DTX**: frames libopus flags as `inDtx` (comfort-noise/silence, including the periodic CNG updates) are **dropped — not forwarded to the bridge** — and do not count as voice; only non-DTX (voice) frames are sent and drive the talk. End-of-talk is inferred by a debounce timer (`armTalkSilenceTimer`) armed by voice frames (and, per above, transcript deltas), measured from the projected **media playout end** (`RtpTimestamper`'s `bufferAheadMs` — OpenAI streams faster than real time, so the consumer is still playing the burst after the last frame arrives) plus `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`; sustained DTX/silence ends the talk and the next voice frame starts a fresh one. Because talks are bracketed by voice runs, a pause longer than the timeout splits a talk — tune granularity via `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`. A talk also ends on close. (libopus emits a ~180 ms voice-flagged hangover before DTX engages, so a little trailing audio is forwarded past the end of speech; conversely, if the first frame of a run is classified DTX, no talk starts until the first voice frame — the intended behaviour.) Note: dropping DTX frames also drops libopus's periodic comfort-noise (CNG) refresh packets, so during silence the bridge's decoder gets no explicit comfort noise — it fills the gap via packet-loss concealment, and the `RtpTimestamper` inserts the real elapsed-silence jump on the next voice frame, so the client hears true silence rather than a splice. `endTalk()` is idempotent (a no-op when no talk is active), mirroring `doClose()`. The run spans the half-open `[start, stop)`: the stop timestamp is one frame past the last frame's (`lastFrameTimestamp + SAMPLES_PER_FRAME`), i.e. the timestamp the next contiguous packet would carry. `mediaInfo` = `{ bytesSent, duration }` — `bytesSent` is the run's total encoded Opus payload bytes; `duration` is the `[start, stop)` span in ms on the RTP clock (so it includes any inter-burst silence the `RtpTimestamper` inserted mid-run, and can exceed the wall-clock length of the bytes counted). The bridge turns start/stop into client-facing `SyntheticSourceSendingChangeEvent`s
 - **Audio levels for the ssrc-audio-level header extension.** Every forwarded frame carries the encoder's `audioLevel` and `vad: true` (a forwarded frame is by definition non-DTX, i.e. libopus's VAD judged it voice). `TranslatorProxy` puts them on the `audioFrame` event and `buildTranslationMediaMessage` writes them as `media.audioLevel` / `media.vad` — the optional fields jicoco's mediajson `Media` already defines for the bridge→transcriber direction — so the bridge (`Conference.handleMediaEvent`) can write the RFC 6464 extension onto the injected RTP packet and clients can show a level for the synthetic source. The fields are **omitted, not nulled,** when absent, so a bridge that predates them sees the original message shape. The level never influences the bridge's loudest-speaker or default routing: injected packets bypass the endpoint receive pipeline, and `Conference.levelChanged` exempts synthetic sources
 - RTP timing comes from `RtpTimestamper` (one continuous, monotonic timeline; see below) — there is no per-response timestamp reset
 - Latency instrumentation (the per-frame speech-RMS gate `pcmContainsSpeech` and the TTFA log) is debug-only (`measureLatency = config.debug`)
-- `doClose()` is idempotent (guarded by `isClosed`) and detaches callbacks before teardown, mirroring `OutgoingConnection`. The OpenAI WebSocket init is deferred to a microtask so the proxy's `onError`/`onClosed` are wired before a synchronous `new WebSocket` failure can fire; that path notifies `onError` and tears down
+- **Idle close.** `idleCloseMs` (`TRANSLATION_IDLE_CLOSE_MS`, else the provider default: 0 for OpenAI, `XAI_DEFAULT_IDLE_CLOSE_MS` 120 s for xAI) closes a direction that has received no media for that long, counted from creation until the first frame, via a quarter-period `setInterval` check (`checkIdle`), with close reason `idle`; never while a talk is active, since translation lags the source and a speaker who finishes and mutes would otherwise lose the tail of the last utterance. The Worker and the container both treat an unset or malformed value as unset (provider default), through the shared `parseIntOrUndefined` (`src/translate/env.ts`); the Worker warns once about a malformed one, the container's `config.ts` has no logger and stays silent. xAI bills the greater of audio and wall-clock time, idle included, and drops the session itself at ~5 min, so a muted participant would otherwise pay for silence and then lose the direction at xAI's timing; the proxy reopens it on the next frame
+- `doClose(notify, reason)` is idempotent (guarded by `isClosed`) and detaches callbacks before teardown, mirroring `OutgoingConnection`; `onClosed(tag, reason)` reports a `TranslatorCloseReason` (`local`, `remote`, `rejected` = the provider closed a connection under `REJECTED_MAX_SESSION_AGE_MS`, 30 s, old, however much audio it carried; an older one is `remote`, so a muted participant's direction dropped by the provider's own idle timeout reopens at once, `idle`, `error`), and `error` always follows an `onError`. The provider WebSocket init is deferred to a microtask so the proxy's `onError`/`onClosed` are wired before a synchronous `new WebSocket` failure can fire; that path notifies `onError` and tears down
 - Reports translated-audio usage **incrementally** via the optional `onUsageReport(durationSeconds, targetLanguage)` callback: a `setInterval` timer (period `runtime.config.usageReportIntervalMs`, `unref`'d so it never keeps the process/isolate alive) fires the audio duration translated **since the previous report** (`reportUsageDelta` = `(sentSamples − reportedSamples) / 24000`, where `sentSamples` is audio actually appended to OpenAI), and `doClose()` clears the timer and flushes the final remaining delta. The deltas sum to the direction's total. Incremental reporting (vs one cumulative report at close) means an abrupt kill — e.g. a Worker hitting its CPU limit — loses only the last partial interval, not the whole direction; it's billing-equivalent because billing is linear in duration and the usage endpoint sums each report's `duration_seconds`. The timer is started only when `onUsageReport` is set **and** the interval is `> 0`, so dev/replay sessions (no callback) start no timer
 
 **RtpTimestamper** (`src/RtpTimestamper.ts`)
@@ -433,8 +437,8 @@ locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PRO
 
 The translation core (`TranslatorProxy`, `TranslatorConnection`, `RtpTimestamper`) is **runtime-agnostic**: it imports no `config`/`logger`/`metrics`/`ws`/codec modules directly. Everything host-specific is injected via a **`TranslationRuntime`** (`src/translate/runtime.ts`): `logger`, config values, metric sink + batcher, an outbound-WebSocket factory, Opus codec factories, and `buildServerInfo`. `IWebSocket` is the minimal socket surface common to Node `ws`, the Node global WebSocket, and the Worker WebSocket.
 
-- **Node/container** — `createNodeTranslationRuntime` (`src/translate/nodeRuntime.ts`): existing `config`/Winston/OTLP, the Node global `WebSocket` (auth via the OpenAI `openai-insecure-api-key` subprotocol), and the codec facades (native/WASM per `OPUS_BACKEND`). Used by `server.ts` for `/transcribe` **and** `/translate`.
-- **Cloudflare Worker** — `worker/translationRuntime.ts` + `worker/handleTranslate.ts`: the Worker handles `/translate` **directly** (a `WebSocketPair` `accept()`, no Durable Object — the accepted socket keeps the Worker alive for the session, and the bridge's pings keep it active). console logger, config from Worker env, no-op metrics, WASM codec (import-loaded, no fs — see below), and an **outbound OpenAI socket via fetch-upgrade** (`ws(s)://`→`http(s)://` rewrite; auth via the `Authorization: Bearer` header — never both forms, which OpenAI rejects). The async fetch-upgrade is wrapped as a synchronous `IWebSocket` (queues sends/listeners until connected). `worker/index.ts` calls `handleTranslate` for `/translate`; `/transcribe` stays on the container (Worker outbound-connection limits — translate's fan-out is bounded by source×language). Requires `nodejs_compat`.
+- **Node/container** — `createNodeTranslationRuntime` (`src/translate/nodeRuntime.ts`): existing `config`/Winston/OTLP, the Node global `WebSocket` (auth via the provider's `<prefix><key>` subprotocol, `OutboundWebSocketOptions.authSubprotocolPrefix`), and the codec facades (native/WASM per `OPUS_BACKEND`). Used by `server.ts` for `/transcribe` **and** `/translate`.
+- **Cloudflare Worker** — `worker/translationRuntime.ts` + `worker/handleTranslate.ts`: the Worker handles `/translate` **directly** (a `WebSocketPair` `accept()`, no Durable Object — the accepted socket keeps the Worker alive for the session, and the bridge's pings keep it active). console logger, config from Worker env, no-op metrics, WASM codec (import-loaded, no fs — see below), and an **outbound provider socket via fetch-upgrade** (`ws(s)://`→`http(s)://` rewrite; auth via the `Authorization: Bearer` header — never both forms, which OpenAI rejects). The async fetch-upgrade is wrapped as a synchronous `IWebSocket` (queues sends/listeners until connected). `worker/index.ts` calls `handleTranslate` for `/translate`; `/transcribe` stays on the container (Worker outbound-connection limits — translate's fan-out is bounded by source×language). Requires `nodejs_compat`.
 - **Worker-safe WASM codec**: `OpusDecoderWasm`/`OpusEncoderWasm` don't read `fs` at module scope — the Emscripten glue + compiled `WebAssembly.Module` are injected via `provideDecoderWasm`/`provideEncoderWasm`. Node registers them from disk (`src/OpusDecoder/wasmSourceNode.ts`, dynamic-imported by the facade only on the wasm path); the Worker imports them (`worker/opusWasmSource.ts`). Auth token is passed to the runtime as a neutral `bearerToken`; each runtime applies it its own way.
 - **Guard**: `npm run check:worker-safe` (`scripts/check-worker-safe.mjs`, run in CI) fails if the core imports a Node-only module/API, so it stays bundlable for workerd. `npm run typecheck:worker` typechecks the Worker + imported core against `@cloudflare/workers-types`.
 
@@ -548,23 +552,41 @@ The `worker/` directory contains:
 - `dispatcherForwarder.ts` - the `/translate` path's Dispatcher DO socket: bounded queue while (re)connecting, reopened on the next forward, replies to a received close frame
 - `closeCode.ts` - `sendableCloseCode`, the close codes workerd will put in a close frame, shared by `sessionProxy.ts` and `dispatcherForwarder.ts`
 - `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
-- `providerOverride.ts` - the KV-backed transcription provider override (see below)
+- `providerOverride.ts` - the KV-backed provider overrides: transcription, speech-to-speech translation, text translation (see below)
 - Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
 Two routing modes:
 1. **Session mode** (`ROUTING_MODE=session`): One container per session
 2. **Pool mode** (`ROUTING_MODE=pool`): Round-robin across container pool
 
-### Provider override (`worker/providerOverride.ts`)
+### Provider overrides (`worker/providerOverride.ts`)
 
-An operator lever to move `/transcribe` to a secondary provider during a provider outage, **without
-a Worker release**. The container picks its provider from `PROVIDERS_PRIORITY`, which is baked into
-the container's environment at container start — so a variable change needs a release *and* would
-not reach an already-running container anyway. Instead the Worker rewrites the `provider` URL
-parameter per connection, which the container already parses, so **nothing container-side changes**
-(no image rebuild; this is a Worker-only deploy).
+An operator lever to move a service to a secondary provider during a provider outage, **without a
+Worker release**. Each service picks its default provider from a deploy-time variable
+(`PROVIDERS_PRIORITY`, `TRANSLATION_PROVIDER`, `TEXT_TRANSLATION_PROVIDERS_PRIORITY`), and for the
+container that variable is baked into its environment at container start — so a change needs a
+release *and* would not reach an already-running container anyway. Instead the Worker rewrites the
+service's provider URL parameter per connection, which the server already parses, so **nothing
+server-side changes** (no image rebuild; this is a Worker-only deploy).
 
-Armed by writing one KV key, `transcribe:provider-override`, in the `CONFIG_KV` namespace:
+**Every service with more than one backend has a slot** (`ProviderOverrideSlot`): its KV key, the
+URL parameter, the providers an override may name, and the credential check for one. Adding a
+backend to a service means adding it to that slot's list and `isConfigured`; adding a service with
+several backends means adding a slot and applying it where its requests are routed.
+
+| Slot | KV key | Parameter | Targets | Where applied |
+|---|---|---|---|---|
+| `transcribe` | `transcribe:provider-override` | `provider` | `openai`, `deepgram`, `gemini`, `xai` | `/transcribe` upgrades, before the container is selected |
+| `translate` | `translate:provider-override` | `provider` | `openai`, `xai` | `/translate` upgrades, before `handleTranslate` |
+| `text-translation` | `text-translation:provider-override` | `text_translation_provider` | `openai`, `xai`, `gemini`, `google` | `/transcribe` upgrades, only when `ENABLE_TEXT_TRANSLATION=true` (the container ignores the parameter otherwise, so the read would be wasted) |
+
+`/agent` has no slot: its one endpoint is the customer's, chosen per agent. `openai_custom`,
+`dummy` and `stub` are not valid override *targets* (the first needs the caller's own URL and key;
+the other two produce nothing real). `/transcribe` and `/translate` both take `provider`, so the two
+slots are told apart by KV key, not by parameter; each key is prefixed by its slot.
+
+Armed by writing the slot's KV key in the `CONFIG_KV` namespace; the entry shape is the same for
+every slot:
 
 ```bash
 # CLOUDFLARE_ACCOUNT_ID must be set: the deploy tokens reach several accounts, and wrangler
@@ -575,6 +597,8 @@ export CLOUDFLARE_ACCOUNT_ID=<account id for this environment>
 wrangler kv key put transcribe:provider-override \
   "{\"provider\":\"deepgram\",\"until\":$(( $(date +%s) * 1000 + 7200000 )),\"reason\":\"xAI 503s\"}" \
   --namespace-id=<id> --ttl 7200 --remote
+# Speech-to-speech: the same, under translate:provider-override with provider openai or xai.
+# Text translation: under text-translation:provider-override.
 ```
 
 The flag is `--ttl` (seconds), not `--expiration-ttl`, and `--remote` is required — without it
@@ -588,48 +612,63 @@ is rejected as malformed (at `error`), rather than being read as an override tha
 that mistake would otherwise look like a quietly armed override while traffic stayed on the failing
 provider.
 
-Three properties are load-bearing:
+Three properties are load-bearing, for every slot:
 
-- **An explicit `provider` parameter is never overridden** — checked before the KV read, so an
-  explicitly pinned connection costs nothing and cannot be redirected. This protects
-  `openai_custom`, which carries the caller's own endpoint and API key: overriding it would send
-  that customer's audio to a provider they did not choose. Production's jicofo URL template carries
-  no `provider` parameter, so the override still covers ordinary traffic.
+- **An explicit parameter is never overridden** — checked before the KV read, so an explicitly
+  pinned connection costs nothing and cannot be redirected. This protects `openai_custom`, which
+  carries the caller's own endpoint and API key: overriding it would send that customer's audio to
+  a provider they did not choose. Production's jicofo URL templates carry no provider parameters,
+  so the overrides still cover ordinary traffic. The slots are independent: a `/transcribe` request
+  naming `provider` pins only the transcription slot, and its text-translation slot is still read.
 - **Every rejection degrades to "no override"**, never to a broken session. The container closes
-  the socket with 1002 when handed an invalid or unavailable provider, so an unparseable entry, an
-  unknown provider, a provider whose API key is unset, or a KV read failure must all fall back to
-  the configured default. They log (`error` for operator mistakes) and change nothing.
+  the socket with 1002 when handed an invalid or unavailable transcription provider, and the Worker
+  refuses a `/translate` upgrade with 400/503 for one, so an unparseable entry, an unknown provider,
+  a provider whose API key is unset, or a KV read failure must all fall back to the configured
+  default. They log (`error` for operator mistakes) and change nothing. (The container does not fail
+  a session over an unusable text-translation provider; it falls back and logs. The checks guard
+  that slot against an override that silently does nothing.)
 - **`until` is mandatory and checked here at read time**, not left to KV's own expiration, which the
   edge cache can lag. Capped at `MAX_OVERRIDE_WINDOW_MS` (24h), and a longer window is *refused*
   rather than clamped — the cap exists to force a re-arm, and silently shortening it would look
   like acceptance. When an override lapses, new sessions return to the default, which re-tests the
   primary provider automatically rather than relying on anyone remembering to switch back.
 
-`openai_custom` and `dummy` are not valid override *targets*. The KV read is cached at the edge for
-`OVERRIDE_CACHE_TTL_SECONDS` (60), so arming an override takes up to a minute to propagate.
+The KV read is cached at the edge for `OVERRIDE_CACHE_TTL_SECONDS` (60), so arming an override
+takes up to a minute to propagate. A `/transcribe` upgrade with text translation on reads two keys,
+in parallel (`applyProviderOverrides`).
 
 **Scope limits worth knowing:**
-- **New connections only.** The provider is fixed when `TranscriberProxy` is constructed, and
-  session resume reuses the original parameters, so a conference already in progress stays on the
-  provider it started with until it ends.
+- **New connections only.** The provider is fixed when `TranscriberProxy` / `TranslatorProxy` is
+  constructed, and session resume reuses the original parameters, so a conference already in
+  progress stays on the provider it started with until it ends. A `/translate` direction the proxy
+  reopens (idle close, provider close) reuses the connection's provider too.
 - The monitor's URL carries no `provider` parameter, so it is overridden too and tracks what users
   actually get. To probe whether the primary has recovered, pin a check explicitly with
   `?provider=<primary>` (rule 1 makes that immune to the override).
 - A standalone container deployment with no Worker in front gets no override.
-- **Only `/transcribe` WebSocket upgrades are considered.** Health and status probes, `/agent`
-  upgrades and plain GETs are forwarded untouched, so they cost no KV read and cannot log an
-  override decision.
-- **The target provider's key must already have been set when the running containers started.**
-  The Worker checks its own current env, but a container validates against the env it was started
-  with (`buildContainerEnvVars`). Adding a provider's secret and arming the override in the same
-  breath is therefore unsafe: a container started before the secret existed still has the empty
-  value and closes its new sessions with 1002, which is exactly what the fall-back-to-default rule
-  is meant to prevent. Set the key, let the containers cycle, then arm.
+- **Only WebSocket upgrades on `/transcribe` and `/translate` are considered.** Health and status
+  probes, `/agent` upgrades and plain GETs are forwarded untouched, so they cost no KV read and
+  cannot log an override decision.
+- **For the two `/transcribe` slots, the target provider's key must already have been set when the
+  running containers started.** The Worker checks its own current env, but a container validates
+  against the env it was started with (`buildContainerEnvVars`). Adding a provider's secret and
+  arming the override in the same breath is therefore unsafe: a container started before the secret
+  existed still has the empty value and closes its new sessions with 1002, which is exactly what
+  the fall-back-to-default rule is meant to prevent. Set the key, let the containers cycle, then
+  arm. The `translate` slot has no such lag: the Worker serves `/translate` itself, so the env it
+  checks is the env the session runs with.
+- The `translate` slot's credential check uses the same fallbacks as the runtime
+  (`OPENAI_TRANSLATION_API_KEY` ?? `OPENAI_API_KEY`, `XAI_TRANSLATION_API_KEY` ?? `XAI_API_KEY`), and
+  the `text-translation` slot's the container's (`TEXT_TRANSLATION_<P>_API_KEY` ?? the provider's
+  transcription key; `google` takes its API key or credentials JSON and has no fallback).
 
-An applied override is recorded as `worker.providerOverride` in the `info` message (the container
-cannot tell an override apart from a client-supplied parameter) and logged in the Worker. That
-field rides on the `worker` block, which is only added on the dispatcher path (`USE_DISPATCHER`),
-so with pass-through routing the override is visible in the Worker log but not in `info`.
+An applied override is logged in the Worker and recorded in the `info` message, since the server
+cannot tell an override apart from a client-supplied parameter: `worker.providerOverride` for the
+`transcribe` slot and `worker.textTranslationProviderOverride` for the `text-translation` slot, on
+the `worker` block `sessionProxy.ts` adds, which exists only on the dispatcher path
+(`USE_DISPATCHER`) — with pass-through routing those two are visible in the Worker log but not in
+`info`; and `worker.providerOverride` for the `translate` slot, in the `info` the Worker-hosted
+`/translate` builds itself (`worker/translationRuntime.ts`), on every routing mode.
 
 ## Common Patterns
 
@@ -682,6 +721,7 @@ src/
 ├── buildInfo.ts               # GIT_HASH baked in at bundle time
 ├── translate/
 │   ├── runtime.ts             # TranslationRuntime injection boundary (worker-safe)
+│   ├── provider.ts            # The openai / xai speech-to-speech provider specs + resolution (worker-safe)
 │   ├── nodeRuntime.ts         # Node adapter: config/Winston/OTLP/global WebSocket
 │   ├── messages.ts            # Shared /translate wire-message builders (worker-safe)
 │   ├── base64.ts              # Runtime-neutral base64 (native/injected fast paths)
@@ -753,7 +793,7 @@ worker/
 ├── translationRuntime.ts      # Worker TranslationRuntime (WASM codec, fetch-upgrade, info)
 ├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
 ├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
-├── providerOverride.ts        # KV-backed transcription provider override (operator lever)
+├── providerOverride.ts        # KV-backed provider overrides, one slot per multi-backend service (operator lever)
 └── env.d.ts                   # Worker Env types
 
 scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
@@ -936,9 +976,9 @@ the CC panel ignores.
   "worker": {"present": true, "versionId": "...", "routingMode": "session", "colo": "VIE"}
 }
 ```
-An informational/observability message describing the running build and effective session config. The block above is a composite showing every field that can appear; several are conditional and never all co-occur — e.g. the `worker` block is added only on the Worker path, and `sourceImageTag` is emitted by any runtime that has `SOURCE_IMAGE_TAG` in its environment, which in practice is only the translate-Worker deploy (the container shown by the `cloudflare-container` runtime here omits it, since code and codec are co-versioned in one image). Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. `sourceImageTag` (emitted by any runtime with `SOURCE_IMAGE_TAG` set — in practice the translate Worker, whose WASM Opus codec is sourced from a Docker image tag chosen independently of the worker-code ref at deploy) reports that codec image tag, so a code/WASM version mismatch is visible against `gitHash`. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`, and `providerOverride` when a KV provider override changed this connection's provider — see **Provider override**) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
+An informational/observability message describing the running build and effective session config. The block above is a composite showing every field that can appear; several are conditional and never all co-occur — e.g. the `worker` block is added only on the Worker path, and `sourceImageTag` is emitted by any runtime that has `SOURCE_IMAGE_TAG` in its environment, which in practice is only the translate-Worker deploy (the container shown by the `cloudflare-container` runtime here omits it, since code and codec are co-versioned in one image). Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. `sourceImageTag` (emitted by any runtime with `SOURCE_IMAGE_TAG` set — in practice the translate Worker, whose WASM Opus codec is sourced from a Docker image tag chosen independently of the worker-code ref at deploy) reports that codec image tag, so a code/WASM version mismatch is visible against `gitHash`. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`, and `providerOverride` / `textTranslationProviderOverride` when a KV provider override changed this connection's transcription or text-translation provider — see **Provider overrides**) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
 
-The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, fixed `provider: "openai"`, and a `worker` block with version/colo). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
+The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, the connection's speech-to-speech `provider`, and a `worker` block with version/colo and, when the KV `translate` override chose this connection's provider, `providerOverride` — see **Provider overrides**). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
 
 ## Environment Variables Reference
 
@@ -981,6 +1021,9 @@ See README.md for complete list. Key ones:
 - `TRANSLATE_TRANSCRIPTS` - Emit target-language transcripts from `/translate` (default: true; false → translated audio only)
 - `OPENAI_TRANSLATION_MODEL` - Speech-to-speech translation model (default: `gpt-realtime-translate`)
 - `OPENAI_TRANSLATION_API_KEY` - Separate key for translation (default: falls back to `OPENAI_API_KEY`)
+- `TRANSLATION_PROVIDER` - Speech-to-speech provider for `/translate` connections that pass no `provider` URL parameter: `openai` (default) or `xai`. A connection naming a provider whose key is unset is refused
+- `XAI_TRANSLATION_API_KEY` / `XAI_TRANSLATION_URL` / `XAI_TRANSLATION_VOICE` - xAI realtime translation: the key (falls back to `XAI_API_KEY`; the team needs the realtime-translation entitlement or every upgrade is a 403), the endpoint (default `wss://api.x.ai/v1/realtime/translations`) and the TTS voice (unset → xAI's default)
+- `TRANSLATION_IDLE_CLOSE_MS` - Close a translation direction with no media for this long and reopen it on the next frame (default: unset → never for OpenAI, 120 s for xAI; `0` disables)
 - `TRANSLATION_USAGE_URL` - Endpoint that receives live-translation audio-duration usage reports (see "Translation usage reporting"). Unset → usage reporting is a no-op (dev/replay runs and deployments without the endpoint cost nothing)
 - `TRANSLATION_USAGE_REPORT_INTERVAL_MS` - Interval between periodic incremental usage reports for an open translation direction (default: 15000; `<= 0` disables the timer so only the final delta at close is reported). Resolved by both the Node and Worker translation runtimes
 - `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` - Silence timeout (ms) for detecting the end of a translated-audio "talk". The `/v1/realtime/translations` endpoint streams output-audio deltas with no per-utterance boundary event, so a talk ends when the output goes silent and the next delta starts a new one (drives the `SyntheticSourceSendingChangeEvent` sent to clients). Measured from the projected media playout end (OpenAI streams faster than real time, so the consumer keeps playing a burst after the last frame arrives), not from frame arrival. Default 350; must exceed the RtpTimestamper 100ms gap threshold. `<= 0` disables silence-based inference — unsafe for `/v1/realtime/translations` (which sends no boundary event), where it would mean a talk never ends until the connection closes; only disable against an endpoint that emits explicit done events. Resolved by both the Node and Worker translation runtimes
@@ -988,7 +1031,7 @@ See README.md for complete list. Key ones:
 
 `MONITOR_*` vars configure the separate monitor entrypoint (`src/monitor.ts`), not the proxy server — see "Monitor Mode" under Debugging Tools.
 
-The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANSLATION`/every other `TEXT_TRANSLATION_*` var/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
+The CF Worker forwards `ENABLE_TRANSCRIBE`/`ENABLE_TRANSLATE`/`ENABLE_TEXT_TRANSLATION`/every other `TEXT_TRANSLATION_*` var/`TRANSLATE_TRANSCRIPTS`/`OPENAI_TRANSLATION_MODEL`/`OPENAI_TRANSLATION_API_KEY`/`TRANSLATION_PROVIDER`/`TRANSLATION_IDLE_CLOSE_MS`/`XAI_TRANSLATION_API_KEY`/`XAI_TRANSLATION_URL`/`XAI_TRANSLATION_VOICE`/`TRANSLATION_TALK_SILENCE_TIMEOUT_MS` to the container (only when set, so container defaults apply otherwise) via `buildContainerEnvVars`. (In the CF deployment `/translate` is served by the Worker, not the container; the translation vars matter for a standalone container that serves `/translate` itself.)
 
 ### `/translate` transcript messages
 
@@ -1011,10 +1054,11 @@ Docker image ships under `licenses/` together with `LICENSE` and libopus's `COPY
 
 ## Keeping Documentation Current
 
-When making code changes, update `CLAUDE.md` and `BACKENDS.md` in the same commit:
+When making code changes, update `CLAUDE.md`, `BACKENDS.md` and `TRANSLATION_BACKENDS.md` in the same commit:
 
 - **CLAUDE.md** — update the relevant Key Components description, Common Patterns section, or Notes for Claude whenever behaviour, interfaces, or invariants change.
 - **BACKENDS.md** — update whenever the `TranscriptionBackend` interface changes, audio format negotiation behaviour changes, or backend-specific behaviour changes.
+- **TRANSLATION_BACKENDS.md** — the `/translate` counterpart: update whenever `TranslationProviderSpec` changes, a speech-to-speech provider's measured behaviour or configuration changes, or the close/reopen rules change.
 
 Do not leave stale descriptions. If a note says "only X happens" and you change it so Y also happens, fix the note.
 

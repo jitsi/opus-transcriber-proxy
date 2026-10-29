@@ -23,3 +23,10 @@ export function parseIntOr(value: string | undefined, fallback: number): number 
 	const parsed = parseInt(value, 10);
 	return Number.isNaN(parsed) ? fallback : parsed;
 }
+
+/** Parse an optional integer env var: undefined when unset, empty or non-numeric. */
+export function parseIntOrUndefined(value: string | undefined): number | undefined {
+	if (value === undefined || value === '') return undefined;
+	const parsed = parseInt(value, 10);
+	return Number.isNaN(parsed) ? undefined : parsed;
+}

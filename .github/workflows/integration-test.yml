@@ -113,13 +113,16 @@ jobs:
                     - { runtime: container, opusBackend: native, endpoint: transcribe, provider: openai }
                     - { runtime: container, opusBackend: native, endpoint: transcribe, provider: deepgram }
                     - { runtime: container, opusBackend: native, endpoint: transcribe, provider: xai }
-                    # runtime=container, endpoint=translate (OpenAI only), both opus backends
+                    # runtime=container, endpoint=translate, both speech-to-speech providers, both opus backends
                     - { runtime: container, opusBackend: wasm, endpoint: translate, provider: openai }
                     - { runtime: container, opusBackend: native, endpoint: translate, provider: openai }
+                    - { runtime: container, opusBackend: wasm, endpoint: translate, provider: xai }
+                    - { runtime: container, opusBackend: native, endpoint: translate, provider: xai }
                     # runtime=worker: /translate only — production never routes /transcribe through
                     # the Worker (that path also needs Docker, which wrangler dev rebuilds itself and
                     # is unreliable on constrained local machines; not worth covering here either way).
                     - { runtime: worker, opusBackend: wasm, endpoint: translate, provider: openai }
+                    - { runtime: worker, opusBackend: wasm, endpoint: translate, provider: xai }
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

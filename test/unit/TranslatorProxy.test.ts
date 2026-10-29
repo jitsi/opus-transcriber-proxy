@@ -71,6 +71,7 @@ const MockedConnection = vi.mocked(TranslatorConnection);
 // buildServerInfo (returning undefined skips the server-info send). Cast to satisfy the type.
 const mockRuntime: any = {
 	logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+	config: { openaiApiKey: 'test-key' },
 	buildServerInfo: () => undefined,
 };
 
@@ -136,7 +137,7 @@ describe('TranslatorProxy (sources model)', () => {
 		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage([], ['523834112-a0.en']) });
 
-		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', { targetLanguage: 'en' }, mockRuntime);
+		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', { targetLanguage: 'en', provider: 'openai' }, mockRuntime);
 	});
 
 	it('fans media (keyed by input source name) to every language for that source', () => {
@@ -258,7 +259,7 @@ describe('TranslatorProxy (sources model)', () => {
 		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'start-translation', translation: { language: 'en' } }) });
 		mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
 
-		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' }, mockRuntime);
+		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en', provider: 'openai' }, mockRuntime);
 
 		const conn = MockedConnection.mock.instances[0] as any;
 		const frames: any[] = [];
@@ -272,7 +273,7 @@ describe('TranslatorProxy (sources model)', () => {
 		mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
 
 		expect(MockedConnection).toHaveBeenCalledTimes(1);
-		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en' }, mockRuntime);
+		expect(MockedConnection).toHaveBeenCalledWith('spk-1', { targetLanguage: 'en', provider: 'openai' }, mockRuntime);
 	});
 
 	it('wires an onUsageReport callback onto the connection when a translationToken is set', () => {
@@ -284,5 +285,186 @@ describe('TranslatorProxy (sources model)', () => {
 			expect.objectContaining({ targetLanguage: 'en', onUsageReport: expect.any(Function) }),
 			mockRuntime,
 		);
+	});
+
+	it('passes the connection provider to every direction and reports it in the server info', () => {
+		const infoRuntime: any = { ...mockRuntime, buildServerInfo: vi.fn(() => ({ event: 'info' })) };
+		new TranslatorProxy(mockWebSocket, { provider: 'xai' }, infoRuntime);
+		expect(infoRuntime.buildServerInfo).toHaveBeenCalledWith('xai');
+		mockWebSocket.emit('message', { data: sourcesMessage([], ['523834112-a0.en']) });
+		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', expect.objectContaining({ provider: 'xai' }), infoRuntime);
+	});
+
+	it('defaults the provider from the runtime config', () => {
+		new TranslatorProxy(mockWebSocket, {}, { ...mockRuntime, config: { provider: 'xai', xaiApiKey: 'k' } });
+		mockWebSocket.emit('message', { data: sourcesMessage([], ['523834112-a0.en']) });
+		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', expect.objectContaining({ provider: 'xai' }), expect.anything());
+	});
+
+	describe('reopening a requested direction whose connection went away', () => {
+		beforeEach(() => vi.useFakeTimers());
+		afterEach(() => vi.useRealTimers());
+
+		function requestOne(): any {
+			new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			return MockedConnection.mock.instances[0];
+		}
+
+		it('reopens on the next media frame after an idle or provider-side close, with no delay', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'idle');
+			expect(MockedConnection).toHaveBeenCalledTimes(1); // nothing until media arrives
+
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			expect(createdPairs()[1]).toEqual(['523834112-a0', 'en']);
+			// The frame that triggered the reopen is delivered to the new connection.
+			expect(MockedConnection.mock.instances[1].handleMediaEvent).toHaveBeenCalledTimes(1);
+
+			const second = MockedConnection.mock.instances[1];
+			second.onClosed('523834112-a0', 'remote');
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('paces the reopen after a failure: 1 s, then doubling, cleared by a benign close', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error');
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1); // inside the 1 s backoff: dropped
+
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+
+			// A second failure doubles the wait.
+			MockedConnection.mock.instances[1].onClosed('523834112-a0', 'error');
+			vi.advanceTimersByTime(1500);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			vi.advanceTimersByTime(500);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+
+			// A benign close clears the backoff: the next reopen is immediate.
+			MockedConnection.mock.instances[2].onClosed('523834112-a0', 'idle');
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(4);
+		});
+
+		it('does not reopen a direction the bridge has since dropped from requests', () => {
+			const first = requestOne();
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], []) });
+			expect(first.close).toHaveBeenCalled();
+			first.onClosed('523834112-a0', 'local');
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+		});
+
+		it('a stale onClosed from a connection already replaced by a reconcile does not unregister the replacement', () => {
+			const first = requestOne();
+			// Reconcile to a different set then back: the first connection is closed and a new one opened.
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], []) });
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			first.onClosed('523834112-a0', 'remote'); // late close from the old socket
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2); // the replacement is still registered: no third connection
+			expect(MockedConnection.mock.instances[1].handleMediaEvent).toHaveBeenCalledTimes(1);
+		});
+
+		it('a stale onClosed does not clear or arm the backoff of the current connection', () => {
+			const first = requestOne();
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], []) });
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			const second = MockedConnection.mock.instances[1];
+			second.onClosed('523834112-a0', 'error'); // the live connection fails: 1 s backoff
+			first.onClosed('523834112-a0', 'remote'); // late benign close of the old socket must not clear it
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('paces a reopen after the provider closed the session before any audio ("rejected")', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'rejected');
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+		});
+
+		it('a sources event does not reopen a direction the idle close ended; the next media frame does', () => {
+			// On a wall-clock-billed provider, reopening on every join/leave would start a paid session for
+			// each muted participant each time, only to be idle-closed again.
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'idle');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0', 'other-a0'], ['523834112-a0.en', 'other-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2); // only the new direction opened
+			expect(createdPairs()[1]).toEqual(['other-a0', 'en']);
+
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+			expect(createdPairs()[2]).toEqual(['523834112-a0', 'en']);
+			// Reopened, so a later sources event treats it as an ordinary live direction again.
+			MockedConnection.mock.instances[2].onClosed('523834112-a0', 'remote');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0', 'other-a0'], ['523834112-a0.en', 'other-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(4);
+		});
+
+		it('a sources event does not re-dial a direction inside its reopen backoff', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+		});
+
+		it('a session that carried 2 s of audio clears its backoff, so a later isolated failure starts from 1 s', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error'); // 1 s
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			const second = MockedConnection.mock.instances[1];
+			second.onSessionUsable('523834112-a0');
+			second.onClosed('523834112-a0', 'error'); // back to 1 s, not 2 s
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+		});
+
+		it('a sources event does not forget the backoff of a dev-path direction', () => {
+			new TranslatorProxy(mockWebSocket, { initialLanguages: ['es'] }, mockRuntime);
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1);
+			MockedConnection.mock.instances[0].onClosed('spk-1', 'error');
+			mockWebSocket.emit('message', { data: sourcesMessage([], []) });
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(1); // still inside the 1 s backoff
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('spk-1') });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+		});
+
+		it('forgets the backoff of a direction the bridge drops from requests', () => {
+			const first = requestOne();
+			first.onClosed('523834112-a0', 'error');
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], []) });
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(2);
+			// Re-requested fresh: a failure now starts again from the 1 s base rather than a doubled wait.
+			MockedConnection.mock.instances[1].onClosed('523834112-a0', 'error');
+			vi.advanceTimersByTime(1000);
+			mockWebSocket.emit('message', { data: mediaMessage('523834112-a0') });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+		});
 	});
 });
