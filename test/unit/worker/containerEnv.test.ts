@@ -42,13 +42,22 @@ describe('buildContainerEnvVars', () => {
 
 	it('forwards the optional knobs only when set', () => {
 		const unset = buildContainerEnvVars(env());
-		for (const key of ['XAI_ENDPOINTING', 'XAI_STT_URL', 'ENABLE_TEXT_TRANSLATION', 'OPENAI_TRANSLATION_MODEL', 'ENABLE_AGENT']) {
+		for (const key of ['XAI_ENDPOINTING', 'XAI_STT_URL', 'ENABLE_TEXT_TRANSLATION', 'OPENAI_TRANSLATION_MODEL', 'ENABLE_AGENT',
+			'AGENT_SHARED_SECRET', 'AGENT_PROVISIONING_URL', 'AGENT_PROVISIONING_TOKEN', 'AGENT_PROVISIONING_HOST', 'AGENT_PROVISIONING_ROUTING']) {
 			expect(unset).not.toHaveProperty(key);
 		}
-		const set = buildContainerEnvVars(env({ XAI_ENDPOINTING: '850', ENABLE_TEXT_TRANSLATION: 'true', ENABLE_AGENT: 'true' }));
+		const set = buildContainerEnvVars(env({
+			XAI_ENDPOINTING: '850',
+			ENABLE_TEXT_TRANSLATION: 'true',
+			ENABLE_AGENT: 'true',
+			AGENT_PROVISIONING_URL: 'https://signal-api.example/voice-agent',
+			AGENT_PROVISIONING_ROUTING: 'haproxy',
+		}));
 		expect(set.XAI_ENDPOINTING).toBe('850');
 		expect(set.ENABLE_TEXT_TRANSLATION).toBe('true');
 		expect(set.ENABLE_AGENT).toBe('true');
+		expect(set.AGENT_PROVISIONING_URL).toBe('https://signal-api.example/voice-agent');
+		expect(set.AGENT_PROVISIONING_ROUTING).toBe('haproxy');
 	});
 
 	it('forwards "0" for the talk-silence timeout (a non-empty string disables, it must not be dropped)', () => {

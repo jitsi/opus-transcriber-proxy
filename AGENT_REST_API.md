@@ -144,7 +144,7 @@ endpoint allocation is submitted and `failed` when that allocation errors. The m
 reports the media leg: `active` when the agent's socket opens, `failed` when the dial to the agent endpoint
 fails (`endpoint refused: HTTP 401`, `endpoint unreachable: ...`), and `ended` when the agent sends `end`.
 It finds the agent through the `conference` and `agentId` query parameters jicofo puts on the dial URL and
-is configured with the API's base URL and bearer (`AGENT_PROVISIONING_URL`, `AGENT_PROVISIONING_TOKEN`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
+is configured with the API's base URL and bearer (`AGENT_PROVISIONING_URL`, `AGENT_PROVISIONING_TOKEN`). On a sharded deployment the base URL is on the environment's signal-api host (the `/voice-agent` path kept) and `AGENT_PROVISIONING_ROUTING=haproxy` puts the tenant before the path and the room in `?room=`, spelled as jitsi-meet spells its own (decoded, lower-cased, form-encoded), so HAProxy delivers each call to the shard holding the room; a `404` for the room then means the call reached a shard without it. A client library does the same (`routing: 'haproxy'` in `@jitsi/voice-agent-client`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
 secret as the bearer (`voice_agent_status_secret` on the component / `jicofo.agent.status.token` on
 jicofo); ASAP remains accepted, and the secret never authorizes the provisioning routes.
 

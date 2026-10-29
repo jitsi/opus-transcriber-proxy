@@ -18,7 +18,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { AgentLifecycleState, DialConfigResult, ProvisioningClient } from './agent/ProvisioningClient';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { config, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
+import { config, configWarnings, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
 import { extractSessionParameters, type ISessionParameters, redactCredentials } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
@@ -111,6 +111,7 @@ function provisioning(): ProvisioningClient {
 		url: config.agent.provisioningUrl,
 		token: config.agent.provisioningToken,
 		host: config.agent.provisioningHost,
+		routing: config.agent.provisioningRouting,
 		logger,
 		onReportGivenUp: (state) => getInstruments().agentStatusReportsGivenUpTotal.add(1, { state }),
 	});
@@ -858,6 +859,10 @@ const PORT = config.server.port;
 const HOST = config.server.host;
 
 server.listen(PORT, HOST, () => {
+	// Said on stderr when the config loaded, before the logger existed.
+	for (const warning of configWarnings) {
+		logger.warn(warning);
+	}
 	if (config.enableAgent && !provisioning().enabled) {
 		logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');
 	}
