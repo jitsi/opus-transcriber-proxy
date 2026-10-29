@@ -246,3 +246,27 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		expect(runtime.logger.error).toHaveBeenCalled();
 	});
 });
+
+describe('translation endpoint override', () => {
+	it.each([undefined, 'ws://127.0.0.1:8096/v1/realtime/translations?tenant=test'])('uses endpoint %s', async (endpoint) => {
+		const { runtime } = makeHarness(0);
+		runtime.config.translationEndpoint = endpoint;
+		const dial = vi.spyOn(runtime, 'createOutboundWebSocket');
+		const conn = new TranslatorConnection('speaker', { targetLanguage: 'en' }, runtime);
+		await flushMicrotasks();
+		const url = new URL(dial.mock.calls[0][0]);
+		expect(url.host).toBe(endpoint ? '127.0.0.1:8096' : 'api.openai.com');
+		expect(url.searchParams.get('model')).toBe('test-model');
+		if (endpoint) expect(url.searchParams.get('tenant')).toBe('test');
+		conn.close();
+	});
+	it.each(['https://example.com', 'ws://user:password@localhost', 'ws://localhost/#secret'])('rejects %s before dial', async (endpoint) => {
+		const { runtime } = makeHarness(0);
+		runtime.config.translationEndpoint = endpoint;
+		const dial = vi.spyOn(runtime, 'createOutboundWebSocket');
+		const conn = new TranslatorConnection('speaker', { targetLanguage: 'en' }, runtime);
+		await flushMicrotasks();
+		expect(dial).not.toHaveBeenCalled();
+		conn.close();
+	});
+});

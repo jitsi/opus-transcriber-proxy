@@ -329,7 +329,12 @@ export class TranslatorConnection {
 		}
 		try {
 			const apiKey = this.runtime.config.openaiApiKey;
-			const wsUrl = `${OPENAI_TRANSLATIONS_ENDPOINT}?model=${encodeURIComponent(this.runtime.config.translationModel)}`;
+			const endpoint = new URL(this.runtime.config.translationEndpoint || OPENAI_TRANSLATIONS_ENDPOINT);
+			if (!['ws:', 'wss:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.hash) {
+				throw new Error('Invalid translations endpoint');
+			}
+			endpoint.searchParams.set('model', this.runtime.config.translationModel);
+			const wsUrl = endpoint.toString();
 			// The runtime applies the bearer token the way its transport allows (Node → subprotocol,
 			// Worker → Authorization header); only one form is sent (OpenAI rejects both).
 			const openaiWs = this.runtime.createOutboundWebSocket(wsUrl, {

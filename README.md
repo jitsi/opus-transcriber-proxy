@@ -393,3 +393,8 @@ See [WEBSOCKET_DUMP.md](WEBSOCKET_DUMP.md) and [AUDIO_MIXING.md](AUDIO_MIXING.md
 Apache 2.0 (see `LICENSE`). Third-party components and their licences are listed in `NOTICE`:
 the WASM Opus decoder shim is adapted from the MIT-licensed wasm-audio-decoders, and libopus
 is a submodule under its own BSD-style licence.
+
+The optional `OPENAI_TRANSLATIONS_ENDPOINT` sets the Node speech-translation WebSocket URL.
+It defaults to `wss://api.openai.com/v1/realtime/translations`. Custom URLs must use
+`ws://` or `wss://`, without embedded credentials or fragments. Existing query
+parameters are preserved; the configured translation model replaces `model`.

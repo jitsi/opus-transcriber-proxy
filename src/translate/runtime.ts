@@ -66,6 +66,7 @@ export interface TranslationRuntimeConfig {
 	openaiApiKey: string;
 	/** Speech-to-speech translation model. */
 	translationModel: string;
+	translationEndpoint?: string;
 	/** Emit target-language transcripts (false → translated audio only). */
 	emitTranscripts: boolean;
 	/** Enable debug-only latency instrumentation. */

@@ -61,6 +61,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 		config: {
 			openaiApiKey: config.translation.apiKey,
 			translationModel: config.translation.model,
+			translationEndpoint: config.translation.endpoint,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
 			translationUsageUrl: config.translation.usageUrl,
