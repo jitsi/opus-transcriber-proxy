@@ -661,8 +661,8 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 
 	translateSession.on('error', (tag: string, error: any) => {
 		// A single (source, language) connection failing must not tear down the whole /translate session, which
-		// carries every speaker/language. The failed connection self-removes from the proxy and the next
-		// `sources` event reconciles it back open, so just log here.
+		// carries every speaker/language. The failed connection self-removes from the proxy, and the source's
+		// next media frame reopens it after the direction's reopen backoff (TranslatorProxy), so just log here.
 		const message = `Error in translation connection ${tag}: ${error instanceof Error ? error.message : String(error)}`;
 		logger.error(message);
 	});
