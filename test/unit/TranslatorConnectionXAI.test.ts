@@ -256,7 +256,7 @@ describe('TranslatorConnection on xAI', () => {
 		expect(closed).toEqual(['idle']);
 	});
 
-	it('reports a provider close before the session was usable as "rejected", after 2 s of audio as "remote"', async () => {
+	it('reports a provider close within 30 s of creation as "rejected", a later one as "remote"', async () => {
 		// Mid-handshake: no audio could have been sent.
 		const a = await open();
 		a.ws.fireOpen();
@@ -264,20 +264,24 @@ describe('TranslatorConnection on xAI', () => {
 		a.ws.fireClose(1000);
 		expect(a.closed).toEqual(['rejected']);
 
-		// After only a moment of audio: a provider dropping every session this way must be paced too.
+		// After a short run of audio: a provider dropping every session a few seconds in must be paced too, or it
+		// is re-dialled once per round trip, each a billed session start.
 		const b = await open();
 		b.ws.fireOpen();
 		b.ws.fireMessage(sessionCreated());
 		b.ws.fireMessage(sessionUpdated());
-		for (let i = 1; i <= 50; i++) b.conn.handleMediaEvent(mediaEvent('55555555-a0', i)); // 1 s
+		for (let i = 1; i <= 500; i++) b.conn.handleMediaEvent(mediaEvent('55555555-a0', i)); // 10 s of audio
+		await vi.advanceTimersByTimeAsync(15_000);
 		b.ws.fireClose(1000);
 		expect(b.closed).toEqual(['rejected']);
 
+		// Past the floor the session was healthy: reopen at once.
 		const c = await open();
 		c.ws.fireOpen();
 		c.ws.fireMessage(sessionCreated());
 		c.ws.fireMessage(sessionUpdated());
-		for (let i = 1; i <= 101; i++) c.conn.handleMediaEvent(mediaEvent('55555555-a0', i)); // just over 2 s
+		for (let i = 1; i <= 101; i++) c.conn.handleMediaEvent(mediaEvent('55555555-a0', i));
+		await vi.advanceTimersByTimeAsync(30_000);
 		c.ws.fireClose(1000);
 		expect(c.closed).toEqual(['remote']);
 	});

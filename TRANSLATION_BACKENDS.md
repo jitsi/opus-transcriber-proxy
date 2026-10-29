@@ -72,7 +72,7 @@ The team behind the key needs xAI's realtime-translation entitlement. Without it
 - The documented `segment.usage` event was never seen in testing; usage is billed from the audio the proxy appended, as for OpenAI
 - The server does not answer the client's Close frame; the socket ends with 1006 about a second later, logged at debug once closed
 - xAI drops a session after about 5 min without client audio and caps one at about 2 h, with no resume. Both are plain remote closes; the proxy reopens the direction on the source's next media frame
-- **Idle close.** xAI bills the greater of audio duration and wall-clock session time, idle included. A direction with no media for `TRANSLATION_IDLE_CLOSE_MS` (120 s) is closed proactively, except while translated audio is still playing out, and reopened on the next frame. Without it a muted participant pays for silence and then loses the direction at xAI's own timing
+- **Idle close.** xAI bills the greater of audio duration and wall-clock session time, idle included. A direction with no media for `TRANSLATION_IDLE_CLOSE_MS` (120 s) is closed proactively, except while translated audio is still playing out, and reopened on the next frame. Without it a muted participant pays for silence and then loses the direction at xAI's own timing. The cost is on the reopen: the first frames after the silence wait for the connect (0.3 s measured) and the `session.created` / `session.update` / `session.updated` round trips before the buffered PCM flushes, so the first half second or so of speech after a long pause arrives late, buffered rather than lost
 
 ## Architecture
 
@@ -124,9 +124,11 @@ A `TranslatorConnection` reports why it closed, and the proxy decides from that 
 | `local` | the proxy closed it (dropped from `sources`) | no |
 | `remote` | the provider closed an established session (xAI's idle drop or session cap) | next media frame |
 
-A `remote` close is reopened at once, unpaced: an established session that the provider ends is normally its idle drop or session cap, and pacing it would clip the first second of speech after every one. The trade-off is that a provider which accepts the handshake, carries more than 2 s of audio and then drops every session is re-dialled once per round trip, each a billed session start on xAI. The handshake timeout and the `rejected` pacing do not cover that case; if it ever shows up, the fix is a floor on session lifetime below which a `remote` close is paced too.
+A `remote` close is reopened at once, unpaced: an established session that the provider ends is normally its idle drop or session cap, and pacing it would clip the first second of speech after every one. The line between the two is the connection's age at close, 30 s (`REJECTED_MAX_SESSION_AGE_MS`): a provider that accepts the handshake and drops every session a few seconds in is paced like one that refuses outright, while xAI's own closes at about 5 min and 2 h are far past the floor. What the floor does not cover is a provider that drops every session after more than 30 s; that would be re-dialled once per round trip.
+
+A `sources` event is not "ensure every requested direction is open". It opens the directions that are new; one in its reopen backoff, or one the idle close ended, stays closed through any number of `sources` events until that source sends media, which then reopens it at once. That is deliberate: `sources` fires on every join and leave, and re-dialling on each would start a paid session for every muted participant each time. Nothing on the bridge relies on a `sources` round trip reopening a direction; the bridge only ever learns about a direction from the media and talk events it produces.
 | `idle` | the proxy's idle close | next media frame, not on a `sources` event |
-| `rejected` | the provider closed it before it was usable (young, little audio) | next media frame, paced 1-15 s |
+| `rejected` | the provider closed it within 30 s of creation | next media frame, paced 1-15 s |
 | `error` | a failure (`onError` fired first) | next media frame, paced 1-15 s |
 
 ## Adding a New Backend
