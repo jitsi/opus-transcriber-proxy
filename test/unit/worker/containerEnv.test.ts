@@ -70,6 +70,28 @@ describe('buildContainerEnvVars', () => {
 		expect(buildContainerEnvVars(env({ DEBUG: 'true' })).DEBUG).toBe('true');
 	});
 
+	it('forwards the container settings it previously did not, when set', () => {
+		const unset = buildContainerEnvVars(env());
+		for (const key of ['GEMINI_MODEL', 'OPENAI_TURN_DETECTION', 'SESSION_RESUME_GRACE_PERIOD', 'DUMP_WEBSOCKET_MESSAGES', 'SLEEP_AFTER']) {
+			expect(unset).not.toHaveProperty(key);
+		}
+		const set = buildContainerEnvVars(env({ GEMINI_MODEL: 'g', SESSION_RESUME_GRACE_PERIOD: '30', SLEEP_AFTER: '10m' }));
+		expect(set).toMatchObject({ GEMINI_MODEL: 'g', SESSION_RESUME_GRACE_PERIOD: '30', SLEEP_AFTER: '10m' });
+	});
+
+	it('never forwards a Worker-only variable', () => {
+		const vars = buildContainerEnvVars(env({ USE_DISPATCHER: 'true', TRANSLATION_USAGE_URL: 'https://u', SOURCE_IMAGE_TAG: 't' }));
+		expect(vars).not.toHaveProperty('USE_DISPATCHER');
+		expect(vars).not.toHaveProperty('TRANSLATION_USAGE_URL');
+		expect(vars).not.toHaveProperty('SOURCE_IMAGE_TAG');
+	});
+
+	it('passes CONFIG_OVERRIDES only when an override applied', () => {
+		expect(buildContainerEnvVars(env())).not.toHaveProperty('CONFIG_OVERRIDES');
+		expect(buildContainerEnvVars(env(), {})).not.toHaveProperty('CONFIG_OVERRIDES');
+		expect(buildContainerEnvVars(env(), { XAI_ENDPOINTING: '1200' }).CONFIG_OVERRIDES).toBe('{"XAI_ENDPOINTING":"1200"}');
+	});
+
 	it('does not include CONTAINER_INSTANCE_NAME itself (TranscriberContainer adds it)', () => {
 		expect(buildContainerEnvVars(env())).not.toHaveProperty('CONTAINER_INSTANCE_NAME');
 	});

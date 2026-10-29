@@ -265,6 +265,10 @@ Edit `wrangler-container.jsonc` to configure:
 - `sleepAfter`: How long to keep idle containers running (default: 10m)
 - Environment variables in the `vars` section
 
+Some variables can also be changed at runtime, without a deploy, through the `CONFIG_KV`
+namespace (key `config:<VARIABLE>`). See "Runtime config overrides (KV)" in
+[README.md](README.md).
+
 ### Scaling
 
 The container will automatically scale based on demand:

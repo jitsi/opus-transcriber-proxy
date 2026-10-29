@@ -19,6 +19,7 @@ import { AgentLifecycleState, DialConfigResult, ProvisioningClient } from './age
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { config, configWarnings, getAvailableProviders, getDefaultProvider, isValidProvider, isProviderAvailable, type Provider } from './config';
+import { startupConfigOverrides } from './serverInfo';
 import { extractSessionParameters, type ISessionParameters, redactCredentials } from './utils';
 import { TranscriberProxy, type TranscriptionMessage } from './transcriberproxy';
 import { TranslatorProxy } from './translatorproxy';
@@ -899,6 +900,10 @@ server.listen(PORT, HOST, () => {
 	}
 
 	logger.info(`Available providers: ${availableProviders.join(', ')}`);
+	const kvOverrides = startupConfigOverrides();
+	if (Object.keys(kvOverrides).length > 0) {
+		logger.info(`Config overrides from KV at start: ${JSON.stringify(kvOverrides)}`);
+	}
 	if (defaultProvider) {
 		logger.info(`Default provider: ${defaultProvider}`);
 	} else {

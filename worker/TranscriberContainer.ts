@@ -85,6 +85,25 @@ export class TranscriberContainer extends Container<Env> {
 		...instanceNameEnv(this.ctx.id),
 	};
 
+	/**
+	 * Adopt the Worker's effective SLEEP_AFTER before starting (or checking) the container.
+	 *
+	 * The class field above is set from this Durable Object's own env, which never sees a KV config
+	 * override (worker/configOverride.ts); the Worker resolves those per request and passes the
+	 * effective value in the start call's env. The Worker calls this on every request, for a running
+	 * container too, so a changed SLEEP_AFTER takes effect at the next activity-timer renewal. The
+	 * SDK re-reads `sleepAfter` at each renewal, and throws on a value it cannot parse, which is why
+	 * worker/vars.ts validates the KV value. A rebuilt object starts again from the class field until
+	 * the next request.
+	 */
+	override async startAndWaitForPorts(...args: Parameters<Container<Env>['startAndWaitForPorts']>): Promise<void> {
+		const [portsOrArgs, , startOptions] = args;
+		const options = typeof portsOrArgs === 'object' && !Array.isArray(portsOrArgs) ? portsOrArgs.startOptions : startOptions;
+		const sleepAfter = options?.envVars?.SLEEP_AFTER;
+		if (sleepAfter) this.sleepAfter = sleepAfter;
+		return super.startAndWaitForPorts(...args);
+	}
+
 	override onStart() {
 		console.log('Transcriber container started');
 	}

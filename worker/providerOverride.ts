@@ -48,6 +48,8 @@
  * provider automatically — no operator has to remember to switch back.
  */
 
+import { checkUntil, entryReason, OVERRIDE_CACHE_TTL_SECONDS, parseEntryObject } from './kvEntry';
+
 /** The services with more than one backend, each with its own KV key. */
 export type OverrideSlotId = 'transcribe' | 'translate' | 'text-translation';
 
@@ -189,21 +191,8 @@ export const TEXT_TRANSLATION_PROVIDER_SLOT: ProviderOverrideSlot<TextTranslatio
  */
 export const MAX_OVERRIDE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Edge-cache TTL for the KV read. Costs up to this long for a newly written override to take
- * effect at a given colo, which is well inside the response time of an outage, and keeps the read
- * off the KV origin for the overwhelming majority of connections.
- */
-export const OVERRIDE_CACHE_TTL_SECONDS = 60;
-
-/**
- * Smallest `until` that can be a real millisecond timestamp (2001-09-09). Anything below it is a
- * seconds-granularity value, which is the likeliest operator slip — `--ttl` on the same command
- * line takes seconds. Treating it as a merely expired override would be the worst outcome: the
- * operator believes the override is armed, it is reported at `info`, and traffic quietly stays on
- * the failing provider. It is refused as malformed instead, at `error`.
- */
-export const MIN_PLAUSIBLE_UNTIL_MS = 1_000_000_000_000;
+// Shared with the config overrides (worker/configOverride.ts); re-exported for existing importers.
+export { MIN_PLAUSIBLE_UNTIL_MS, OVERRIDE_CACHE_TTL_SECONDS } from './kvEntry';
 
 export type OverrideDecision<P extends string = string> =
 	| { applied: true; provider: P; until: number; reason?: string }
@@ -234,23 +223,11 @@ export function decideProviderOverride<P extends string>(
 		return { applied: false, level: 'debug', why: `request names a ${slot.param} explicitly` };
 	}
 
-	if (raw === null || raw === undefined || raw.trim() === '') {
-		return { applied: false, level: 'debug', why: 'no override set' };
+	const parsed = parseEntryObject(raw);
+	if (!('entry' in parsed)) {
+		return { applied: false, ...parsed };
 	}
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		return { applied: false, level: 'error', why: `override is not valid JSON: ${msg}` };
-	}
-
-	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-		return { applied: false, level: 'error', why: `override is not a JSON object (got ${Array.isArray(parsed) ? 'array' : typeof parsed})` };
-	}
-
-	const entry = parsed as Record<string, unknown>;
+	const { entry } = parsed;
 
 	if (typeof entry.provider !== 'string' || !(slot.providers as readonly string[]).includes(entry.provider)) {
 		return {
@@ -261,41 +238,19 @@ export function decideProviderOverride<P extends string>(
 	}
 	const provider = entry.provider as P;
 
-	// An entry with no expiry is refused rather than treated as permanent. "Forever" is exactly the
-	// state this mechanism is meant to make impossible.
-	if (typeof entry.until !== 'number' || !Number.isFinite(entry.until)) {
-		return { applied: false, level: 'error', why: `override has no usable "until" timestamp (got ${JSON.stringify(entry.until)})` };
+	// No indefinite entry here, and a capped window: a provider override is an outage lever, and
+	// when it lapses new sessions go back to the primary, which re-tests it.
+	const rejected = checkUntil(entry.until, { now: opts.now, maxWindowMs: MAX_OVERRIDE_WINDOW_MS });
+	if (rejected) {
+		return { applied: false, ...rejected };
 	}
-	const until = entry.until;
-
-	// A seconds-granularity value cannot be a legitimately expired override, so it is refused as
-	// malformed rather than reported as expired — see MIN_PLAUSIBLE_UNTIL_MS.
-	if (until < MIN_PLAUSIBLE_UNTIL_MS) {
-		return {
-			applied: false,
-			level: 'error',
-			why: `override "until" is not a millisecond timestamp (got ${until}); use milliseconds since the epoch`,
-		};
-	}
-
-	if (opts.now >= until) {
-		return { applied: false, level: 'info', why: `override expired at ${new Date(until).toISOString()}` };
-	}
-
-	if (until - opts.now > MAX_OVERRIDE_WINDOW_MS) {
-		return {
-			applied: false,
-			level: 'error',
-			why: `override window exceeds the ${MAX_OVERRIDE_WINDOW_MS}ms cap (until ${new Date(until).toISOString()})`,
-		};
-	}
+	const until = entry.until as number;
 
 	if (!opts.isConfigured(provider)) {
 		return { applied: false, level: 'error', why: `override names provider '${provider}', which has no API key configured` };
 	}
 
-	const reason = typeof entry.reason === 'string' ? entry.reason : undefined;
-	return { applied: true, provider, until, reason };
+	return { applied: true, provider, until, reason: entryReason(entry) };
 }
 
 /**
