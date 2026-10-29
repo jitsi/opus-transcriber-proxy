@@ -378,6 +378,7 @@ export const config = {
 
 	// Translation (/translate endpoint) configuration
 	translation: {
+		endpoint: process.env.OPENAI_TRANSLATIONS_ENDPOINT?.trim() || undefined,
 		// Emit target-language transcript messages from the /translate path (to sendBack clients
 		// and, when enabled, the dispatcher). Default true; set TRANSLATE_TRANSCRIPTS=false to
 		// produce translated audio only.
