@@ -21,20 +21,22 @@
  * The load-bearing property throughout: an entry that cannot be used leaves the Worker variable in
  * place, so a typo in KV never changes what a session runs with.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Env } from '../../../worker/env';
 import {
+	CONFIG_CACHE_TTL_MS,
 	CONFIG_OVERRIDABLE_NAMES,
 	decideConfigOverride,
 	describeConfigOverrideDecision,
 	KV_BULK_GET_MAX_KEYS,
 	logConfigOverrideDecisions,
+	resetConfigOverrideCache,
 	resolveConfigOverrides,
 	type ConfigOverrideKv,
 } from '../../../worker/configOverride';
 import { configKey, KV_OVERRIDABLE_VARS, WORKER_VARS, type KvType, type VarSpec } from '../../../worker/vars';
 import { buildContainerEnvVars, buildWorkerInfo } from '../../../worker/containerEnv';
-import { coordinatorConfig } from '../../../worker/ContainerCoordinator';
+import { ContainerCoordinator, coordinatorConfig } from '../../../worker/ContainerCoordinator';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 
@@ -54,6 +56,8 @@ function fakeKv(entries: Record<string, string>) {
 }
 
 const env = (overrides: Partial<Env> = {}): Env => ({ OPENAI_API_KEY: 'sk', ...overrides }) as unknown as Env;
+
+beforeEach(() => resetConfigOverrideCache());
 
 describe('the variable table', () => {
 	it('derives each KV key from the variable name', () => {
@@ -209,6 +213,20 @@ describe('decideConfigOverride', () => {
 		expect(d).toMatchObject({ applied: false, level: 'error', why: expect.stringContaining(why) });
 	});
 
+	it('never lets an override empty the /agent host allowlist', () => {
+		// An empty allowlist allows any public host, so a null or empty override would loosen it while
+		// looking like a reset. Deleting the key is how the Worker variable is restored.
+		const hosts = typeOf('AGENT_ALLOWED_HOSTS');
+		for (const value of [null, '', '   ']) {
+			const d = decideConfigOverride('AGENT_ALLOWED_HOSTS', hosts, j({ value, until: -1 }), NOW);
+			expect(d, JSON.stringify(value)).toMatchObject({ applied: false, level: 'error' });
+		}
+		expect(decideConfigOverride('AGENT_ALLOWED_HOSTS', hosts, j({ value: '.example.com', until: -1 }), NOW)).toMatchObject({
+			applied: true,
+			value: '.example.com',
+		});
+	});
+
 	it('mentions -1 when the until is unusable', () => {
 		const d = decideConfigOverride('XAI_ENDPOINTING', endpointing, j({ value: 1 }), NOW);
 		expect((d as { why: string }).why).toContain('-1 for no expiry');
@@ -267,6 +285,35 @@ describe('resolveConfigOverrides', () => {
 		expect(r.decisions.map((d) => d.name).sort()).toEqual(['LOG_LEVEL', 'XAI_ENCODING', 'XAI_ENDPOINTING']);
 	});
 
+	it('reads KV at most once per cache period in an isolate, and decides expiry afresh each time', async () => {
+		// KV bills a bulk read per key, so reading every key on every request would cost one read per
+		// overridable variable per request.
+		const { kv, get } = fakeKv({ 'config:XAI_ENDPOINTING': j({ value: 1200, until: NOW + 10_000 }) });
+		const e = env({ CONFIG_KV: kv as never });
+		expect((await resolveConfigOverrides(e, NOW)).applied).toEqual({ XAI_ENDPOINTING: '1200' });
+		// Within the period: no new read, but the entry has expired by now.
+		expect((await resolveConfigOverrides(e, NOW + CONFIG_CACHE_TTL_MS - 1)).applied).toEqual({});
+		expect(get).toHaveBeenCalledTimes(1);
+		await resolveConfigOverrides(e, NOW + CONFIG_CACHE_TTL_MS);
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not share the cache between KV namespaces', async () => {
+		const a = fakeKv({ 'config:XAI_ENDPOINTING': j({ value: 1, until: -1 }) });
+		const b = fakeKv({ 'config:XAI_ENDPOINTING': j({ value: 2, until: -1 }) });
+		expect((await resolveConfigOverrides(env({ CONFIG_KV: a.kv as never }), NOW)).applied).toEqual({ XAI_ENDPOINTING: '1' });
+		expect((await resolveConfigOverrides(env({ CONFIG_KV: b.kv as never }), NOW)).applied).toEqual({ XAI_ENDPOINTING: '2' });
+	});
+
+	it('does not cache a failed read', async () => {
+		const get = vi.fn()
+			.mockRejectedValueOnce(new Error('KV down'))
+			.mockImplementation(async (keys: string[]) => new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 9, until: -1 }) : null])));
+		const e = env({ CONFIG_KV: { get } as never });
+		expect((await resolveConfigOverrides(e, NOW)).applied).toEqual({});
+		expect((await resolveConfigOverrides(e, NOW + 1)).applied).toEqual({ XAI_ENDPOINTING: '9' });
+	});
+
 	it('degrades a KV failure to no override, with one error decision', async () => {
 		const kv = { get: vi.fn(async () => Promise.reject(new Error('KV down'))) } as unknown as ConfigOverrideKv;
 		const e = env({ CONFIG_KV: kv as never, XAI_ENDPOINTING: '850' });
@@ -322,6 +369,31 @@ describe('the effective env downstream', () => {
 		const info = buildWorkerInfo(new Request('https://x/transcribe'), env(), undefined, { USE_DISPATCHER: 'true' });
 		expect(info.configOverrides).toEqual({ USE_DISPATCHER: 'true' });
 		expect(buildWorkerInfo(new Request('https://x/transcribe'), env(), undefined, {})).not.toHaveProperty('configOverrides');
+	});
+
+	it('falls back to the coordinator defaults for an empty or non-numeric value', () => {
+		expect(coordinatorConfig({ MAX_CONNECTIONS_PER_CONTAINER: '', MIN_CONTAINERS: 'two', SCALE_DOWN_IDLE_TIME: 'x' })).toEqual({
+			maxConnectionsPerContainer: 10,
+			minContainers: 2,
+			scaleDownIdleTime: 600000,
+		});
+	});
+
+	it('makes the coordinator apply a KV override of its limits on its next request', async () => {
+		const storage = new Map<string, unknown>();
+		const state = {
+			storage: { get: async (k: string) => storage.get(k), put: async (k: string, v: unknown) => void storage.set(k, v) },
+			blockConcurrencyWhile: (fn: () => Promise<void>) => fn(),
+		};
+		const { kv } = fakeKv({ 'config:MAX_CONNECTIONS_PER_CONTAINER': j({ value: 1, until: -1 }) });
+		const coordinator = new ContainerCoordinator(state as never, env({ CONFIG_KV: kv as never, MIN_CONTAINERS: '1' }));
+		const post = (path: string, body: unknown) =>
+			coordinator.fetch(new Request(`http://coordinator${path}`, { method: 'POST', body: JSON.stringify(body) }));
+		const { containerId } = (await (await post('/assign', { sessionId: 's1' })).json()) as { containerId: string };
+		await post('/connection-opened', { sessionId: 's1', containerId });
+		// With the override's limit of 1 the first container is full, so the next session gets a new one.
+		const second = (await (await post('/assign', { sessionId: 's2' })).json()) as { containerId: string };
+		expect(second.containerId).not.toBe(containerId);
 	});
 
 	it('gives the coordinator its limits', () => {

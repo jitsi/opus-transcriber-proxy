@@ -43,6 +43,8 @@ export interface KvType {
 	readonly describe: string;
 	/** The variable's string value, or why `value` is not one. `null` (unset) is handled by the caller. */
 	normalize(value: unknown): string | { error: string };
+	/** `false` when an override may not unset the variable (`null`); omitted means it may. */
+	readonly allowsUnset?: boolean;
 }
 
 const fail = (t: KvType, value: unknown) => ({ error: `expected ${t.describe}, got ${JSON.stringify(value)}` });
@@ -90,6 +92,19 @@ function float(): KvType {
 			const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
 			return Number.isFinite(n) ? String(n) : fail(t, v);
 		},
+	};
+	return t;
+}
+
+/**
+ * A string that is not empty, and that an override may not unset: for a variable whose empty value
+ * is the loosest setting, so that an override cannot loosen it while looking like a reset.
+ */
+function nonEmptyStr(): KvType {
+	const t: KvType = {
+		describe: 'a non-empty string',
+		allowsUnset: false,
+		normalize: (v) => (typeof v === 'string' && v.trim() !== '' ? v : fail(t, v)),
 	};
 	return t;
 }
@@ -313,8 +328,9 @@ export const WORKER_VARS = {
 
 	// --- Voice agents (/agent, served by the container).
 	AGENT_REQUIRE_WSS: { container: IF_SET },
-	// Tightening the allowlist is an incident lever; an empty value allows any public host.
-	AGENT_ALLOWED_HOSTS: tunable(str()),
+	// Tightening the allowlist is an incident lever. An empty value allows any public host, so an
+	// override may not set it empty or unset it; delete the KV entry to restore the Worker value.
+	AGENT_ALLOWED_HOSTS: tunable(nonEmptyStr()),
 	AGENT_ALLOW_PRIVATE_ENDPOINTS: { container: IF_SET },
 	AGENT_SHARED_SECRET: { container: IF_SET },
 	AGENT_ALLOW_UNAUTHENTICATED: { container: IF_SET },

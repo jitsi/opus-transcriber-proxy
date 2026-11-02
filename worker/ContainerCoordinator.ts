@@ -17,6 +17,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
 import { resolveConfigOverrides } from './configOverride';
+import { parseIntOr } from '../src/translate/env';
 
 /**
  * Container metadata tracked by the coordinator
@@ -39,10 +40,11 @@ interface CoordinatorConfig {
 
 /** The coordinator's settings from an env (the Durable Object's own, or one with KV overrides overlaid). */
 export function coordinatorConfig(env: Pick<Env, 'MAX_CONNECTIONS_PER_CONTAINER' | 'MIN_CONTAINERS' | 'SCALE_DOWN_IDLE_TIME'>): CoordinatorConfig {
+	// parseIntOr: unset, empty (a null KV override) or non-numeric falls back to the default.
 	return {
-		maxConnectionsPerContainer: parseInt(env.MAX_CONNECTIONS_PER_CONTAINER || '10', 10),
-		minContainers: parseInt(env.MIN_CONTAINERS || '2', 10),
-		scaleDownIdleTime: parseInt(env.SCALE_DOWN_IDLE_TIME || '600000', 10), // 10 minutes
+		maxConnectionsPerContainer: parseIntOr(env.MAX_CONNECTIONS_PER_CONTAINER, 10),
+		minContainers: parseIntOr(env.MIN_CONTAINERS, 2),
+		scaleDownIdleTime: parseIntOr(env.SCALE_DOWN_IDLE_TIME, 600000), // 10 minutes
 	};
 }
 

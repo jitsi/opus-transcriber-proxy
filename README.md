@@ -358,8 +358,12 @@ wrangler kv key put config:XAI_ENDPOINTING '{"value":1200,"until":-1}' --namespa
 
 Only some variables can be overridden. `worker/vars.ts` lists every variable and marks the ones
 KV can override, with their type. Secrets and provider selection cannot be overridden this way.
-The Worker applies a change to the next request. A container applies it the next time it starts.
-An entry that is not valid is logged and ignored. See "Config overrides" in
+The Worker applies a change within 90 seconds (the KV edge cache plus an isolate cache). A
+container applies it the next time it starts. An entry that is not valid is logged and ignored.
+
+Write access to the KV namespace gives the same control as editing the Worker variables. For
+example, an override can send xAI audio and the xAI key to a different host. Give write access only
+to the people who may deploy the Worker. See "Config overrides" in
 [CLAUDE.md](CLAUDE.md) for the details.
 
 ## Development

@@ -698,7 +698,9 @@ Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<opt
   object (`OPENAI_TURN_DETECTION`), a `wss` URL (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration
   (`SLEEP_AFTER`: the SDK's `"7m"` format and at least 4 minutes, because the SDK throws on any
   other form and the keepalive renews every 180 s), or a string. `null` unsets the variable, so its
-  default applies.
+  default applies. `AGENT_ALLOWED_HOSTS` is the exception: an empty allowlist allows any public
+  host, so its override must be a non-empty string and cannot be `null`. Delete the key to restore
+  the Worker value.
 - `until` is **mandatory** and in **milliseconds**; `-1` means no expiry. There is **no cap**,
   unlike the provider overrides (whose 24 h cap forces a re-test of the primary). A `until` in
   seconds is refused as malformed, as for the provider overrides.
@@ -708,8 +710,11 @@ assigns the result to `env`: the Worker's env with the applied overrides overlai
 it reads that **effective env** — the endpoint gates, the provider-override slots, routing, the
 dispatcher choice, the Worker-hosted `/translate`, and `buildContainerEnvVars` for a container it
 starts. All keys are read in one bulk KV read (split at `KV_BULK_GET_MAX_KEYS`, 100), edge-cached
-for 60 s like the provider overrides. Decisions are logged on upgrades only (applied and expired at
-log level, mistakes at error), so health probes do not repeat them.
+for 60 s like the provider overrides. **KV bills a bulk read per key read**, so the isolate also
+keeps the stored strings for `CONFIG_CACHE_TTL_MS` (30 s) and reads KV at most once per period;
+each request still decides the entries afresh, so an `until` takes effect on time. A change can
+therefore take up to 90 s to reach every request. Decisions are logged on upgrades only (applied
+and expired at log level, mistakes at error), so health probes do not repeat them.
 
 **Every rejection degrades to the Worker variable**, for that one variable: malformed JSON, no
 `value`, a value of the wrong type (reported even on an expired entry), a bad `until`, or a KV read
@@ -726,7 +731,8 @@ failure. A typo in KV cannot take the service down.
 - **`SLEEP_AFTER`** is read by the container Durable Object, whose own env never sees KV. The
   Worker passes the effective value in the start call's env, and
   `TranscriberContainer.startAndWaitForPorts` adopts it; the Worker calls that on every request, so
-  a running container picks up a change at its next activity-timer renewal.
+  a running container picks up a change at its next activity-timer renewal. A start env with no
+  `SLEEP_AFTER` restores the object's own value, so an override does not outlive its KV entry.
 - **The autoscale coordinator** (`MAX_CONNECTIONS_PER_CONTAINER`, `MIN_CONTAINERS`,
   `SCALE_DOWN_IDLE_TIME`) resolves the same KV entries itself at the start of each request.
   `MIN_CONTAINERS` matters only when it first initializes its state.
@@ -739,6 +745,11 @@ it got; it logs it at start (`Config overrides from KV at start`) and reports it
 with. The Worker reports the overrides in effect for the current request as
 `worker.configOverrides`: on the dispatcher path's `worker` block and in the Worker-hosted
 `/translate` info. The two differ when an entry changed after the container started.
+
+**Write access to `CONFIG_KV` is the same trust as editing the Worker variables.** An override can
+send xAI audio and the xAI key to any `wss` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable
+`/agent`, change the agent host allowlist and turn off an endpoint. Give write access to the
+namespace only to the people who may deploy the Worker.
 
 **What is not overridable, and why** (each is a `vars.ts` entry with no `kv`):
 - Secrets (`*_API_KEY`, `*_CREDENTIALS_JSON`, `AGENT_SHARED_SECRET`, `AGENT_PROVISIONING_TOKEN`,

@@ -73,7 +73,7 @@ export class TranscriberContainer extends Container<Env> {
 	// NOTE: must stay > the renewal interval in sessionProxy.ts (180s), with margin for a missed
 	// renewal — otherwise a live call's container sleeps mid-session. After audio stops,
 	// the container reclaims ~sleepAfter after the last renewal.
-	sleepAfter = this.env.SLEEP_AFTER || '7m';
+	sleepAfter = this.ownSleepAfter();
 
 	// Environment for the container. The instance name is the name this Durable Object was
 	// looked up by (`getContainer(binding, name)` → `idFromName`), which is the session or pool
@@ -93,15 +93,22 @@ export class TranscriberContainer extends Container<Env> {
 	 * effective value in the start call's env. The Worker calls this on every request, for a running
 	 * container too, so a changed SLEEP_AFTER takes effect at the next activity-timer renewal. The
 	 * SDK re-reads `sleepAfter` at each renewal, and throws on a value it cannot parse, which is why
-	 * worker/vars.ts validates the KV value. A rebuilt object starts again from the class field until
-	 * the next request.
+	 * worker/vars.ts validates the KV value. A start env with no SLEEP_AFTER (the override removed or
+	 * set to null, and none in the Worker's own env) restores this object's own value, so an override
+	 * does not outlive its KV entry. A call with no start env at all (this class's own safety-net
+	 * start in `fetch`) changes nothing. A rebuilt object starts again from its own value until the
+	 * next request.
 	 */
 	override async startAndWaitForPorts(...args: Parameters<Container<Env>['startAndWaitForPorts']>): Promise<void> {
 		const [portsOrArgs, , startOptions] = args;
 		const options = typeof portsOrArgs === 'object' && !Array.isArray(portsOrArgs) ? portsOrArgs.startOptions : startOptions;
-		const sleepAfter = options?.envVars?.SLEEP_AFTER;
-		if (sleepAfter) this.sleepAfter = sleepAfter;
+		if (options?.envVars) this.sleepAfter = options.envVars.SLEEP_AFTER || this.ownSleepAfter();
 		return super.startAndWaitForPorts(...args);
+	}
+
+	/** SLEEP_AFTER from this Durable Object's own env, which never carries a KV override. */
+	private ownSleepAfter(): string {
+		return this.env.SLEEP_AFTER || '7m';
 	}
 
 	override onStart() {
