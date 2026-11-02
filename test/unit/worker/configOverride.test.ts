@@ -272,13 +272,16 @@ describe('resolveConfigOverrides', () => {
 			'config:XAI_ENCODING': j({ value: 'pcm', until: -1 }), // wrong type: not applied
 			'config:LOG_LEVEL': j({ value: 'debug', until: NOW - 1 }), // expired: not applied
 		});
-		const base = env({ CONFIG_KV: kv as never, XAI_ENDPOINTING: '850', XAI_ENCODING: 'opus', LOG_LEVEL: 'info' });
+		const transcriber = { idFromName: () => 'id' };
+		const base = env({ CONFIG_KV: kv as never, TRANSCRIBER: transcriber as never, XAI_ENDPOINTING: '850', XAI_ENCODING: 'opus', LOG_LEVEL: 'info' });
 		const r = await resolveConfigOverrides(base, NOW);
 		expect(r.applied).toEqual({ XAI_ENDPOINTING: '1200' });
 		expect(r.env.XAI_ENDPOINTING).toBe('1200');
 		expect(r.env.XAI_ENCODING).toBe('opus');
 		expect(r.env.LOG_LEVEL).toBe('info');
+		// The bindings survive the copy (they are enumerable own properties of the Worker env).
 		expect(r.env.CONFIG_KV).toBe(kv);
+		expect(r.env.TRANSCRIBER).toBe(transcriber);
 		// The Worker's own env is not mutated.
 		expect(base.XAI_ENDPOINTING).toBe('850');
 		// One decision per key that holds something.
