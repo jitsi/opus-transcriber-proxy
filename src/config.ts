@@ -432,6 +432,11 @@ export const config = {
 		resourceAttributes: parseJsonOrDefault<Record<string, string>>(process.env.OTLP_RESOURCE_ATTRIBUTES, {}),
 		// Custom headers for authentication (e.g., CF Zero Trust, API keys)
 		headers: parseJsonOrDefault<Record<string, string>>(process.env.OTLP_HEADERS, {}),
+		// How many times to send the stale-marker export when the container stops. 0 disables.
+		// A load balancer can pick a collector replica for each send, and each replica keeps its own
+		// series. For example, with 2 replicas 8 sends miss one with a probability of about 0.8%.
+		// This is an ugly stopgap: see sendStaleMarkers in telemetry/staleMarkers.ts for the real fix.
+		staleMarkerSends: parseIntOrDefault(process.env.OTLP_STALE_MARKER_SENDS, 8),
 	},
 } as const;
 
