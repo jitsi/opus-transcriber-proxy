@@ -164,6 +164,17 @@ describe('value types', () => {
 		expect(normalize('XAI_STT_URL', 'api.x.ai')).toHaveProperty('error');
 	});
 
+	it('xAI URLs must stay on x.ai: both carry the xAI key as a bearer and all xAI audio', () => {
+		for (const name of ['XAI_STT_URL', 'XAI_TRANSLATION_URL'] as const) {
+			expect(normalize(name, 'wss://api.x.ai/v1/stt')).toBe('wss://api.x.ai/v1/stt');
+			expect(normalize(name, 'wss://eu-west.api.x.ai/v1/stt')).toBe('wss://eu-west.api.x.ai/v1/stt');
+			expect(normalize(name, 'wss://x.ai/v1/stt')).toBe('wss://x.ai/v1/stt');
+			for (const other of ['wss://evil.example/v1/stt', 'wss://x.ai.evil.example/v1', 'wss://notx.ai/v1', 'wss://api.x.ai:8443/v1']) {
+				expect(normalize(name, other), `${name} ${other}`).toHaveProperty('error');
+			}
+		}
+	});
+
 	it('URLs may not carry credentials, a query or a fragment (the value is logged and sent in info)', () => {
 		expect(normalize('XAI_STT_URL', 'wss://user:secret@api.x.ai/v1/stt')).toHaveProperty('error');
 		expect(normalize('XAI_STT_URL', 'wss://user@api.x.ai/v1/stt')).toHaveProperty('error');

@@ -32,9 +32,9 @@
  * What is deliberately not KV-overridable: secrets (KV is not a secret store, and a container
  * validates provider keys against the env it was started with), provider selection (the provider
  * overrides in worker/providerOverride.ts do that with a credential check and per-connection
- * pinning), endpoints that carry credentials or customer data other than the xAI ones, and the
- * security posture of the openai_custom and /agent paths (loosening any of those must be a
- * reviewed release).
+ * pinning), endpoints that carry credentials or customer data other than the xAI ones (which may
+ * name only an x.ai host), and the security posture of the openai_custom and /agent paths
+ * (loosening any of those must be a reviewed release).
  */
 
 /** The Worker's own env (bindings and variables, before any override), for checks that depend on it. */
@@ -187,18 +187,24 @@ function jsonObject(): KvType {
 	return t;
 }
 
-/** An absolute URL with one of the given schemes. */
-function url(...protocols: string[]): KvType {
+/**
+ * An absolute URL with the given scheme on `domain` or one of its subdomains, on the default port.
+ * The xAI URLs are the only URLs KV may override, and both carry the xAI key as a bearer and every
+ * conference's audio: a URL on another host would hand both to it.
+ */
+function url(protocol: string, domain: string): KvType {
 	const t: KvType = {
-		describe: `a ${protocols.join('|')} URL with no credentials, query or fragment`,
+		describe: `a ${protocol} URL on ${domain} or a subdomain, with no port, credentials, query or fragment`,
 		normalize(v) {
 			if (typeof v !== 'string') return fail(t, v);
 			try {
 				const u = new URL(v);
 				// The value is logged and reported in `info`, so it may carry no credentials: no
 				// userinfo, and no query or fragment (where a token could ride).
-				const bare = !u.username && !u.password && !v.includes('?') && !v.includes('#');
-				if (bare && protocols.includes(u.protocol.replace(/:$/, ''))) return v;
+				const bare = !u.username && !u.password && !u.port && !v.includes('?') && !v.includes('#');
+				const host = u.hostname.toLowerCase();
+				const onDomain = host === domain || host.endsWith(`.${domain}`);
+				if (bare && onDomain && u.protocol === `${protocol}:`) return v;
 			} catch {
 				// fall through
 			}
@@ -307,7 +313,7 @@ export const WORKER_VARS = {
 	// --- xAI transcription. XAI_API_KEY is forwarded as '' when unset so the container treats xAI
 	// as unconfigured (provider disabled); the knobs only when set, so the code defaults apply.
 	XAI_API_KEY: { container: def('') },
-	XAI_STT_URL: tunable(url('wss')),
+	XAI_STT_URL: tunable(url('wss', 'x.ai')),
 	XAI_LANGUAGE: tunable(str()),
 	XAI_DIARIZE: tunable(bool()),
 	XAI_INCLUDE_LANGUAGE: tunable(bool()),
@@ -338,7 +344,7 @@ export const WORKER_VARS = {
 	TRANSLATION_PROVIDER: { container: IF_SET },
 	TRANSLATION_IDLE_CLOSE_MS: tunable(int(0)),
 	XAI_TRANSLATION_API_KEY: { container: IF_SET },
-	XAI_TRANSLATION_URL: tunable(url('wss')),
+	XAI_TRANSLATION_URL: tunable(url('wss', 'x.ai')),
 	XAI_TRANSLATION_VOICE: tunable(str()),
 	TRANSLATE_TRANSCRIPTS: tunable(bool()),
 	// "0" (disable) is a non-empty string, so it is still forwarded.

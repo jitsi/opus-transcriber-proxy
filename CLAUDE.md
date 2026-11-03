@@ -697,8 +697,9 @@ Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<opt
 - `value` must have the variable's type: `bool` (`true`/`false`), `int` (with a lower bound where
   one makes sense; `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` above the 100 ms RTP gap threshold),
   `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, ...), a JSON object (`OPENAI_TURN_DETECTION`), a
-  `wss` URL with no credentials, query or fragment, since the value is logged and reported in
-  `info` (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration (`SLEEP_AFTER`: the SDK's `"7m"` format,
+  `wss` URL on `x.ai` or a subdomain, on the default port, with no credentials, query or fragment
+  (`XAI_STT_URL`, `XAI_TRANSLATION_URL`: both carry the xAI key as a bearer and every conference's
+  audio, and the value is logged and reported in `info`), a duration (`SLEEP_AFTER`: the SDK's `"7m"` format,
   from 4 minutes to 24 hours, because the SDK throws on any other form, the keepalive renews every
   180 s, and an idle container is billed), or a string. `null` unsets the variable, so its default
   applies. Two types check the value against the Worker's own env (the `env` argument of
@@ -770,8 +771,9 @@ with. The Worker reports the overrides in effect for the current request as
 `/translate` info. The two differ when an entry changed after the container started.
 
 **Write access to `CONFIG_KV` is the same trust as editing the Worker variables.** An override can
-send xAI audio and the xAI key to any `wss` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable
-`/agent`, change the agent host allowlist and turn off an endpoint. Give write access to the
+move xAI traffic to another `x.ai` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable `/agent`,
+narrow the agent host allowlist, turn on the debug dumps of audio and transcripts, and turn off an
+endpoint. Give write access to the
 namespace only to the people who may deploy the Worker.
 
 **What is not overridable, and why** (each is a `vars.ts` entry with no `kv`):
@@ -782,7 +784,9 @@ namespace only to the people who may deploy the Worker.
   `TEXT_TRANSLATION_PROVIDERS_PRIORITY`): the provider overrides do it with a credential check and
   per-connection pinning; two mechanisms would conflict.
 - Endpoints other than the two xAI URLs (`TEXT_TRANSLATION_*_URL`, `AGENT_PROVISIONING_*`,
-  `TRANSLATION_USAGE_URL`, `OTLP_ENDPOINT`): they carry credentials or customer data.
+  `TRANSLATION_USAGE_URL`, `OTLP_ENDPOINT`): they carry credentials or customer data. The two xAI
+  URLs carry them too, which is why their override may name only an `x.ai` host: it can move xAI
+  traffic to another xAI endpoint (a region, a new path) but cannot send it anywhere else.
 - The security posture of `openai_custom` and `/agent` (`ENABLE_OPENAI_CUSTOM_PROVIDER`,
   `OPENAI_CUSTOM_REQUIRE_WSS`, `AGENT_REQUIRE_WSS`, `AGENT_ALLOW_PRIVATE_ENDPOINTS`,
   `AGENT_ALLOW_UNAUTHENTICATED`): loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is

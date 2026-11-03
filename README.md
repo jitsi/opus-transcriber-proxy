@@ -367,7 +367,8 @@ the entries it read last and tries again after 5 seconds. It keeps them for at m
 During a KV outage, an override that you delete stays in effect until then.
 
 Write access to the KV namespace gives the same control as editing the Worker variables. For
-example, an override can send xAI audio and the xAI key to a different host. Give write access only
+example, an override can turn on the debug dumps of audio and transcripts. An override of an xAI
+URL must name an `x.ai` host, so it cannot send the xAI key to another host. Give write access only
 to the people who may deploy the Worker. See "Config overrides" in
 [CLAUDE.md](CLAUDE.md) for the details.
 
