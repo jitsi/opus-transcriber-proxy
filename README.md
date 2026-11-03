@@ -350,8 +350,8 @@ The key is `config:<VARIABLE>`. The value is a JSON object:
 {"value": 1200, "until": 1767268800000, "reason": "tuning"}
 ```
 
-- `value` must have the variable's type. `null` removes the variable, so its default applies.
-- `until` is a time in milliseconds since the epoch. `-1` means no expiry.
+- `value` must have the type of the variable. `null` removes the variable, so its default applies.
+- `until` is a Unix time in milliseconds. `-1` means no expiry.
 
 ```bash
 wrangler kv key put config:XAI_ENDPOINTING '{"value":1200,"until":-1}' --namespace-id=<id> --remote
@@ -359,7 +359,7 @@ wrangler kv key put config:XAI_ENDPOINTING '{"value":1200,"until":-1}' --namespa
 
 Only some variables can be overridden. `worker/vars.ts` lists every variable and marks the ones
 KV can override, with their type. Secrets and provider selection cannot be overridden this way.
-The Worker applies a change within 90 seconds (the KV edge cache plus an isolate cache). A
+The Worker applies a change within 90 seconds, because KV and the Worker both cache the entries. A
 container applies it the next time it starts.
 
 The Worker logs an entry that is not valid and ignores it. If a KV read fails, the Worker keeps
