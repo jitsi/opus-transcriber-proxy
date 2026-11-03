@@ -32,15 +32,15 @@
  * Worker cannot fall over on a typo in KV.
  *
  * When an override takes effect depends on who reads the variable:
- * - The Worker and the Worker-hosted /translate: the next request (after the KV edge cache, up to
- *   `OVERRIDE_CACHE_TTL_SECONDS`).
+ * - The Worker and the Worker-hosted /translate: the next request, after the KV edge cache
+ *   (`OVERRIDE_CACHE_TTL_SECONDS`) and the isolate cache (`CONFIG_CACHE_TTL_MS`): up to 90 s.
  * - The container: its next start. A container reads its env once, when it starts, so a running
  *   container keeps the values it started with. With `ROUTING_MODE=session` that is the next
  *   conference.
  */
 import type { Env } from './env';
-import { checkUntil, entryReason, OVERRIDE_CACHE_TTL_SECONDS, parseEntryObject, type Rejection } from './kvEntry';
-import { configKey, KV_OVERRIDABLE_VARS, type KvType, type WorkerVarName } from './vars';
+import { checkUntil, entryReason, isoTime, OVERRIDE_CACHE_TTL_SECONDS, parseEntryObject, type Rejection } from './kvEntry';
+import { configKey, KV_OVERRIDABLE_VARS, type KvType, type VarEnv, type WorkerVarName } from './vars';
 
 /** The KV surface this module needs: a bulk text read. */
 export interface ConfigOverrideKv {
@@ -73,29 +73,34 @@ export const KV_FAILURE_RETRY_MS = 5_000;
  */
 export const KV_STALE_MAX_MS = 5 * 60_000;
 
-let cached:
-	| {
-			kv: ConfigOverrideKv;
-			keys: string;
-			readAt: number;
-			ttlMs: number;
-			stored: Map<string, string | null>;
-			/** When `stored` was read from KV; unset when it holds nothing read. */
-			goodReadAt?: number;
-			error?: string;
-			stale?: boolean;
-	  }
-	| undefined;
-
-/** Forget the isolate cache. For tests. */
-export function resetConfigOverrideCache(): void {
-	cached = undefined;
+/** What an isolate keeps from its last read of one key set from one KV binding. */
+interface CacheSlot {
+	readAt: number;
+	ttlMs: number;
+	stored: Map<string, string | null>;
+	/** When `stored` was read from KV; unset when it holds nothing read. */
+	goodReadAt?: number;
+	error?: string;
+	stale?: boolean;
+	/** The read in progress, shared by every request that misses the cache meanwhile. */
+	inflight?: Promise<void>;
 }
 
 /**
- * The stored strings for `keys`, from the isolate cache or one bulk read per chunk. A failed read
- * returns the entries last read (empty if none, or if that read is older than `KV_STALE_MAX_MS`)
- * with the error, and is cached for `KV_FAILURE_RETRY_MS`.
+ * One slot per KV binding and key set. Keyed on the binding object, so two bindings (for example a
+ * Worker handler and a Durable Object in one isolate) do not evict each other's entries.
+ */
+let slots = new WeakMap<ConfigOverrideKv, Map<string, CacheSlot>>();
+
+/** Forget the isolate cache. For tests. */
+export function resetConfigOverrideCache(): void {
+	slots = new WeakMap();
+}
+
+/**
+ * The stored strings for `keys`, from the isolate cache or one bulk read per chunk. Concurrent
+ * misses share one read. A failed read returns the entries last read (empty if none, or if that
+ * read is older than `KV_STALE_MAX_MS`) with the error, and is cached for `KV_FAILURE_RETRY_MS`.
  */
 async function readEntries(
 	kv: ConfigOverrideKv,
@@ -103,32 +108,47 @@ async function readEntries(
 	now: number,
 ): Promise<{ stored: Map<string, string | null>; error?: string; stale?: boolean }> {
 	const signature = keys.join(',');
-	const same = cached && cached.kv === kv && cached.keys === signature ? cached : undefined;
-	if (same && now - same.readAt >= 0 && now - same.readAt < same.ttlMs) {
-		return same;
+	let bySignature = slots.get(kv);
+	if (!bySignature) {
+		bySignature = new Map();
+		slots.set(kv, bySignature);
 	}
-	try {
-		const chunks: string[][] = [];
-		for (let i = 0; i < keys.length; i += KV_BULK_GET_MAX_KEYS) chunks.push(keys.slice(i, i + KV_BULK_GET_MAX_KEYS));
-		const maps = await Promise.all(chunks.map((chunk) => kv.get(chunk, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS })));
-		const stored = new Map(maps.flatMap((m) => [...m]));
-		cached = { kv, keys: signature, readAt: now, ttlMs: CONFIG_CACHE_TTL_MS, stored, goodReadAt: now };
-	} catch (err) {
-		const error = err instanceof Error ? err.message : String(err);
-		const goodReadAt = same?.goodReadAt;
-		const stale = goodReadAt !== undefined && now - goodReadAt < KV_STALE_MAX_MS;
-		cached = {
-			kv,
-			keys: signature,
-			readAt: now,
-			ttlMs: KV_FAILURE_RETRY_MS,
-			stored: stale ? same!.stored : new Map(),
-			goodReadAt: stale ? goodReadAt : undefined,
-			error,
-			stale,
-		};
+	const slot = bySignature.get(signature);
+	if (slot && !slot.inflight && now - slot.readAt >= 0 && now - slot.readAt < slot.ttlMs) {
+		return slot;
 	}
-	return cached;
+	if (slot?.inflight) {
+		await slot.inflight;
+		return bySignature.get(signature)!;
+	}
+	const cache = bySignature;
+	const inflight = (async () => {
+		try {
+			const chunks: string[][] = [];
+			for (let i = 0; i < keys.length; i += KV_BULK_GET_MAX_KEYS) chunks.push(keys.slice(i, i + KV_BULK_GET_MAX_KEYS));
+			const maps = await Promise.all(chunks.map((chunk) => kv.get(chunk, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS })));
+			const stored = new Map(maps.flatMap((m) => [...m]));
+			cache.set(signature, { readAt: now, ttlMs: CONFIG_CACHE_TTL_MS, stored, goodReadAt: now });
+		} catch (err) {
+			const error = err instanceof Error ? err.message : String(err);
+			// Read the slot as it is now, after the failed read, so that the entries kept are never
+			// older than the last good read.
+			const current = cache.get(signature);
+			const goodReadAt = current?.goodReadAt;
+			const stale = goodReadAt !== undefined && now - goodReadAt < KV_STALE_MAX_MS;
+			cache.set(signature, {
+				readAt: now,
+				ttlMs: KV_FAILURE_RETRY_MS,
+				stored: stale ? current!.stored : new Map(),
+				goodReadAt: stale ? goodReadAt : undefined,
+				error,
+				stale,
+			});
+		}
+	})();
+	cache.set(signature, { ...(slot ?? { readAt: now, ttlMs: 0, stored: new Map() }), inflight });
+	await inflight;
+	return cache.get(signature)!;
 }
 
 export type ConfigOverrideDecision =
@@ -142,7 +162,13 @@ export type AppliedConfigOverrides = Record<string, string>;
  * Decide what one KV entry means for one variable, with no I/O. `raw` is the stored string, or
  * `null` for "no such key".
  */
-export function decideConfigOverride(name: string, type: KvType, raw: string | null | undefined, now: number): ConfigOverrideDecision {
+export function decideConfigOverride(
+	name: string,
+	type: KvType,
+	raw: string | null | undefined,
+	now: number,
+	env: VarEnv = {},
+): ConfigOverrideDecision {
 	const parsed = parseEntryObject(raw);
 	if (!('entry' in parsed)) {
 		return { name, applied: false, ...parsed };
@@ -166,7 +192,7 @@ export function decideConfigOverride(name: string, type: KvType, raw: string | n
 		}
 		value = '';
 	} else {
-		const normalized = type.normalize(entry.value);
+		const normalized = type.normalize(entry.value, env);
 		if (typeof normalized !== 'string') {
 			return { name, applied: false, level: 'error', why: `override value is not usable: ${normalized.error}` };
 		}
@@ -216,7 +242,14 @@ export async function resolveConfigOverrides<E extends Pick<Env, 'CONFIG_KV'>>(
 	for (const [name, type] of vars) {
 		const raw = stored.get(configKey(name));
 		if (raw === null || raw === undefined) continue;
-		const decision = decideConfigOverride(name, type, raw, now);
+		let decision: ConfigOverrideDecision;
+		try {
+			decision = decideConfigOverride(name, type, raw, now, env as unknown as VarEnv);
+		} catch (err) {
+			// A bug in a value type must not fail the request: this variable keeps its Worker value.
+			const msg = err instanceof Error ? err.message : String(err);
+			decision = { name, applied: false, level: 'error', why: `override could not be checked: ${msg}` };
+		}
 		decisions.push(decision);
 		if (decision.applied) applied[name] = decision.value;
 	}
@@ -229,7 +262,7 @@ export async function resolveConfigOverrides<E extends Pick<Env, 'CONFIG_KV'>>(
 /** One-line description of a decision, for the Worker log. */
 export function describeConfigOverrideDecision(decision: ConfigOverrideDecision): string {
 	if (decision.applied) {
-		const until = decision.until === -1 ? 'no expiry' : `until=${new Date(decision.until).toISOString()}`;
+		const until = decision.until === -1 ? 'no expiry' : `until=${isoTime(decision.until)}`;
 		const reason = decision.reason ? `, reason=${decision.reason}` : '';
 		return `Config override applied: ${decision.name}=${JSON.stringify(decision.value)}, ${until}${reason}`;
 	}
@@ -239,7 +272,7 @@ export function describeConfigOverrideDecision(decision: ConfigOverrideDecision)
 }
 
 /**
- * Log the decisions the way the provider overrides do: applied and expired at log level, a
+ * Log the decisions the way the provider overrides do: applied and expired at info (`console.log`), a
  * malformed or unusable entry (an operator mistake that is silently doing nothing) at error level,
  * the rest not at all.
  */

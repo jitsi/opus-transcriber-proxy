@@ -90,8 +90,9 @@ export class TranscriberContainer extends Container<Env> {
 	 *
 	 * The class field above is set from this Durable Object's own env, which never sees a KV config
 	 * override (worker/configOverride.ts); the Worker resolves those per request and passes the
-	 * effective value in the start call's env. The Worker calls this on every request, for a running
-	 * container too, so a changed SLEEP_AFTER takes effect at the next activity-timer renewal. The
+	 * effective value in the start call's env. The Worker calls this on every request it routes to
+	 * this object, for a running container too, so a changed SLEEP_AFTER takes effect at the next
+	 * activity-timer renewal. The
 	 * SDK re-reads `sleepAfter` at each renewal, and throws on a value it cannot parse, which is why
 	 * worker/vars.ts validates the KV value. A start env with no SLEEP_AFTER (the override removed or
 	 * set to null, and none in the Worker's own env) restores this object's own value, so an override

@@ -293,8 +293,9 @@ export class ContainerCoordinator extends DurableObject<Env> {
 		try {
 			// The KV config overrides (worker/configOverride.ts) for MAX_CONNECTIONS_PER_CONTAINER,
 			// MIN_CONTAINERS and SCALE_DOWN_IDLE_TIME. This object's env never sees them, so it reads
-			// them itself, like the Worker does; a KV failure leaves the env values. MIN_CONTAINERS
-			// matters only when the coordinator first initializes its state.
+			// them itself, like the Worker does; a KV failure leaves the env values. An override of
+			// MIN_CONTAINERS affects only scale-down: the initial containers are created in the
+			// constructor, from this object's own env.
 			this.config = coordinatorConfig((await resolveConfigOverrides(this.env)).env);
 
 			if (path === '/assign' && request.method === 'POST') {

@@ -131,8 +131,8 @@ describe('value types', () => {
 		expect(normalize('XAI_ENDPOINTING', 1.5)).toHaveProperty('error');
 		expect(normalize('XAI_ENDPOINTING', '850ms')).toHaveProperty('error');
 		expect(normalize('XAI_CONNECT_ATTEMPTS', 0)).toHaveProperty('error');
-		// No bound: a negative value is meaningful (<= 0 disables the talk-end timer).
-		expect(normalize('TRANSLATION_TALK_SILENCE_TIMEOUT_MS', -1)).toBe('-1');
+		// No bound: a negative value is meaningful (-1 lets Gemini choose its own thinking budget).
+		expect(normalize('TEXT_TRANSLATION_GEMINI_THINKING_BUDGET', -1)).toBe('-1');
 	});
 
 	it('float accepts finite numbers', () => {
@@ -178,6 +178,18 @@ describe('value types', () => {
 		expect(normalize('SLEEP_AFTER', '1h')).toBe('1h');
 		expect(normalize('SLEEP_AFTER', 600)).toBe('600s');
 		expect(normalize('SLEEP_AFTER', '3m')).toHaveProperty('error');
+		expect(normalize('SLEEP_AFTER', '4m')).toBe('4m');
+		expect(normalize('SLEEP_AFTER', 240)).toBe('240s');
+		expect(normalize('SLEEP_AFTER', 239)).toHaveProperty('error');
+		// An upper bound too: a container that never sleeps is billed for every idle second.
+		expect(normalize('SLEEP_AFTER', '24h')).toBe('24h');
+		expect(normalize('SLEEP_AFTER', '25h')).toHaveProperty('error');
+		expect(normalize('SLEEP_AFTER', '1000000000000000s')).toHaveProperty('error');
+		// The talk-silence timeout must stay above the 100 ms RTP gap threshold; 0 (never end a talk)
+		// is unsafe for the realtime translations endpoint.
+		expect(normalize('TRANSLATION_TALK_SILENCE_TIMEOUT_MS', 101)).toBe('101');
+		expect(normalize('TRANSLATION_TALK_SILENCE_TIMEOUT_MS', 100)).toHaveProperty('error');
+		expect(normalize('TRANSLATION_TALK_SILENCE_TIMEOUT_MS', 0)).toHaveProperty('error');
 		expect(normalize('SLEEP_AFTER', '10 m')).toHaveProperty('error');
 		expect(normalize('SLEEP_AFTER', '10min')).toHaveProperty('error');
 	});
@@ -227,7 +239,7 @@ describe('decideConfigOverride', () => {
 		// An empty allowlist allows any public host, so a null or empty override would loosen it while
 		// looking like a reset. Deleting the key is how the Worker variable is restored.
 		const hosts = typeOf('AGENT_ALLOWED_HOSTS');
-		for (const value of [null, '', '   ']) {
+		for (const value of [null, '', '   ', ',', ' , ', ', ,']) {
 			const d = decideConfigOverride('AGENT_ALLOWED_HOSTS', hosts, j({ value, until: -1 }), NOW);
 			expect(d, JSON.stringify(value)).toMatchObject({ applied: false, level: 'error' });
 		}
@@ -235,6 +247,53 @@ describe('decideConfigOverride', () => {
 			applied: true,
 			value: '.example.com',
 		});
+	});
+
+	it('normalizes the /agent host allowlist the way the container reads it', () => {
+		const d = decideConfigOverride('AGENT_ALLOWED_HOSTS', typeOf('AGENT_ALLOWED_HOSTS'), j({ value: ' A.Example.com, ,b.example.org ', until: -1 }), NOW);
+		expect(d).toMatchObject({ applied: true, value: 'a.example.com,b.example.org' });
+	});
+
+	it('only lets an override narrow a non-empty Worker host allowlist', () => {
+		// The override exists as an incident lever to tighten the list. Against a Worker list of
+		// .example.com, an entry outside it (or a wider one, like .com) would loosen it.
+		const hosts = typeOf('AGENT_ALLOWED_HOSTS');
+		const worker = { AGENT_ALLOWED_HOSTS: '.example.com, agents.example.org' };
+		const decide = (value: string) => decideConfigOverride('AGENT_ALLOWED_HOSTS', hosts, j({ value, until: -1 }), NOW, worker);
+		expect(decide('a.example.com')).toMatchObject({ applied: true, value: 'a.example.com' });
+		expect(decide('.eu.example.com,agents.example.org')).toMatchObject({ applied: true });
+		expect(decide('example.com')).toMatchObject({ applied: true });
+		for (const wider of ['evil.com', '.com', 'example.org', 'a.example.com,evil.com', 'xexample.com']) {
+			expect(decide(wider), wider).toMatchObject({ applied: false, level: 'error' });
+		}
+		// With no Worker list (any public host), every non-empty list narrows it.
+		expect(decideConfigOverride('AGENT_ALLOWED_HOSTS', hosts, j({ value: 'evil.com', until: -1 }), NOW, {})).toMatchObject({ applied: true });
+	});
+
+	it('refuses ROUTING_MODE=autoscale when the Worker has no coordinator binding', () => {
+		const mode = typeOf('ROUTING_MODE');
+		const raw = j({ value: 'autoscale', until: -1 });
+		expect(decideConfigOverride('ROUTING_MODE', mode, raw, NOW, {})).toMatchObject({ applied: false, level: 'error' });
+		expect(decideConfigOverride('ROUTING_MODE', mode, raw, NOW, { CONTAINER_COORDINATOR: {} })).toMatchObject({ applied: true, value: 'autoscale' });
+		expect(decideConfigOverride('ROUTING_MODE', mode, j({ value: 'pool', until: -1 }), NOW, {})).toMatchObject({ applied: true, value: 'pool' });
+	});
+
+	it.each([
+		['a nanosecond timestamp', 1e18],
+		['MAX_SAFE_INTEGER', Number.MAX_SAFE_INTEGER],
+		['a microsecond timestamp', NOW * 1000],
+	])('refuses %s as "until" instead of applying it', (_label, until) => {
+		// A value past the Date range made the decision log throw on every upgrade; one inside it (a
+		// microsecond timestamp, year ~57000) was a quiet permanent override.
+		const d = decideConfigOverride('XAI_ENDPOINTING', endpointing, j({ value: 1000, until }), NOW);
+		expect(d).toMatchObject({ applied: false, level: 'error' });
+		expect((d as { why: string }).why).toContain('-1');
+		expect(() => describeConfigOverrideDecision(d)).not.toThrow();
+	});
+
+	it('describes a decision without throwing, whatever its "until"', () => {
+		const d = { name: 'XAI_ENDPOINTING', applied: true as const, value: '1', until: 1e18 };
+		expect(() => describeConfigOverrideDecision(d)).not.toThrow();
 	});
 
 	it('mentions -1 when the until is unusable', () => {
@@ -382,6 +441,42 @@ describe('resolveConfigOverrides', () => {
 		const r = await resolveConfigOverrides(e, NOW);
 		expect(r.env).toBe(e);
 		expect(r.decisions).toEqual([{ name: '*', applied: false, level: 'error', why: 'KV read failed: KV down' }]);
+	});
+
+	it('turns a value type that throws into one error decision instead of failing the request', async () => {
+		const broken: KvType = { describe: 'x', normalize: () => { throw new Error('bug'); } };
+		const { kv } = fakeKv({ 'config:BROKEN': j({ value: 1, until: -1 }), 'config:XAI_ENDPOINTING': j({ value: 7, until: -1 }) });
+		const vars = [['BROKEN', broken] as const, ['XAI_ENDPOINTING', typeOf('XAI_ENDPOINTING')] as const];
+		const r = await resolveConfigOverrides(env({ CONFIG_KV: kv as never }), NOW, vars);
+		expect(r.applied).toEqual({ XAI_ENDPOINTING: '7' });
+		expect(r.decisions).toContainEqual(expect.objectContaining({ name: 'BROKEN', applied: false, level: 'error' }));
+	});
+
+	it('shares one KV read between concurrent requests that miss the cache', async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const get = vi.fn(async (keys: string[]) => {
+			await gate;
+			return new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 3, until: -1 }) : null]));
+		});
+		const e = env({ CONFIG_KV: { get } as never });
+		const both = Promise.all([resolveConfigOverrides(e, NOW), resolveConfigOverrides(e, NOW + 1)]);
+		release();
+		const [a, b] = await both;
+		expect(get).toHaveBeenCalledTimes(1);
+		expect(a.applied).toEqual({ XAI_ENDPOINTING: '3' });
+		expect(b.applied).toEqual({ XAI_ENDPOINTING: '3' });
+	});
+
+	it('keeps a separate cache per KV binding, so two bindings do not evict each other', async () => {
+		const a = fakeKv({});
+		const b = fakeKv({});
+		for (let i = 0; i < 3; i++) {
+			await resolveConfigOverrides(env({ CONFIG_KV: a.kv as never }), NOW + i);
+			await resolveConfigOverrides(env({ CONFIG_KV: b.kv as never }), NOW + i);
+		}
+		expect(a.get).toHaveBeenCalledTimes(1);
+		expect(b.get).toHaveBeenCalledTimes(1);
 	});
 
 	it(`splits the read into bulk reads of at most ${KV_BULK_GET_MAX_KEYS} keys`, async () => {

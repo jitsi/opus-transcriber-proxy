@@ -22,18 +22,34 @@ import { GIT_HASH } from './buildInfo';
  * (worker/configOverride.ts), overlays them on the env it starts the container with, and lists
  * them in CONFIG_OVERRIDES as a JSON object of variable name to value. The values are already in
  * the process env; this is only the record of which ones came from KV. Empty when unset or
- * malformed (it is informational, so a bad value must not break anything).
+ * malformed (it is informational, so a bad value must not break anything). Parsed once per value,
+ * since every `info` message reads it.
  */
 export function startupConfigOverrides(): Record<string, string> {
 	const raw = process.env.CONFIG_OVERRIDES;
-	if (!raw) return {};
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-		return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
-	} catch {
-		return {};
+	if (raw !== parsedRaw) {
+		parsedRaw = raw;
+		parsedOverrides = parseConfigOverrides(raw).overrides;
 	}
+	return parsedOverrides;
+}
+
+let parsedRaw: string | undefined;
+let parsedOverrides: Record<string, string> = {};
+
+/** Parse a CONFIG_OVERRIDES value; `error` says why a set value is unusable. */
+export function parseConfigOverrides(raw: string | undefined): { overrides: Record<string, string>; error?: string } {
+	if (!raw) return { overrides: {} };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (e) {
+		return { overrides: {}, error: `not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		return { overrides: {}, error: 'not a JSON object' };
+	}
+	return { overrides: Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === 'string')) as Record<string, string> };
 }
 
 /**

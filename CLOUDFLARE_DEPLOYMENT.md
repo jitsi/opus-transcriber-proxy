@@ -262,7 +262,7 @@ View metrics in Cloudflare Dashboard:
 Edit `wrangler-container.jsonc` to configure:
 
 - `max_instances`: Maximum concurrent containers (default: 10)
-- `sleepAfter`: How long to keep idle containers running (default: 10m)
+- `sleepAfter`: How long to keep idle containers running (default: 7m)
 - Environment variables in the `vars` section
 
 Some variables can also be changed at runtime, without a deploy, through the `CONFIG_KV`

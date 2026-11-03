@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildServerInfo, startupConfigOverrides } from '../../src/serverInfo';
+import { buildServerInfo, parseConfigOverrides, startupConfigOverrides } from '../../src/serverInfo';
 
 describe('buildServerInfo', () => {
 	const cfEnvKeys = ['CLOUDFLARE_DURABLE_OBJECT_ID', 'CONTAINER_INSTANCE_NAME', 'CLOUDFLARE_LOCATION', 'CLOUDFLARE_COUNTRY_A2', 'SOURCE_IMAGE_TAG', 'CONFIG_OVERRIDES'];
@@ -70,6 +70,16 @@ describe('buildServerInfo', () => {
 		}
 		process.env.CONFIG_OVERRIDES = JSON.stringify({ A: '1', B: 2 });
 		expect(startupConfigOverrides()).toEqual({ A: '1' });
+	});
+
+	it('says why a set CONFIG_OVERRIDES is unusable, so the server can warn about it once', () => {
+		expect(parseConfigOverrides(undefined)).toEqual({ overrides: {} });
+		expect(parseConfigOverrides('{"A":"1"}')).toEqual({ overrides: { A: '1' } });
+		for (const raw of ['{bad', '[1]', 'null']) {
+			const parsed = parseConfigOverrides(raw);
+			expect(parsed.overrides, raw).toEqual({});
+			expect(parsed.error, raw).toEqual(expect.any(String));
+		}
 	});
 
 	it('detects the cloudflare container runtime and includes instance/location', () => {

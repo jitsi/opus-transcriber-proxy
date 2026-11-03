@@ -37,12 +37,18 @@
  * reviewed release).
  */
 
+/** The Worker's own env (bindings and variables, before any override), for checks that depend on it. */
+export type VarEnv = Readonly<Record<string, unknown>>;
+
 /** A KV value type: checks a value from a KV entry and turns it into the variable's string form. */
 export interface KvType {
 	/** For error messages: "an integer >= 0", "one of l16|opus". */
 	readonly describe: string;
-	/** The variable's string value, or why `value` is not one. `null` (unset) is handled by the caller. */
-	normalize(value: unknown): string | { error: string };
+	/**
+	 * The variable's string value, or why `value` is not one. `null` (unset) is handled by the
+	 * caller. `env` is the Worker's own env, for a value that is valid only against it.
+	 */
+	normalize(value: unknown, env?: VarEnv): string | { error: string };
 	/** `false` when an override may not unset the variable (`null`); omitted means it may. */
 	readonly allowsUnset?: boolean;
 }
@@ -96,15 +102,55 @@ function float(): KvType {
 	return t;
 }
 
+/** A comma-separated host list, read the way the container reads AGENT_ALLOWED_HOSTS. */
+const parseHosts = (s: string) => s.split(',').map((h) => h.trim().toLowerCase()).filter((h) => h);
+/** An allowlist entry without its optional leading dot; it matches that host and its subdomains. */
+const bareHost = (entry: string) => (entry.startsWith('.') ? entry.slice(1) : entry);
+
 /**
- * A string that is not empty, and that an override may not unset: for a variable whose empty value
- * is the loosest setting, so that an override cannot loosen it while looking like a reset.
+ * The /agent host allowlist (`AGENT_ALLOWED_HOSTS`). An empty list allows any public host, the
+ * loosest setting, so an override may only narrow the list: it needs at least one host, may not be
+ * `null`, and each of its entries must be covered by the Worker's own list when that list is not
+ * empty (an entry matches its host and every subdomain, as the container's `hostAllowed` does).
+ * Written back normalized, as the container reads it.
  */
-function nonEmptyStr(): KvType {
+function hostList(workerVar: string): KvType {
 	const t: KvType = {
-		describe: 'a non-empty string',
+		describe: `a non-empty host list that ${workerVar} covers`,
 		allowsUnset: false,
-		normalize: (v) => (typeof v === 'string' && v.trim() !== '' ? v : fail(t, v)),
+		normalize(v, env) {
+			if (typeof v !== 'string') return fail(t, v);
+			const hosts = parseHosts(v);
+			if (hosts.length === 0) return fail(t, v);
+			const own = env?.[workerVar];
+			const workerHosts = typeof own === 'string' ? parseHosts(own).map(bareHost) : [];
+			if (workerHosts.length > 0) {
+				const wider = hosts.filter((h) => !workerHosts.some((w) => bareHost(h) === w || bareHost(h).endsWith(`.${w}`)));
+				if (wider.length > 0) {
+					return { error: `${wider.join(',')} is not covered by the Worker's ${workerVar}; an override may only narrow it` };
+				}
+			}
+			return hosts.join(',');
+		},
+	};
+	return t;
+}
+
+/**
+ * `ROUTING_MODE`. `autoscale` routes through the coordinator Durable Object, which a deployment may
+ * not bind; an override to it there would fail every upgrade, so it is refused.
+ */
+function routingMode(): KvType {
+	const modes = oneOf('session', 'pool', 'shared', 'autoscale');
+	const t: KvType = {
+		describe: modes.describe,
+		normalize(v, env) {
+			const mode = modes.normalize(v);
+			if (mode === 'autoscale' && !env?.CONTAINER_COORDINATOR) {
+				return { error: 'autoscale needs the CONTAINER_COORDINATOR binding, which this Worker does not have' };
+			}
+			return mode;
+		},
 	};
 	return t;
 }
@@ -164,12 +210,12 @@ function url(...protocols: string[]): KvType {
 
 /**
  * A duration in the @cloudflare/containers time-expression format (`"30s"`, `"7m"`, `"2h"`, or a
- * number of seconds), at least `minSeconds`. The SDK throws on any other form when it renews the
- * activity timer, so nothing else may reach it.
+ * number of seconds), from `minSeconds` to `maxSeconds`. The SDK throws on any other form when it
+ * renews the activity timer, so nothing else may reach it.
  */
-function duration(minSeconds: number): KvType {
+function duration(minSeconds: number, maxSeconds: number): KvType {
 	const t: KvType = {
-		describe: `a duration like "7m" (s|m|h) of at least ${minSeconds}s`,
+		describe: `a duration like "7m" (s|m|h) from ${minSeconds}s to ${maxSeconds}s`,
 		normalize(v) {
 			let seconds: number;
 			let text: string;
@@ -183,7 +229,7 @@ function duration(minSeconds: number): KvType {
 			} else {
 				return fail(t, v);
 			}
-			return seconds >= minSeconds ? text : fail(t, v);
+			return seconds >= minSeconds && seconds <= maxSeconds ? text : fail(t, v);
 		},
 	};
 	return t;
@@ -226,7 +272,8 @@ export const WORKER_VARS = {
 	OPENAI_CUSTOM_REQUIRE_WSS: { container: def('true') },
 	SESSION_RESUME_ENABLED: tunable(bool()),
 	SESSION_RESUME_GRACE_PERIOD: tunable(int(0)),
-	// Debug output inside the container (written under DUMP_BASE_PATH, /tmp by default).
+	// Debug output inside the container: the dumps (written under DUMP_BASE_PATH, /tmp by default)
+	// and the transcript broadcast.
 	DUMP_WEBSOCKET_MESSAGES: tunable(bool()),
 	DUMP_TRANSCRIPTS: tunable(bool()),
 	DUMP_BASE_PATH: tunable(str()),
@@ -295,7 +342,9 @@ export const WORKER_VARS = {
 	XAI_TRANSLATION_VOICE: tunable(str()),
 	TRANSLATE_TRANSCRIPTS: tunable(bool()),
 	// "0" (disable) is a non-empty string, so it is still forwarded.
-	TRANSLATION_TALK_SILENCE_TIMEOUT_MS: tunable(int()),
+	// Above the 100 ms RTP gap threshold; <= 0 (a talk never ends) is unsafe for the realtime
+	// translations endpoint, so an override may not set it.
+	TRANSLATION_TALK_SILENCE_TIMEOUT_MS: tunable(int(101)),
 	TRANSLATION_USAGE_URL: {},
 	TRANSLATION_USAGE_REPORT_INTERVAL_MS: { kv: int() },
 	// Docker image tag the Worker's WASM Opus codec was sourced from at deploy (set by the translate
@@ -333,7 +382,7 @@ export const WORKER_VARS = {
 	AGENT_REQUIRE_WSS: { container: IF_SET },
 	// Tightening the allowlist is an incident lever. An empty value allows any public host, so an
 	// override may not set it empty or unset it; delete the KV entry to restore the Worker value.
-	AGENT_ALLOWED_HOSTS: tunable(nonEmptyStr()),
+	AGENT_ALLOWED_HOSTS: tunable(hostList('AGENT_ALLOWED_HOSTS')),
 	AGENT_ALLOW_PRIVATE_ENDPOINTS: { container: IF_SET },
 	AGENT_SHARED_SECRET: { container: IF_SET },
 	AGENT_ALLOW_UNAUTHENTICATED: { container: IF_SET },
@@ -349,15 +398,17 @@ export const WORKER_VARS = {
 	// the start call: see TranscriberContainer.startAndWaitForPorts). Changing ROUTING_MODE or the
 	// pool size moves new sessions to other containers; a session that reconnects after the change
 	// may land on a different container than the one holding its detached state.
-	ROUTING_MODE: { container: def('session'), kv: oneOf('session', 'pool', 'shared', 'autoscale') },
+	ROUTING_MODE: { container: def('session'), kv: routingMode() },
 	CONTAINER_POOL_SIZE: { container: def('5'), kv: int(1) },
 	MAX_CONNECTIONS_PER_CONTAINER: { container: def('10'), kv: int(1) },
 	MIN_CONTAINERS: { container: def('2'), kv: int(0) },
 	SCALE_DOWN_IDLE_TIME: { container: def('600000'), kv: int(0) },
 	USE_DISPATCHER: { kv: bool() },
-	// Must stay well above the 180 s keepalive renewal in sessionProxy.ts, or a live call's
-	// container can sleep between renewals; 4 minutes is the floor an override may set.
-	SLEEP_AFTER: { container: IF_SET, kv: duration(240) },
+	// The floor (4 minutes) keeps it above the 180 s keepalive renewal in sessionProxy.ts. It does not
+	// cover a missed renewal (a 360 s gap): the /status probe in onActivityExpired is the backstop
+	// for that. The ceiling (24 hours) stops an override from keeping idle containers, which are
+	// billed, awake indefinitely.
+	SLEEP_AFTER: { container: IF_SET, kv: duration(240, 86_400) },
 
 	// --- Telemetry.
 	OTLP_ENDPOINT: { container: def('') },

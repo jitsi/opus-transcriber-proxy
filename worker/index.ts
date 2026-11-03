@@ -52,8 +52,15 @@ export default {
 		// dispatcher choice, the Worker-hosted /translate and the env of a container started here —
 		// sees the effective value. Every failure inside degrades to the Worker variable. Decisions
 		// are logged for upgrades only, so health probes do not repeat them.
-		const configOverrides = await resolveConfigOverrides(env);
-		if (isWebSocketUpgrade) logConfigOverrideDecisions(configOverrides.decisions);
+		// The try keeps that promise against a bug too: a throw here would fail every request.
+		let configOverrides: Awaited<ReturnType<typeof resolveConfigOverrides<Env>>> = { env, applied: {}, decisions: [] };
+		try {
+			configOverrides = await resolveConfigOverrides(env);
+			if (isWebSocketUpgrade) logConfigOverrideDecisions(configOverrides.decisions);
+		} catch (error) {
+			console.error(`Config overrides not applied: ${error instanceof Error ? error.message : String(error)}`);
+			configOverrides = { env, applied: {}, decisions: [] };
+		}
 		env = configOverrides.env;
 
 		// Handle /translate entirely in this Worker (no container). The accepted WebSocket keeps the

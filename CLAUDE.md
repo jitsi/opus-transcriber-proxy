@@ -695,27 +695,38 @@ wrangler kv key delete config:LOG_LEVEL --namespace-id=<id> --remote
 
 Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<optional>"}`.
 - `value` must have the variable's type: `bool` (`true`/`false`), `int` (with a lower bound where
-  one makes sense), `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, `ROUTING_MODE`, ...), a JSON
-  object (`OPENAI_TURN_DETECTION`), a `wss` URL with no credentials, query or fragment, since the value is logged and reported in `info` (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration
-  (`SLEEP_AFTER`: the SDK's `"7m"` format and at least 4 minutes, because the SDK throws on any
-  other form and the keepalive renews every 180 s), or a string. `null` unsets the variable, so its
-  default applies. `AGENT_ALLOWED_HOSTS` is the exception: an empty allowlist allows any public
-  host, so its override must be a non-empty string and cannot be `null`. Delete the key to restore
-  the Worker value.
+  one makes sense; `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` above the 100 ms RTP gap threshold),
+  `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, ...), a JSON object (`OPENAI_TURN_DETECTION`), a
+  `wss` URL with no credentials, query or fragment, since the value is logged and reported in
+  `info` (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration (`SLEEP_AFTER`: the SDK's `"7m"` format,
+  from 4 minutes to 24 hours, because the SDK throws on any other form, the keepalive renews every
+  180 s, and an idle container is billed), or a string. `null` unsets the variable, so its default
+  applies. Two types check the value against the Worker's own env (the `env` argument of
+  `KvType.normalize`): `ROUTING_MODE=autoscale` is refused when the Worker has no
+  `CONTAINER_COORDINATOR` binding, since every upgrade would then fail; and `AGENT_ALLOWED_HOSTS`
+  (an empty allowlist allows any public host) must hold at least one host, cannot be `null`, is
+  written back normalized as the container reads it, and may only narrow a non-empty Worker list:
+  each entry must be a host or subdomain of a Worker entry. Delete the key to restore the Worker
+  value.
 - `until` is **mandatory** and in **milliseconds**; `-1` means no expiry. There is **no cap**,
   unlike the provider overrides (whose 24 h cap forces a re-test of the primary). A `until` in
-  seconds is refused as malformed, as for the provider overrides.
+  seconds (below `MIN_PLAUSIBLE_UNTIL_MS`) or in microseconds or nanoseconds (above
+  `MAX_PLAUSIBLE_UNTIL_MS`, the year 2286) is refused as malformed, for both kinds of override. Log
+  messages format a time with `isoTime`, which cannot throw.
 
 **How it works.** `index.ts` calls `resolveConfigOverrides(env)` first, on every request, and
 assigns the result to `env`: the Worker's env with the applied overrides overlaid. Everything after
-it reads that **effective env** — the endpoint gates, the provider-override slots, routing, the
-dispatcher choice, the Worker-hosted `/translate`, and `buildContainerEnvVars` for a container it
+it reads that **effective env** — the `ENABLE_TRANSLATE` gate, the provider-override slots, routing,
+the dispatcher choice, the Worker-hosted `/translate`, and `buildContainerEnvVars` for a container it
 starts. All keys are read in one bulk KV read (split at `KV_BULK_GET_MAX_KEYS`, 100), edge-cached
 for 60 s like the provider overrides. **KV bills a bulk read per key read**, so the isolate also
 keeps the stored strings for `CONFIG_CACHE_TTL_MS` (30 s) and reads KV at most once per period;
 each request still decides the entries afresh, so an `until` takes effect on time. A change can
-therefore take up to 90 s to reach every request. Decisions are logged on upgrades only (applied
-and expired at log level, mistakes at error), so health probes do not repeat them.
+therefore take up to 90 s to reach every request. The cache has one slot per KV binding object, and
+requests that miss it at the same time share one read. Decisions are logged on upgrades only
+(applied and expired at info, with `console.log`; mistakes at error), so health probes do not repeat
+them. The resolve and the log run inside a try in `index.ts`, so a bug in them cannot fail a
+request either: the request then goes ahead with the Worker's own env.
 
 **Every rejection degrades to the Worker variable**, for that one variable: malformed JSON, no
 `value`, a value of the wrong type (reported even on an expired entry), a bad `until`, or a KV read
@@ -727,21 +738,27 @@ outage, an override deleted from KV stays in effect until then, and after that n
 until KV answers again.
 
 **When an override takes effect** depends on who reads the variable:
-- **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, the endpoint gates) and
+- **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, `ENABLE_TRANSLATE`) and
   **the Worker-hosted `/translate`** (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_*`,
   `TRANSLATION_*`, `DEBUG`): the next request, after the edge cache.
 - **The container** (most variables): its **next start**. A container reads its env once, so a
-  running one keeps what it started with. With `ROUTING_MODE=session` (every production
-  environment) that is the next conference. A container started by the SDK's own start-on-fetch
-  path (`TranscriberContainer.envVars`, a safety net) gets the plain Worker env.
+  running one keeps what it started with. With `ROUTING_MODE=session` that is the next conference;
+  in the other routing modes, and for a session that reconnects to its container, a running
+  container keeps serving with its old values. This includes the endpoint gates other than
+  `ENABLE_TRANSLATE`: `ENABLE_TRANSCRIBE`, `ENABLE_AGENT` and `ENABLE_TEXT_TRANSLATION` are enforced
+  inside the container, so an override of them is not an immediate kill switch. A container started
+  by the SDK's own start-on-fetch path (`TranscriberContainer.envVars`, a safety net) gets the plain
+  Worker env.
 - **`SLEEP_AFTER`** is read by the container Durable Object, whose own env never sees KV. The
   Worker passes the effective value in the start call's env, and
-  `TranscriberContainer.startAndWaitForPorts` adopts it; the Worker calls that on every request, so
-  a running container picks up a change at its next activity-timer renewal. A start env with no
+  `TranscriberContainer.startAndWaitForPorts` adopts it; the Worker calls that on every request it
+  routes to that object, so a running container picks up a change at its next activity-timer
+  renewal. A start env with no
   `SLEEP_AFTER` restores the object's own value, so an override does not outlive its KV entry.
 - **The autoscale coordinator** (`MAX_CONNECTIONS_PER_CONTAINER`, `MIN_CONTAINERS`,
-  `SCALE_DOWN_IDLE_TIME`) resolves the same KV entries itself at the start of each request.
-  `MIN_CONTAINERS` matters only when it first initializes its state.
+  `SCALE_DOWN_IDLE_TIME`) resolves the same KV entries itself at the start of each request. An
+  override of `MIN_CONTAINERS` affects only scale-down: the coordinator creates its initial
+  containers in its constructor, from its own env, which never sees KV.
 - Changing `ROUTING_MODE` or `CONTAINER_POOL_SIZE` moves new sessions to other containers; a session
   that reconnects after the change may land on a container that does not hold its detached state.
 
@@ -771,7 +788,8 @@ namespace only to the people who may deploy the Worker.
   `AGENT_ALLOW_UNAUTHENTICATED`): loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is
   overridable, as an incident lever to tighten the allowlist.
 - `DEEPGRAM_TAGS` (the container refuses to start on a bad tag), `ENABLE_TEXT_TRANSLATION_STUB`,
-  `OTLP_ENV`, `OTLP_RESOURCE_ATTRIBUTES`. `PORT`/`HOST` are not variables: the container must listen
+  `OTLP_ENV`, `OTLP_RESOURCE_ATTRIBUTES`, `OTLP_STALE_MARKER_SENDS`, `SOURCE_IMAGE_TAG` (set by the
+  translate deploy to the codec's image tag). `PORT`/`HOST` are not variables: the container must listen
   where `TranscriberContainer.defaultPort` expects it.
 
 **Adding a Worker variable**: add one entry to `WORKER_VARS` in `worker/vars.ts` — `container:

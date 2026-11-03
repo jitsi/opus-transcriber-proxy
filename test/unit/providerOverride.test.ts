@@ -130,6 +130,17 @@ describe('decideProviderOverride', () => {
 		expect((decision as { why: string }).why).toContain('millisecond');
 	});
 
+	it.each([1e18, Number.MAX_SAFE_INTEGER, NOW * 1000])('refuses an oversized "until" (%s) without throwing', (until) => {
+		// The cap-exceeded message formatted the date, which throws past the Date range.
+		let decision: ReturnType<typeof decideProviderOverride> | undefined;
+		expect(() => (decision = decideProviderOverride(j({ provider: 'deepgram', until }), opts()))).not.toThrow();
+		expect(decision).toMatchObject({ applied: false, level: 'error' });
+	});
+
+	it('still refuses -1 as "until": provider overrides have no indefinite form', () => {
+		expect(decideProviderOverride(j({ provider: 'deepgram', until: -1 }), opts())).toMatchObject({ applied: false, level: 'error' });
+	});
+
 	it('treats the plausibility floor as the boundary', () => {
 		const below = decideProviderOverride(j({ provider: 'deepgram', until: MIN_PLAUSIBLE_UNTIL_MS - 1 }), opts());
 		expect(below).toMatchObject({ applied: false, level: 'error' });

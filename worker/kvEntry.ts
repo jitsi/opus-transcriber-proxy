@@ -37,6 +37,20 @@ export const OVERRIDE_CACHE_TTL_SECONDS = 60;
  */
 export const MIN_PLAUSIBLE_UNTIL_MS = 1_000_000_000_000;
 
+/**
+ * Largest `until` that can be a real millisecond timestamp (2286-11-20). Anything above it is a
+ * microsecond or nanosecond value (`Date.now() * 1000`, a Go clock), the slip at the other end. A
+ * microsecond value would otherwise be applied as a quiet permanent override (year ~57000), and a
+ * nanosecond one is past the `Date` range, where formatting it throws.
+ */
+export const MAX_PLAUSIBLE_UNTIL_MS = 10_000_000_000_000;
+
+/** An ISO time for a log message. Never throws: a value outside the `Date` range is printed as is. */
+export function isoTime(ms: number): string {
+	const date = new Date(ms);
+	return Number.isNaN(date.getTime()) ? String(ms) : date.toISOString();
+}
+
 /** The `until` value that means "no expiry", where an override kind allows one. */
 export const INDEFINITE_UNTIL = -1;
 
@@ -94,13 +108,19 @@ export function checkUntil(
 			why: `override "until" is not a millisecond timestamp (got ${value}); use milliseconds since the epoch${indefinite}`,
 		};
 	}
+	if (value > MAX_PLAUSIBLE_UNTIL_MS) {
+		return {
+			level: 'error',
+			why: `override "until" is too large for a millisecond timestamp (got ${value}; microseconds or nanoseconds?); use milliseconds since the epoch${indefinite}`,
+		};
+	}
 	if (opts.now >= value) {
-		return { level: 'info', why: `override expired at ${new Date(value).toISOString()}` };
+		return { level: 'info', why: `override expired at ${isoTime(value)}` };
 	}
 	if (opts.maxWindowMs !== undefined && value - opts.now > opts.maxWindowMs) {
 		return {
 			level: 'error',
-			why: `override window exceeds the ${opts.maxWindowMs}ms cap (until ${new Date(value).toISOString()})`,
+			why: `override window exceeds the ${opts.maxWindowMs}ms cap (until ${isoTime(value)})`,
 		};
 	}
 	return undefined;
