@@ -108,10 +108,18 @@ describe('the variable table', () => {
 			'GEMINI_MODEL',
 			'OPENAI_TURN_DETECTION',
 			'SESSION_RESUME_GRACE_PERIOD',
-			'DUMP_WEBSOCKET_MESSAGES',
 			'AGENT_ALLOWED_HOSTS',
+			'DEEPGRAM_MIP_OPT_OUT',
 		]) {
 			expect(CONFIG_OVERRIDABLE_NAMES).toContain(name);
+		}
+	});
+
+	it('keeps the recording of conference audio and transcripts out of KV', () => {
+		// The dumps write every conference's audio and transcripts to disk; turning them on must be a
+		// reviewed release, not a KV write.
+		for (const name of ['DUMP_WEBSOCKET_MESSAGES', 'DUMP_TRANSCRIPTS', 'DUMP_BASE_PATH']) {
+			expect(CONFIG_OVERRIDABLE_NAMES, name).not.toContain(name);
 		}
 	});
 });
@@ -209,6 +217,24 @@ describe('value types', () => {
 		expect(normalize('XAI_LANGUAGE', 'de')).toBe('de');
 		expect(normalize('XAI_LANGUAGE', '')).toBe('');
 		expect(normalize('XAI_LANGUAGE', 5)).toHaveProperty('error');
+	});
+});
+
+describe('DEEPGRAM_MIP_OPT_OUT', () => {
+	// The override may only opt out of Deepgram's model improvement programme, never back in: neither
+	// false nor null (which would restore the default, false, over a Worker value of true).
+	const mip = () => typeOf('DEEPGRAM_MIP_OPT_OUT');
+
+	it('accepts only true', () => {
+		expect(normalize('DEEPGRAM_MIP_OPT_OUT', true)).toBe('true');
+		expect(normalize('DEEPGRAM_MIP_OPT_OUT', 'TRUE')).toBe('true');
+		for (const value of [false, 'false', 1, 'yes']) {
+			expect(normalize('DEEPGRAM_MIP_OPT_OUT', value), JSON.stringify(value)).toHaveProperty('error');
+		}
+	});
+
+	it('cannot be unset by an override', () => {
+		expect(decideConfigOverride('DEEPGRAM_MIP_OPT_OUT', mip(), j({ value: null, until: -1 }), NOW)).toMatchObject({ applied: false, level: 'error' });
 	});
 });
 

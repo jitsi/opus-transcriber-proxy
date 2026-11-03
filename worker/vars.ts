@@ -155,6 +155,19 @@ function routingMode(): KvType {
 	return t;
 }
 
+/**
+ * `true` only, as a JSON boolean or the string, and an override may not unset it: for a flag whose
+ * `false` (and default) is the setting to protect, so that an override can only turn it on.
+ */
+function onlyTrue(): KvType {
+	const t: KvType = {
+		describe: 'true (an override may only turn this on)',
+		allowsUnset: false,
+		normalize: (v) => (v === true || (typeof v === 'string' && v.trim().toLowerCase() === 'true') ? 'true' : fail(t, v)),
+	};
+	return t;
+}
+
 /** One of a fixed set of strings, matched case-insensitively and written back as listed. */
 function oneOf(...values: string[]): KvType {
 	const t: KvType = {
@@ -278,11 +291,13 @@ export const WORKER_VARS = {
 	OPENAI_CUSTOM_REQUIRE_WSS: { container: def('true') },
 	SESSION_RESUME_ENABLED: tunable(bool()),
 	SESSION_RESUME_GRACE_PERIOD: tunable(int(0)),
-	// Debug output inside the container: the dumps (written under DUMP_BASE_PATH, /tmp by default)
-	// and the transcript broadcast.
-	DUMP_WEBSOCKET_MESSAGES: tunable(bool()),
-	DUMP_TRANSCRIPTS: tunable(bool()),
-	DUMP_BASE_PATH: tunable(str()),
+	// Debug dumps inside the container (written under DUMP_BASE_PATH, /tmp by default). Not
+	// overridable: they record every conference's audio and transcripts, so turning them on must be a
+	// reviewed release, not a KV write.
+	DUMP_WEBSOCKET_MESSAGES: { container: IF_SET },
+	DUMP_TRANSCRIPTS: { container: IF_SET },
+	DUMP_BASE_PATH: { container: IF_SET },
+	// The transcript broadcast.
 	BROADCAST_TRANSCRIPTS: tunable(bool()),
 	BROADCAST_TRANSCRIPTS_MAX_SIZE: tunable(int(0)),
 
@@ -306,7 +321,8 @@ export const WORKER_VARS = {
 	DEEPGRAM_DIARIZE: { container: def('false'), kv: bool() },
 	DEEPGRAM_PUNCTUATE: { container: def('true'), kv: bool() },
 	DEEPGRAM_ENCODING: { container: def('opus'), kv: oneOf('opus', 'linear16') },
-	DEEPGRAM_MIP_OPT_OUT: { container: def('false'), kv: bool() },
+	// An override may only opt out of Deepgram's model improvement programme, never back in.
+	DEEPGRAM_MIP_OPT_OUT: { container: def('false'), kv: onlyTrue() },
 	// Not KV-overridable: the container validates tags at start and refuses to start on a bad one.
 	DEEPGRAM_TAGS: { container: def('') },
 

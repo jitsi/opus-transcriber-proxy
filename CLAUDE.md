@@ -772,8 +772,7 @@ with. The Worker reports the overrides in effect for the current request as
 
 **Write access to `CONFIG_KV` is the same trust as editing the Worker variables.** An override can
 move xAI traffic to another `x.ai` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable `/agent`,
-narrow the agent host allowlist, turn on the debug dumps of audio and transcripts, and turn off an
-endpoint. Give write access to the
+narrow the agent host allowlist, and turn off an endpoint. Give write access to the
 namespace only to the people who may deploy the Worker.
 
 **What is not overridable, and why** (each is a `vars.ts` entry with no `kv`):
@@ -791,6 +790,10 @@ namespace only to the people who may deploy the Worker.
   `OPENAI_CUSTOM_REQUIRE_WSS`, `AGENT_REQUIRE_WSS`, `AGENT_ALLOW_PRIVATE_ENDPOINTS`,
   `AGENT_ALLOW_UNAUTHENTICATED`): loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is
   overridable, as an incident lever to tighten the allowlist.
+- The debug dumps (`DUMP_WEBSOCKET_MESSAGES`, `DUMP_TRANSCRIPTS`, `DUMP_BASE_PATH`): they record
+  every conference's audio and transcripts. `DEEPGRAM_MIP_OPT_OUT` is overridable, but only to
+  `true` and never to `null`: an override may opt out of Deepgram's model improvement programme,
+  not back in.
 - `DEEPGRAM_TAGS` (the container refuses to start on a bad tag), `ENABLE_TEXT_TRANSLATION_STUB`,
   `OTLP_ENV`, `OTLP_RESOURCE_ATTRIBUTES`, `OTLP_STALE_MARKER_SENDS`, `SOURCE_IMAGE_TAG` (set by the
   translate deploy to the codec's image tag). `PORT`/`HOST` are not variables: the container must listen
