@@ -144,12 +144,15 @@ function jsonObject(): KvType {
 /** An absolute URL with one of the given schemes. */
 function url(...protocols: string[]): KvType {
 	const t: KvType = {
-		describe: `a ${protocols.join('|')} URL`,
+		describe: `a ${protocols.join('|')} URL with no credentials, query or fragment`,
 		normalize(v) {
 			if (typeof v !== 'string') return fail(t, v);
 			try {
 				const u = new URL(v);
-				if (protocols.includes(u.protocol.replace(/:$/, ''))) return v;
+				// The value is logged and reported in `info`, so it may carry no credentials: no
+				// userinfo, and no query or fragment (where a token could ride).
+				const bare = !u.username && !u.password && !v.includes('?') && !v.includes('#');
+				if (bare && protocols.includes(u.protocol.replace(/:$/, ''))) return v;
 			} catch {
 				// fall through
 			}
@@ -373,7 +376,11 @@ export type WorkerVars = { [K in WorkerVarName]?: string };
 /** The KV key a variable is overridden under. */
 export const configKey = (name: string): string => `config:${name}`;
 
-/** The KV-overridable variables, with their types. */
+/**
+ * The KV-overridable variables, with their types. KV bills a bulk read per key read, and every
+ * isolate reads all of these keys once per `CONFIG_CACHE_TTL_MS`, so each variable added here adds
+ * to the billed reads.
+ */
 export const KV_OVERRIDABLE_VARS: ReadonlyArray<readonly [WorkerVarName, KvType]> = (
 	Object.entries(WORKER_VARS) as Array<[WorkerVarName, VarSpec]>
 )

@@ -26,6 +26,7 @@ import type { Env } from '../../../worker/env';
 import {
 	CONFIG_CACHE_TTL_MS,
 	KV_FAILURE_RETRY_MS,
+	KV_STALE_MAX_MS,
 	CONFIG_OVERRIDABLE_NAMES,
 	decideConfigOverride,
 	describeConfigOverrideDecision,
@@ -161,6 +162,14 @@ describe('value types', () => {
 		expect(normalize('XAI_STT_URL', 'ws://api.x.ai/v1/stt')).toHaveProperty('error');
 		expect(normalize('XAI_STT_URL', 'https://api.x.ai/v1/stt')).toHaveProperty('error');
 		expect(normalize('XAI_STT_URL', 'api.x.ai')).toHaveProperty('error');
+	});
+
+	it('URLs may not carry credentials, a query or a fragment (the value is logged and sent in info)', () => {
+		expect(normalize('XAI_STT_URL', 'wss://user:secret@api.x.ai/v1/stt')).toHaveProperty('error');
+		expect(normalize('XAI_STT_URL', 'wss://user@api.x.ai/v1/stt')).toHaveProperty('error');
+		expect(normalize('XAI_STT_URL', 'wss://api.x.ai/v1/stt?token=secret')).toHaveProperty('error');
+		expect(normalize('XAI_STT_URL', 'wss://api.x.ai/v1/stt?')).toHaveProperty('error');
+		expect(normalize('XAI_STT_URL', 'wss://api.x.ai/v1/stt#x')).toHaveProperty('error');
 	});
 
 	it('SLEEP_AFTER takes only the SDK time format, and no less than the keepalive floor', () => {
@@ -348,6 +357,23 @@ describe('resolveConfigOverrides', () => {
 		expect(get).toHaveBeenCalledTimes(2);
 		await resolveConfigOverrides(e, NOW + CONFIG_CACHE_TTL_MS + KV_FAILURE_RETRY_MS);
 		expect(get).toHaveBeenCalledTimes(3);
+	});
+
+	it(`drops the kept entries once the last good read is ${KV_STALE_MAX_MS} ms old`, async () => {
+		// An entry with no expiry would otherwise outlive its deletion for as long as KV keeps failing.
+		const get = vi.fn()
+			.mockImplementationOnce(async (keys: string[]) => new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 1200, until: -1 }) : null])))
+			.mockRejectedValue(new Error('KV down'));
+		const e = env({ CONFIG_KV: { get } as never, XAI_ENDPOINTING: '850' });
+		await resolveConfigOverrides(e, NOW);
+		expect((await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS - 1)).applied).toEqual({ XAI_ENDPOINTING: '1200' });
+
+		const dropped = await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS + KV_FAILURE_RETRY_MS);
+		expect(dropped.applied).toEqual({});
+		expect(dropped.env).toBe(e);
+		expect(dropped.decisions).toEqual([{ name: '*', applied: false, level: 'error', why: 'KV read failed: KV down' }]);
+		// Still dropped on the reads after that.
+		expect((await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS + 2 * KV_FAILURE_RETRY_MS)).applied).toEqual({});
 	});
 
 	it('degrades a KV failure to no override, with one error decision', async () => {

@@ -363,7 +363,8 @@ The Worker applies a change within 90 seconds, because KV and the Worker both ca
 container applies it the next time it starts.
 
 The Worker logs an entry that is not valid and ignores it. If a KV read fails, the Worker keeps
-the entries it read last and tries again after 5 seconds.
+the entries it read last and tries again after 5 seconds. It keeps them for at most 5 minutes.
+During a KV outage, an override that you delete stays in effect until then.
 
 Write access to the KV namespace gives the same control as editing the Worker variables. For
 example, an override can send xAI audio and the xAI key to a different host. Give write access only

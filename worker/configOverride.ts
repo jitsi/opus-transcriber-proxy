@@ -66,8 +66,25 @@ export const CONFIG_CACHE_TTL_MS = 30_000;
  */
 export const KV_FAILURE_RETRY_MS = 5_000;
 
+/**
+ * How long after the last good read the isolate keeps its entries while KV fails. An entry with no
+ * expiry (`until: -1`) that the operator deletes during an outage would otherwise stay in effect for
+ * as long as the outage lasts.
+ */
+export const KV_STALE_MAX_MS = 5 * 60_000;
+
 let cached:
-	| { kv: ConfigOverrideKv; keys: string; readAt: number; ttlMs: number; stored: Map<string, string | null>; error?: string; stale?: boolean }
+	| {
+			kv: ConfigOverrideKv;
+			keys: string;
+			readAt: number;
+			ttlMs: number;
+			stored: Map<string, string | null>;
+			/** When `stored` was read from KV; unset when it holds nothing read. */
+			goodReadAt?: number;
+			error?: string;
+			stale?: boolean;
+	  }
 	| undefined;
 
 /** Forget the isolate cache. For tests. */
@@ -77,8 +94,8 @@ export function resetConfigOverrideCache(): void {
 
 /**
  * The stored strings for `keys`, from the isolate cache or one bulk read per chunk. A failed read
- * returns the entries last read (empty if none) with the error, and is cached for
- * `KV_FAILURE_RETRY_MS`.
+ * returns the entries last read (empty if none, or if that read is older than `KV_STALE_MAX_MS`)
+ * with the error, and is cached for `KV_FAILURE_RETRY_MS`.
  */
 async function readEntries(
 	kv: ConfigOverrideKv,
@@ -95,11 +112,21 @@ async function readEntries(
 		for (let i = 0; i < keys.length; i += KV_BULK_GET_MAX_KEYS) chunks.push(keys.slice(i, i + KV_BULK_GET_MAX_KEYS));
 		const maps = await Promise.all(chunks.map((chunk) => kv.get(chunk, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS })));
 		const stored = new Map(maps.flatMap((m) => [...m]));
-		cached = { kv, keys: signature, readAt: now, ttlMs: CONFIG_CACHE_TTL_MS, stored };
+		cached = { kv, keys: signature, readAt: now, ttlMs: CONFIG_CACHE_TTL_MS, stored, goodReadAt: now };
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
-		const stale = same !== undefined && (same.error === undefined || same.stale === true);
-		cached = { kv, keys: signature, readAt: now, ttlMs: KV_FAILURE_RETRY_MS, stored: same?.stored ?? new Map(), error, stale };
+		const goodReadAt = same?.goodReadAt;
+		const stale = goodReadAt !== undefined && now - goodReadAt < KV_STALE_MAX_MS;
+		cached = {
+			kv,
+			keys: signature,
+			readAt: now,
+			ttlMs: KV_FAILURE_RETRY_MS,
+			stored: stale ? same!.stored : new Map(),
+			goodReadAt: stale ? goodReadAt : undefined,
+			error,
+			stale,
+		};
 	}
 	return cached;
 }
@@ -159,8 +186,9 @@ export function decideConfigOverride(name: string, type: KvType, raw: string | n
  * The keys are read in bulk (one KV call per `KV_BULK_GET_MAX_KEYS`), edge-cached for
  * `OVERRIDE_CACHE_TTL_SECONDS` and reused by the isolate for `CONFIG_CACHE_TTL_MS`. A KV failure is
  * reported as one error decision and otherwise swallowed: an optional operator convenience must
- * never stop a call from being set up. The isolate then keeps the entries it last read, if any, and
- * reads again after `KV_FAILURE_RETRY_MS`. Decisions for keys that hold nothing are not returned.
+ * never stop a call from being set up. The isolate then keeps the entries it last read, if any, for
+ * up to `KV_STALE_MAX_MS`, and reads again after `KV_FAILURE_RETRY_MS`. Decisions for keys that
+ * hold nothing are not returned.
  *
  * The effective env is a plain-object copy (`{ ...env, ...applied }`). The Worker env is a plain
  * object whose bindings are enumerable own properties, so they survive the copy; code that needs

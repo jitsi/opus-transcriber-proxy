@@ -696,7 +696,7 @@ wrangler kv key delete config:LOG_LEVEL --namespace-id=<id> --remote
 Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<optional>"}`.
 - `value` must have the variable's type: `bool` (`true`/`false`), `int` (with a lower bound where
   one makes sense), `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, `ROUTING_MODE`, ...), a JSON
-  object (`OPENAI_TURN_DETECTION`), a `wss` URL (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration
+  object (`OPENAI_TURN_DETECTION`), a `wss` URL with no credentials, query or fragment, since the value is logged and reported in `info` (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), a duration
   (`SLEEP_AFTER`: the SDK's `"7m"` format and at least 4 minutes, because the SDK throws on any
   other form and the keepalive renews every 180 s), or a string. `null` unsets the variable, so its
   default applies. `AGENT_ALLOWED_HOSTS` is the exception: an empty allowlist allows any public
@@ -722,7 +722,9 @@ and expired at log level, mistakes at error), so health probes do not repeat the
 failure. A typo in KV cannot take the service down. After a failed read the isolate keeps the
 entries it last read, if any (their `until` is still checked per request), and reads KV again only
 after `KV_FAILURE_RETRY_MS` (5 s), so a KV outage does not make every request wait for a failing
-read.
+read. It keeps them for at most `KV_STALE_MAX_MS` (5 min) after the last good read: during an
+outage, an override deleted from KV stays in effect until then, and after that no override applies
+until KV answers again.
 
 **When an override takes effect** depends on who reads the variable:
 - **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, the endpoint gates) and

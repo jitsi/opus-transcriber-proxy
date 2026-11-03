@@ -129,6 +129,13 @@ describe('TranscriberContainer configuration', () => {
 		expect(dobj.sleepAfter).toBe('30m');
 	});
 
+	it('accepts a null first argument without reading start options from it', async () => {
+		const { dobj } = fixture({ sleepAfter: '20m' });
+		await expect(dobj.startAndWaitForPorts(null as never)).resolves.toBeUndefined();
+		expect(baseStart).toHaveBeenCalledWith(null);
+		expect(dobj.sleepAfter).toBe('20m');
+	});
+
 	it('keeps its SLEEP_AFTER when the start call carries none', async () => {
 		const { dobj } = fixture({ sleepAfter: '20m' });
 		await dobj.startAndWaitForPorts({ startOptions: { envVars: { OPENAI_API_KEY: 'sk' } } });

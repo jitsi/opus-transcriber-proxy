@@ -101,7 +101,7 @@ export class TranscriberContainer extends Container<Env> {
 	 */
 	override async startAndWaitForPorts(...args: Parameters<Container<Env>['startAndWaitForPorts']>): Promise<void> {
 		const [portsOrArgs, , startOptions] = args;
-		const options = typeof portsOrArgs === 'object' && !Array.isArray(portsOrArgs) ? portsOrArgs.startOptions : startOptions;
+		const options = portsOrArgs !== null && typeof portsOrArgs === 'object' && !Array.isArray(portsOrArgs) ? portsOrArgs.startOptions : startOptions;
 		if (options?.envVars) this.sleepAfter = options.envVars.SLEEP_AFTER || this.ownSleepAfter();
 		return super.startAndWaitForPorts(...args);
 	}
