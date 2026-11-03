@@ -66,13 +66,6 @@ export const CONFIG_CACHE_TTL_MS = 30_000;
  */
 export const KV_FAILURE_RETRY_MS = 5_000;
 
-/**
- * How long after the last good read the isolate keeps its entries while KV fails. An entry with no
- * expiry (`until: -1`) that the operator deletes during an outage would otherwise stay in effect for
- * as long as the outage lasts.
- */
-export const KV_STALE_MAX_MS = 5 * 60_000;
-
 /** What an isolate keeps from its last read of one key set from one KV binding. */
 interface CacheSlot {
 	readAt: number;
@@ -81,7 +74,6 @@ interface CacheSlot {
 	/** When `stored` was read from KV; unset when it holds nothing read. */
 	goodReadAt?: number;
 	error?: string;
-	stale?: boolean;
 	/** The read in progress, shared by every request that misses the cache meanwhile. */
 	inflight?: Promise<void>;
 }
@@ -99,14 +91,17 @@ export function resetConfigOverrideCache(): void {
 
 /**
  * The stored strings for `keys`, from the isolate cache or one bulk read per chunk. Concurrent
- * misses share one read. A failed read returns the entries last read (empty if none, or if that
- * read is older than `KV_STALE_MAX_MS`) with the error, and is cached for `KV_FAILURE_RETRY_MS`.
+ * misses share one read. A failed read returns the entries last read (empty if none) and when
+ * they were read, with the error, and is cached for `KV_FAILURE_RETRY_MS`. The entries are kept
+ * however long KV keeps failing: they are the operator's incident levers (an endpoint turned off, a
+ * narrowed allowlist), and an outage must not drop them. One that was deleted meanwhile is dropped
+ * by the first good read.
  */
 async function readEntries(
 	kv: ConfigOverrideKv,
 	keys: string[],
 	now: number,
-): Promise<{ stored: Map<string, string | null>; error?: string; stale?: boolean }> {
+): Promise<{ stored: Map<string, string | null>; goodReadAt?: number; error?: string }> {
 	const signature = keys.join(',');
 	let bySignature = slots.get(kv);
 	if (!bySignature) {
@@ -134,15 +129,12 @@ async function readEntries(
 			// Read the slot as it is now, after the failed read, so that the entries kept are never
 			// older than the last good read.
 			const current = cache.get(signature);
-			const goodReadAt = current?.goodReadAt;
-			const stale = goodReadAt !== undefined && now - goodReadAt < KV_STALE_MAX_MS;
 			cache.set(signature, {
 				readAt: now,
 				ttlMs: KV_FAILURE_RETRY_MS,
-				stored: stale ? current!.stored : new Map(),
-				goodReadAt: stale ? goodReadAt : undefined,
+				stored: current?.stored ?? new Map(),
+				goodReadAt: current?.goodReadAt,
 				error,
-				stale,
 			});
 		}
 	})();
@@ -212,8 +204,8 @@ export function decideConfigOverride(
  * The keys are read in bulk (one KV call per `KV_BULK_GET_MAX_KEYS`), edge-cached for
  * `OVERRIDE_CACHE_TTL_SECONDS` and reused by the isolate for `CONFIG_CACHE_TTL_MS`. A KV failure is
  * reported as one error decision and otherwise swallowed: an optional operator convenience must
- * never stop a call from being set up. The isolate then keeps the entries it last read, if any, for
- * up to `KV_STALE_MAX_MS`, and reads again after `KV_FAILURE_RETRY_MS`. Decisions for keys that
+ * never stop a call from being set up. The isolate then keeps the entries it last read, if any,
+ * until KV answers again, and reads again after `KV_FAILURE_RETRY_MS`. Decisions for keys that
  * hold nothing are not returned.
  *
  * The effective env is a plain-object copy (`{ ...env, ...applied }`). The Worker env is a plain
@@ -231,12 +223,13 @@ export async function resolveConfigOverrides<E extends Pick<Env, 'CONFIG_KV'>>(
 	}
 
 	const keys = vars.map(([name]) => configKey(name));
-	const { stored, error, stale } = await readEntries(kv, keys, now);
+	const { stored, goodReadAt, error } = await readEntries(kv, keys, now);
 
 	const applied: AppliedConfigOverrides = {};
 	const decisions: ConfigOverrideDecision[] = [];
 	if (error !== undefined) {
-		const why = `KV read failed: ${error}${stale ? '; keeping the entries last read' : ''}`;
+		const kept = goodReadAt === undefined ? '' : `; keeping the entries read ${Math.round((now - goodReadAt) / 1000)} s ago`;
+		const why = `KV read failed: ${error}${kept}`;
 		decisions.push({ name: '*', applied: false, level: 'error', why });
 	}
 	for (const [name, type] of vars) {

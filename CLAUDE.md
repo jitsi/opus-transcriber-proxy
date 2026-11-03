@@ -734,9 +734,10 @@ request either: the request then goes ahead with the Worker's own env.
 failure. A typo in KV cannot take the service down. After a failed read the isolate keeps the
 entries it last read, if any (their `until` is still checked per request), and reads KV again only
 after `KV_FAILURE_RETRY_MS` (5 s), so a KV outage does not make every request wait for a failing
-read. It keeps them for at most `KV_STALE_MAX_MS` (5 min) after the last good read: during an
-outage, an override deleted from KV stays in effect until then, and after that no override applies
-until KV answers again.
+read. It keeps them until KV answers again, however long that takes: the overrides are incident
+levers (an endpoint turned off, a narrowed allowlist), and an outage must not silently drop them.
+The error decision names their age ("keeping the entries read N s ago"). The cost is that an
+override deleted during an outage stays in effect until the first good read drops it.
 
 **When an override takes effect** depends on who reads the variable:
 - **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, `ENABLE_TRANSLATE`) and

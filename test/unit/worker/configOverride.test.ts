@@ -26,7 +26,6 @@ import type { Env } from '../../../worker/env';
 import {
 	CONFIG_CACHE_TTL_MS,
 	KV_FAILURE_RETRY_MS,
-	KV_STALE_MAX_MS,
 	CONFIG_OVERRIDABLE_NAMES,
 	decideConfigOverride,
 	describeConfigOverrideDecision,
@@ -459,7 +458,7 @@ describe('resolveConfigOverrides', () => {
 			name: '*',
 			applied: false,
 			level: 'error',
-			why: 'KV read failed: KV down; keeping the entries last read',
+			why: 'KV read failed: KV down; keeping the entries read 30 s ago',
 		});
 
 		// The kept entry expires on time, and the next read waits for the retry period.
@@ -469,21 +468,35 @@ describe('resolveConfigOverrides', () => {
 		expect(get).toHaveBeenCalledTimes(3);
 	});
 
-	it(`drops the kept entries once the last good read is ${KV_STALE_MAX_MS} ms old`, async () => {
-		// An entry with no expiry would otherwise outlive its deletion for as long as KV keeps failing.
-		const get = vi.fn()
-			.mockImplementationOnce(async (keys: string[]) => new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 1200, until: -1 }) : null])))
-			.mockRejectedValue(new Error('KV down'));
+	it('keeps the entries for as long as KV fails, and drops one only when a good read no longer has it', async () => {
+		// The overrides are incident levers (an endpoint off, a tightened allowlist): a KV outage must
+		// not silently drop them. The error decision names the age of what is kept.
+		const hour = 3600_000;
+		let up = true;
+		let stored: Record<string, string> = { 'config:XAI_ENDPOINTING': j({ value: 1200, until: -1 }) };
+		const get = vi.fn(async (keys: string[]) => {
+			if (!up) throw new Error('KV down');
+			return new Map(keys.map((k) => [k, stored[k] ?? null]));
+		});
 		const e = env({ CONFIG_KV: { get } as never, XAI_ENDPOINTING: '850' });
 		await resolveConfigOverrides(e, NOW);
-		expect((await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS - 1)).applied).toEqual({ XAI_ENDPOINTING: '1200' });
 
-		const dropped = await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS + KV_FAILURE_RETRY_MS);
-		expect(dropped.applied).toEqual({});
-		expect(dropped.env).toBe(e);
-		expect(dropped.decisions).toEqual([{ name: '*', applied: false, level: 'error', why: 'KV read failed: KV down' }]);
-		// Still dropped on the reads after that.
-		expect((await resolveConfigOverrides(e, NOW + KV_STALE_MAX_MS + 2 * KV_FAILURE_RETRY_MS)).applied).toEqual({});
+		up = false;
+		const later = await resolveConfigOverrides(e, NOW + hour);
+		expect(later.applied).toEqual({ XAI_ENDPOINTING: '1200' });
+		expect(later.decisions).toContainEqual({
+			name: '*',
+			applied: false,
+			level: 'error',
+			why: 'KV read failed: KV down; keeping the entries read 3600 s ago',
+		});
+
+		// KV recovers, and the operator deleted the entry meanwhile: the next good read drops it.
+		up = true;
+		stored = {};
+		const recovered = await resolveConfigOverrides(e, NOW + hour + KV_FAILURE_RETRY_MS);
+		expect(recovered.applied).toEqual({});
+		expect(recovered.decisions).toEqual([]);
 	});
 
 	it('degrades a KV failure to no override, with one error decision', async () => {
