@@ -988,8 +988,11 @@ process.on('SIGTERM', async () => {
 		session.close();
 	}
 
-	// Flush any buffered translation usage, then shutdown telemetry.
-	await Promise.all([flushTranslationUsage(), shutdownTelemetry(), shutdownTelemetryLogs()]);
+	// Flush any buffered translation usage, then shutdown telemetry. The logs pipeline shuts down
+	// last, so the log lines written during the metrics shutdown (the stale-marker result) still
+	// reach the OTLP log endpoint.
+	await Promise.all([flushTranslationUsage(), shutdownTelemetry()]);
+	await shutdownTelemetryLogs();
 
 	server.close(() => {
 		logger.info('Server closed');

@@ -361,6 +361,8 @@ export const WORKER_VARS = {
 	OTLP_ENV: { container: def('') },
 	OTLP_RESOURCE_ATTRIBUTES: { container: def('') },
 	OTLP_HEADERS: { container: def('') },
+	// "0" disables the stale markers, and is forwarded like any other set value.
+	OTLP_STALE_MARKER_SENDS: { container: IF_SET },
 } as const satisfies Record<string, VarSpec>;
 
 export type WorkerVarName = keyof typeof WORKER_VARS;

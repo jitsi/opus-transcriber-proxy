@@ -243,6 +243,7 @@ See [DISPATCHER_INTEGRATION.md](DISPATCHER_INTEGRATION.md) for details.
 | `OTLP_ENV` | (empty) | Environment label |
 | `OTLP_RESOURCE_ATTRIBUTES` | `{}` | Additional resource attributes (JSON) |
 | `OTLP_HEADERS` | `{}` | Auth headers (JSON) |
+| `OTLP_STALE_MARKER_SENDS` | `8` | When the container stops, it sends a stale marker for each metric series this number of times, each on a new connection. `0` disables the markers. See [OBSERVABILITY.md](OBSERVABILITY.md) |
 
 See [OBSERVABILITY.md](OBSERVABILITY.md) for available metrics, queries, and authentication.
 

@@ -64,6 +64,11 @@ describe('buildContainerEnvVars', () => {
 		expect(buildContainerEnvVars(env({ TRANSLATION_TALK_SILENCE_TIMEOUT_MS: '0' })).TRANSLATION_TALK_SILENCE_TIMEOUT_MS).toBe('0');
 	});
 
+	it('forwards OTLP_STALE_MARKER_SENDS only when set, including "0", which disables the stale markers', () => {
+		expect(buildContainerEnvVars(env())).not.toHaveProperty('OTLP_STALE_MARKER_SENDS');
+		expect(buildContainerEnvVars(env({ OTLP_STALE_MARKER_SENDS: '0' })).OTLP_STALE_MARKER_SENDS).toBe('0');
+	});
+
 	it('derives LOG_LEVEL from DEBUG unless LOG_LEVEL is set explicitly', () => {
 		expect(buildContainerEnvVars(env({ DEBUG: 'true' })).LOG_LEVEL).toBe('debug');
 		expect(buildContainerEnvVars(env({ DEBUG: 'true', LOG_LEVEL: 'warn' })).LOG_LEVEL).toBe('warn');
