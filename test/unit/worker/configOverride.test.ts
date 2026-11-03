@@ -335,6 +335,20 @@ describe('resolveConfigOverrides', () => {
 		expect(opts).toEqual({ type: 'text', cacheTtl: 60 });
 	});
 
+	it('ignores an entry under a name that is not overridable, end to end', async () => {
+		const blocked = ['OPENAI_API_KEY', 'PROVIDERS_PRIORITY', 'AGENT_ALLOW_UNAUTHENTICATED'];
+		const { kv, get } = fakeKv(Object.fromEntries(blocked.map((n) => [`config:${n}`, j({ value: 'x', until: -1 })])));
+		const base = env({ CONFIG_KV: kv as never, OPENAI_API_KEY: 'sk', PROVIDERS_PRIORITY: 'xai', AGENT_ALLOW_UNAUTHENTICATED: 'false' });
+		const r = await resolveConfigOverrides(base, NOW);
+		// Those keys are never even read.
+		for (const n of blocked) expect(get.mock.calls[0][0]).not.toContain(`config:${n}`);
+		expect(r.applied).toEqual({});
+		expect(r.decisions).toEqual([]);
+		const vars = buildContainerEnvVars(r.env, r.applied);
+		expect(vars).toMatchObject({ OPENAI_API_KEY: 'sk', PROVIDERS_PRIORITY: 'xai', AGENT_ALLOW_UNAUTHENTICATED: 'false' });
+		expect(vars).not.toHaveProperty('CONFIG_OVERRIDES');
+	});
+
 	it('overlays the entries that apply and leaves the rest of the env alone', async () => {
 		const { kv } = fakeKv({
 			'config:XAI_ENDPOINTING': j({ value: 1200, until: -1 }),

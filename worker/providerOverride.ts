@@ -48,7 +48,7 @@
  * provider automatically — no operator has to remember to switch back.
  */
 
-import { checkUntil, entryReason, OVERRIDE_CACHE_TTL_SECONDS, parseEntryObject } from './kvEntry';
+import { checkUntil, entryReason, isoTime, OVERRIDE_CACHE_TTL_SECONDS, parseEntryObject } from './kvEntry';
 
 /** The services with more than one backend, each with its own KV key. */
 export type OverrideSlotId = 'transcribe' | 'translate' | 'text-translation';
@@ -311,7 +311,7 @@ export function applyProviderOverride(request: Request, slot: ProviderOverrideSl
 export function describeOverrideDecision(slot: ProviderOverrideSlot, decision: OverrideDecision): string {
 	if (decision.applied) {
 		const reason = decision.reason ? `, reason=${decision.reason}` : '';
-		return `${slot.label} override applied: provider=${decision.provider}, until=${new Date(decision.until).toISOString()}${reason}`;
+		return `${slot.label} override applied: provider=${decision.provider}, until=${isoTime(decision.until)}${reason}`;
 	}
 	return `${slot.label} override not applied: ${decision.why}`;
 }
