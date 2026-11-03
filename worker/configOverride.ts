@@ -59,25 +59,49 @@ export const KV_BULK_GET_MAX_KEYS = 100;
  */
 export const CONFIG_CACHE_TTL_MS = 30_000;
 
-let cached: { kv: ConfigOverrideKv; keys: string; readAt: number; stored: Map<string, string | null> } | undefined;
+/**
+ * How long an isolate waits after a failed KV read before it reads again. Without it, every request
+ * during a KV outage would wait for a failing read before routing. Meanwhile the isolate keeps the
+ * entries it last read, if any; each request still checks their `until`.
+ */
+export const KV_FAILURE_RETRY_MS = 5_000;
+
+let cached:
+	| { kv: ConfigOverrideKv; keys: string; readAt: number; ttlMs: number; stored: Map<string, string | null>; error?: string; stale?: boolean }
+	| undefined;
 
 /** Forget the isolate cache. For tests. */
 export function resetConfigOverrideCache(): void {
 	cached = undefined;
 }
 
-/** The stored strings for `keys`, from the isolate cache or one bulk read per chunk. A failure throws and is not cached. */
-async function readEntries(kv: ConfigOverrideKv, keys: string[], now: number): Promise<Map<string, string | null>> {
+/**
+ * The stored strings for `keys`, from the isolate cache or one bulk read per chunk. A failed read
+ * returns the entries last read (empty if none) with the error, and is cached for
+ * `KV_FAILURE_RETRY_MS`.
+ */
+async function readEntries(
+	kv: ConfigOverrideKv,
+	keys: string[],
+	now: number,
+): Promise<{ stored: Map<string, string | null>; error?: string; stale?: boolean }> {
 	const signature = keys.join(',');
-	if (cached && cached.kv === kv && cached.keys === signature && now - cached.readAt >= 0 && now - cached.readAt < CONFIG_CACHE_TTL_MS) {
-		return cached.stored;
+	const same = cached && cached.kv === kv && cached.keys === signature ? cached : undefined;
+	if (same && now - same.readAt >= 0 && now - same.readAt < same.ttlMs) {
+		return same;
 	}
-	const chunks: string[][] = [];
-	for (let i = 0; i < keys.length; i += KV_BULK_GET_MAX_KEYS) chunks.push(keys.slice(i, i + KV_BULK_GET_MAX_KEYS));
-	const maps = await Promise.all(chunks.map((chunk) => kv.get(chunk, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS })));
-	const stored = new Map(maps.flatMap((m) => [...m]));
-	cached = { kv, keys: signature, readAt: now, stored };
-	return stored;
+	try {
+		const chunks: string[][] = [];
+		for (let i = 0; i < keys.length; i += KV_BULK_GET_MAX_KEYS) chunks.push(keys.slice(i, i + KV_BULK_GET_MAX_KEYS));
+		const maps = await Promise.all(chunks.map((chunk) => kv.get(chunk, { type: 'text', cacheTtl: OVERRIDE_CACHE_TTL_SECONDS })));
+		const stored = new Map(maps.flatMap((m) => [...m]));
+		cached = { kv, keys: signature, readAt: now, ttlMs: CONFIG_CACHE_TTL_MS, stored };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		const stale = same !== undefined && (same.error === undefined || same.stale === true);
+		cached = { kv, keys: signature, readAt: now, ttlMs: KV_FAILURE_RETRY_MS, stored: same?.stored ?? new Map(), error, stale };
+	}
+	return cached;
 }
 
 export type ConfigOverrideDecision =
@@ -134,8 +158,9 @@ export function decideConfigOverride(name: string, type: KvType, raw: string | n
  *
  * The keys are read in bulk (one KV call per `KV_BULK_GET_MAX_KEYS`), edge-cached for
  * `OVERRIDE_CACHE_TTL_SECONDS` and reused by the isolate for `CONFIG_CACHE_TTL_MS`. A KV failure is
- * swallowed: an optional operator convenience must never stop a call from being set up. Decisions
- * for keys that hold nothing are not returned.
+ * reported as one error decision and otherwise swallowed: an optional operator convenience must
+ * never stop a call from being set up. The isolate then keeps the entries it last read, if any, and
+ * reads again after `KV_FAILURE_RETRY_MS`. Decisions for keys that hold nothing are not returned.
  *
  * The effective env is a plain-object copy (`{ ...env, ...applied }`). The Worker env is a plain
  * object whose bindings are enumerable own properties, so they survive the copy; code that needs
@@ -152,16 +177,14 @@ export async function resolveConfigOverrides<E extends Pick<Env, 'CONFIG_KV'>>(
 	}
 
 	const keys = vars.map(([name]) => configKey(name));
-	let stored: Map<string, string | null>;
-	try {
-		stored = await readEntries(kv, keys, now);
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		return { env, applied: {}, decisions: [{ name: '*', applied: false, level: 'error', why: `KV read failed: ${msg}` }] };
-	}
+	const { stored, error, stale } = await readEntries(kv, keys, now);
 
 	const applied: AppliedConfigOverrides = {};
 	const decisions: ConfigOverrideDecision[] = [];
+	if (error !== undefined) {
+		const why = `KV read failed: ${error}${stale ? '; keeping the entries last read' : ''}`;
+		decisions.push({ name: '*', applied: false, level: 'error', why });
+	}
 	for (const [name, type] of vars) {
 		const raw = stored.get(configKey(name));
 		if (raw === null || raw === undefined) continue;

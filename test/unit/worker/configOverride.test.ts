@@ -25,6 +25,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Env } from '../../../worker/env';
 import {
 	CONFIG_CACHE_TTL_MS,
+	KV_FAILURE_RETRY_MS,
 	CONFIG_OVERRIDABLE_NAMES,
 	decideConfigOverride,
 	describeConfigOverrideDecision,
@@ -308,13 +309,45 @@ describe('resolveConfigOverrides', () => {
 		expect((await resolveConfigOverrides(env({ CONFIG_KV: b.kv as never }), NOW)).applied).toEqual({ XAI_ENDPOINTING: '2' });
 	});
 
-	it('does not cache a failed read', async () => {
+	it(`retries a failed read only after ${KV_FAILURE_RETRY_MS} ms`, async () => {
+		// During a KV outage, every request would otherwise wait for a failing read before routing.
 		const get = vi.fn()
 			.mockRejectedValueOnce(new Error('KV down'))
 			.mockImplementation(async (keys: string[]) => new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 9, until: -1 }) : null])));
 		const e = env({ CONFIG_KV: { get } as never });
 		expect((await resolveConfigOverrides(e, NOW)).applied).toEqual({});
-		expect((await resolveConfigOverrides(e, NOW + 1)).applied).toEqual({ XAI_ENDPOINTING: '9' });
+		const during = await resolveConfigOverrides(e, NOW + KV_FAILURE_RETRY_MS - 1);
+		expect(during.applied).toEqual({});
+		expect(during.decisions).toEqual([{ name: '*', applied: false, level: 'error', why: 'KV read failed: KV down' }]);
+		expect(get).toHaveBeenCalledTimes(1);
+		expect((await resolveConfigOverrides(e, NOW + KV_FAILURE_RETRY_MS)).applied).toEqual({ XAI_ENDPOINTING: '9' });
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps the entries last read while KV fails, and still expires them on time', async () => {
+		const until = NOW + CONFIG_CACHE_TTL_MS + 1000;
+		const get = vi.fn()
+			.mockImplementationOnce(async (keys: string[]) => new Map(keys.map((k) => [k, k === 'config:XAI_ENDPOINTING' ? j({ value: 1200, until }) : null])))
+			.mockRejectedValue(new Error('KV down'));
+		const e = env({ CONFIG_KV: { get } as never, XAI_ENDPOINTING: '850' });
+		expect((await resolveConfigOverrides(e, NOW)).applied).toEqual({ XAI_ENDPOINTING: '1200' });
+
+		const stale = await resolveConfigOverrides(e, NOW + CONFIG_CACHE_TTL_MS);
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(stale.applied).toEqual({ XAI_ENDPOINTING: '1200' });
+		expect(stale.env.XAI_ENDPOINTING).toBe('1200');
+		expect(stale.decisions).toContainEqual({
+			name: '*',
+			applied: false,
+			level: 'error',
+			why: 'KV read failed: KV down; keeping the entries last read',
+		});
+
+		// The kept entry expires on time, and the next read waits for the retry period.
+		expect((await resolveConfigOverrides(e, until)).applied).toEqual({});
+		expect(get).toHaveBeenCalledTimes(2);
+		await resolveConfigOverrides(e, NOW + CONFIG_CACHE_TTL_MS + KV_FAILURE_RETRY_MS);
+		expect(get).toHaveBeenCalledTimes(3);
 	});
 
 	it('degrades a KV failure to no override, with one error decision', async () => {

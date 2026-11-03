@@ -719,7 +719,10 @@ and expired at log level, mistakes at error), so health probes do not repeat the
 
 **Every rejection degrades to the Worker variable**, for that one variable: malformed JSON, no
 `value`, a value of the wrong type (reported even on an expired entry), a bad `until`, or a KV read
-failure. A typo in KV cannot take the service down.
+failure. A typo in KV cannot take the service down. After a failed read the isolate keeps the
+entries it last read, if any (their `until` is still checked per request), and reads KV again only
+after `KV_FAILURE_RETRY_MS` (5 s), so a KV outage does not make every request wait for a failing
+read.
 
 **When an override takes effect** depends on who reads the variable:
 - **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, the endpoint gates) and
