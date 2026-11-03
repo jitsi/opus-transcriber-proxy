@@ -11,6 +11,7 @@ Metrics and logs are exported via OpenTelemetry Protocol (OTLP) HTTP to compatib
 | `OTLP_EXPORT_INTERVAL_MS` | `60000` | Metrics export interval (ms) |
 | `OTLP_RESOURCE_ATTRIBUTES` | `{}` | Additional resource attributes (JSON) |
 | `OTLP_HEADERS` | `{}` | Custom HTTP headers for authentication (JSON) |
+| `OTLP_STALE_MARKER_SENDS` | `8` | Number of times to send the stale markers when the container stops (see [Stale markers at shutdown](#stale-markers-at-shutdown)). `0` disables them |
 
 Example:
 ```bash
@@ -86,6 +87,17 @@ The following resource attributes are set on all metrics:
 | (custom) | `OTLP_RESOURCE_ATTRIBUTES` | Any additional attributes |
 
 Resource attributes appear in Prometheus as the `target_info` metric. To use them with other metrics, join on the `job` label or configure your collector to promote them.
+
+## Stale markers at shutdown
+
+Each container sets its own `service.instance.id`, so each container makes its own set of series. A collector that converts OTLP to Prometheus, such as Grafana Alloy, can keep a series in memory until that series gets a staleness marker. Alloy writes a marker only for a data point with the OTLP `NO_RECORDED_VALUE` flag. A series that only stops arriving never gets one.
+
+When the container gets `SIGTERM`, it sends the final export first. Then it sends the last exported snapshot again, with the `NO_RECORDED_VALUE` flag on every data point. The collector then marks each series stale and can free it.
+
+- The container sends the markers `OTLP_STALE_MARKER_SENDS` times (default 8), each on a new connection. If a load balancer spreads the requests over several collector replicas, each replica must get the markers.
+- A container that crashes, or that the platform kills without `SIGTERM`, sends no markers.
+- The markers do not cover `target_info`. Alloy writes `target_info` again for each request. To stop that series too, set `include_target_info = false` on `otelcol.exporter.prometheus`.
+- The container logs the result: `info` if every send succeeded, otherwise `warn` with the error of each failed send.
 
 ## Example PromQL Queries
 

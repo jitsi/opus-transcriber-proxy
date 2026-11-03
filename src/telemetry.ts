@@ -38,8 +38,13 @@ const ATTR_SERVICE_NAME = 'service.name';
 const ATTR_DEPLOYMENT_ENVIRONMENT = 'deployment.environment';
 import { config } from './config';
 import logger from './logger';
+import { SnapshotRecordingExporter, buildStaleMarkerRequest, sendStaleMarkers } from './telemetry/staleMarkers';
+
+/** Timeout for each stale-marker send. The sends run in parallel, inside the SIGTERM grace period. */
+const STALE_MARKER_TIMEOUT_MS = 3000;
 
 let meterProvider: MeterProvider | null = null;
+let recordingExporter: SnapshotRecordingExporter | null = null;
 let loggerProvider: LoggerProvider | null = null;
 let meter: Meter | null = null;
 
@@ -122,11 +127,12 @@ export function initTelemetry(): void {
 		logger.info('OTLP exporter configured with custom headers');
 	}
 
-	const exporter = new OTLPMetricExporter(exporterConfig);
+	// The recording wrapper keeps the last exported snapshot for the stale markers sent at shutdown.
+	recordingExporter = new SnapshotRecordingExporter(new OTLPMetricExporter(exporterConfig));
 
 	// Create metric reader with periodic export
 	const metricReader = new PeriodicExportingMetricReader({
-		exporter,
+		exporter: recordingExporter,
 		exportIntervalMillis: config.otlp.exportIntervalMs,
 	});
 
@@ -163,7 +169,8 @@ export function isTelemetryEnabled(): boolean {
 
 /**
  * Gracefully shutdown telemetry metrics.
- * Call this on process termination to flush pending metrics.
+ * Call this on process termination to flush pending metrics. After the final export it sends the
+ * stale markers for every series of this process (see telemetry/staleMarkers.ts).
  */
 export async function shutdownTelemetry(): Promise<void> {
 	if (meterProvider) {
@@ -174,6 +181,41 @@ export async function shutdownTelemetry(): Promise<void> {
 		} catch (error) {
 			logger.error('Error shutting down OpenTelemetry:', error);
 		}
+		await sendShutdownStaleMarkers();
+	}
+}
+
+/**
+ * Mark every series that this process exported as stale, so the collector frees them now and not
+ * at its next restart. Runs after the final export, which carries the last values.
+ */
+async function sendShutdownStaleMarkers(): Promise<void> {
+	const sends = config.otlp.staleMarkerSends;
+	const snapshot = recordingExporter?.lastSnapshot();
+	if (sends <= 0 || !snapshot) {
+		return;
+	}
+	try {
+		const request = buildStaleMarkerRequest(snapshot, BigInt(Date.now()) * 1_000_000n);
+		if (!request) {
+			return;
+		}
+		const result = await sendStaleMarkers({
+			url: `${config.otlp.endpoint}/v1/metrics`,
+			body: request.body,
+			headers: config.otlp.headers,
+			sends,
+			timeoutMs: STALE_MARKER_TIMEOUT_MS,
+		});
+		if (result.failed > 0) {
+			logger.warn(
+				`Stale markers for ${request.dataPoints} data points: ${result.ok} of ${sends} sends succeeded, errors: ${result.errors.join(', ')}`,
+			);
+		} else {
+			logger.info(`Stale markers for ${request.dataPoints} data points sent ${result.ok} times`);
+		}
+	} catch (error) {
+		logger.error('Error sending stale markers:', error);
 	}
 }
 

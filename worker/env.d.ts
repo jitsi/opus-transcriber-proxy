@@ -139,6 +139,7 @@ export interface Env {
 	OTLP_ENV?: string;
 	OTLP_RESOURCE_ATTRIBUTES?: string;
 	OTLP_HEADERS?: string;
+	OTLP_STALE_MARKER_SENDS?: string;
 	// Voice agents (/agent on the container); see ENABLE_AGENT / AGENT_* in CLAUDE.md.
 	ENABLE_AGENT?: string;
 	AGENT_REQUIRE_WSS?: string;

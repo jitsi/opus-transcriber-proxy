@@ -152,6 +152,7 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
 		OTLP_ENV: env.OTLP_ENV || '',
 		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
 		OTLP_HEADERS: env.OTLP_HEADERS || '',
+		...(env.OTLP_STALE_MARKER_SENDS && { OTLP_STALE_MARKER_SENDS: env.OTLP_STALE_MARKER_SENDS }),
 		// Voice agents (/agent, served by the container): off unless the Worker env enables it; the AGENT_*
 		// knobs are forwarded only when set, so the container defaults apply otherwise.
 		...(env.ENABLE_AGENT && { ENABLE_AGENT: env.ENABLE_AGENT }),
