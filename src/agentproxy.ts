@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { AgentPacer } from './agent/AgentPacer';
+import { MediaPacer } from './MediaPacer';
 import { closeReason } from './agent/closeReason';
 import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
@@ -67,6 +67,11 @@ const MAX_PENDING_OPUS_FRAMES = 500; // ~10 s of 20 ms frames per source
 const MAX_PENDING_PCM_BYTES = AGENT_PCM_SAMPLE_RATE * 2 * 10; // 10 s of return PCM
 const MAX_PENDING_ENDPOINT_MESSAGES = 1000; // JSON messages queued before the customer socket opens
 const MAX_QUEUED_AGENT_FRAMES = 3000; // 60 s of agent audio waiting in the pacer
+/** What the pacer queues per 20 ms of agent audio: the encoded Opus packet and its RFC 6464 level. */
+interface AgentReturnFrame {
+	payload: Uint8Array;
+	audioLevel?: number;
+}
 /** WebSocket close code towards the agent when it broke the media contract. */
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
 
@@ -130,7 +135,7 @@ interface PendingEndpointMessage {
  *    as mediajson `media` events (per-source `start` announcements carry the format and the
  *    provisioning metadata).
  *  - Customer → bridge: `media` events (base64 PCM16 24 kHz, any chunking) are Opus-encoded (DTX),
- *    paced to ~real time (see [AgentPacer]) and returned tagged with the agent's synthetic source
+ *    paced to ~real time (see [MediaPacer]) and returned tagged with the agent's synthetic source
  *    name (from the bridge's `sources.requests`), with talk boundaries inferred from DTX silence
  *    exactly like the translation path.
  *  - `clear` (barge-in) drops the un-released part of the agent's audio; `mark` checkpoints are
@@ -185,7 +190,7 @@ export class AgentProxy extends Emitter {
 	private pendingReturnPcm: Uint8Array = new Uint8Array(0);
 
 	private readonly rtpTimestamper = new RtpTimestamper();
-	private readonly pacer: AgentPacer;
+	private readonly pacer: MediaPacer<AgentReturnFrame>;
 
 	/** Monotonic mediajson wire-envelope sequence for bridge-bound messages. */
 	private envelopeSequenceNumber = 0;
@@ -210,9 +215,12 @@ export class AgentProxy extends Emitter {
 		this.opus = options.encoding === 'audio/opus';
 		this.fanIn = options.fanIn ?? DEFAULT_AGENT_FAN_IN;
 		this.mediaFormat = this.opus ? AGENT_OPUS_MEDIA_FORMAT : AGENT_MEDIA_FORMAT;
-		this.pacer = new AgentPacer({ leadMs: options.paceLeadMs });
-		this.pacer.onFrame = (payload, audioLevel) => this.sendAgentFrame(payload, audioLevel);
+		this.pacer = new MediaPacer<AgentReturnFrame>({
+			leadMs: options.paceLeadMs,
+			onFrame: ({ payload, audioLevel }) => this.sendAgentFrame(payload, audioLevel),
+		});
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
+		this.pacer.onError = (error) => this.runtime.logger.error('agent: failed to send a paced frame', error as Error);
 
 		this.ws.addEventListener('close', () => this.close());
 		this.ws.addEventListener('error', (event) => {
@@ -832,7 +840,7 @@ export class AgentProxy extends Emitter {
 			}
 			return;
 		}
-		this.pacer.push(payload, audioLevel);
+		this.pacer.push({ payload, audioLevel });
 	}
 
 	/** The agent broke the media contract: tell it why and end the session; a redial would only repeat it. */

@@ -124,7 +124,8 @@ export class TranslatorProxy extends Emitter {
 		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
 
 		this.ws.addEventListener('close', () => {
-			this.closeAllConnections();
+			// The bridge is gone: nothing a direction still holds in its pacer can reach anyone.
+			this.closeAllConnections(/* releaseQueuedAudio */ false);
 			this.emit('closed');
 		});
 
@@ -181,12 +182,13 @@ export class TranslatorProxy extends Emitter {
 	/**
 	 * Close every active translation connection — each flushes its final usage delta on close — and
 	 * clear the map. Idempotent (connection close is guarded). Shared by the bridge-ws close handler
-	 * and by {@link close}.
+	 * (which passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
+	 * {@link close}.
 	 */
-	private closeAllConnections(): void {
+	private closeAllConnections(releaseQueuedAudio = true): void {
 		for (const byLanguage of this.connections.values()) {
 			for (const conn of byLanguage.values()) {
-				conn.close();
+				conn.close(releaseQueuedAudio);
 			}
 		}
 		this.connections.clear();
@@ -266,7 +268,8 @@ export class TranslatorProxy extends Emitter {
 			const desiredLanguages = desired.get(inputSourceName);
 			for (const [language, conn] of byLanguage) {
 				if (desiredLanguages === undefined || !desiredLanguages.has(language)) {
-					conn.close();
+					// The bridge no longer has this synthetic source, so audio still queued for it has no listener.
+					conn.close(/* releaseQueuedAudio */ false);
 					byLanguage.delete(language);
 				}
 			}
@@ -336,7 +339,7 @@ export class TranslatorProxy extends Emitter {
 		for (const [inputSourceName, byLanguage] of this.connections) {
 			const conn = byLanguage.get(normalized);
 			if (conn !== undefined) {
-				conn.close();
+				conn.close(/* releaseQueuedAudio */ false);
 				byLanguage.delete(normalized);
 			}
 			if (byLanguage.size === 0) {

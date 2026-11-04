@@ -27,7 +27,7 @@ import { buildServerInfo } from '../serverInfo';
 import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
 import { provideBase64 } from './base64';
-import { parseIntOr } from './env';
+import { parseIntOr, parsePaceLeadMs } from './env';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from './provider';
 
@@ -47,8 +47,14 @@ provideBase64(
 
 // Warn at most once per process about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
+let warnedPaceLead = false;
 
 export function createNodeTranslationRuntime(): TranslationRuntime {
+	const paceLeadMs = parsePaceLeadMs(process.env.TRANSLATION_PACE_LEAD_MS, (message) => {
+		if (warnedPaceLead) return;
+		warnedPaceLead = true;
+		logger.warn(message);
+	});
 	const talkSilenceTimeoutMs = parseIntOr(process.env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS, 350);
 	if (talkSilenceTimeoutMs <= 0 && !warnedTalkTimeoutDisabled) {
 		warnedTalkTimeoutDisabled = true;
@@ -73,6 +79,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			translationUsageUrl: config.translation.usageUrl,
 			usageReportIntervalMs: parseIntOr(process.env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 			talkSilenceTimeoutMs,
+			paceLeadMs,
 		},
 		writeMetric(metric) {
 			writeMetric(undefined, metric as any);

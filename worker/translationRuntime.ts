@@ -26,7 +26,7 @@ import { OpusEncoderWasm } from '../src/OpusEncoder/OpusEncoderWasm';
 import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
-import { parseIntOr, parseIntOrUndefined } from '../src/translate/env';
+import { parseIntOr, parseIntOrUndefined, parsePaceLeadMs } from '../src/translate/env';
 import type { AppliedConfigOverrides } from './configOverride';
 import type { TranslateProvider } from './providerOverride';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from '../src/translate/provider';
@@ -34,6 +34,7 @@ import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from
 // Warn at most once per isolate about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
 let warnedBadIdleClose = false;
+let warnedPaceLead = false;
 
 /**
  * `providerOverride` is the provider an operator override (worker/providerOverride.ts) wrote into the
@@ -64,6 +65,11 @@ export function createWorkerTranslationRuntime(
 		warnedBadIdleClose = true;
 		console.warn(`TRANSLATION_IDLE_CLOSE_MS=${env.TRANSLATION_IDLE_CLOSE_MS} is not a number; using the provider default`);
 	}
+	const paceLeadMs = parsePaceLeadMs(env.TRANSLATION_PACE_LEAD_MS, (message) => {
+		if (warnedPaceLead) return;
+		warnedPaceLead = true;
+		console.warn(message);
+	});
 	return {
 		logger: {
 			// Gate debug on the flag (mirrors the Node LOG_LEVEL behaviour). Unconditional console.debug
@@ -88,6 +94,7 @@ export function createWorkerTranslationRuntime(
 			translationUsageUrl: env.TRANSLATION_USAGE_URL || '',
 			usageReportIntervalMs: parseIntOr(env.TRANSLATION_USAGE_REPORT_INTERVAL_MS, 15000),
 			talkSilenceTimeoutMs,
+			paceLeadMs,
 		},
 		writeMetric() {
 			// No OTLP in the Worker (yet); metrics are a no-op.
