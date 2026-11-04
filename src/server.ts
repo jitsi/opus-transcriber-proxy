@@ -729,7 +729,7 @@ function handleTranslatorConnection(ws: WebSocket, parameters: ISessionParameter
 }
 
 export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionParameters, openaiCustomApiKey?: string) {
-	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, textTranslationProvider: requestedTextTranslationProvider } = parameters;
+	const { sessionId, language, provider: requestedProvider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, xaiSttEndpoint, textTranslationProvider: requestedTextTranslationProvider } = parameters;
 	const connectionId = ++wsConnectionId;
 
 	logger.info(
@@ -739,12 +739,24 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 	let session: TranscriberProxy;
 	let isResume = false;
 
+	// A resumed session keeps its original options, so a changed xAI STT endpoint name is not
+	// applied. Say so, because the caller gets no other signal. Both values passed the shape check.
+	const warnIfEndpointDiffers = (existing: TranscriberProxy): void => {
+		const kept = existing.getOptions().xaiSttEndpoint;
+		if (xaiSttEndpoint !== kept) {
+			logger.warn(
+				`[WS-${connectionId}] Session ${sessionId} keeps its xAI STT endpoint ${kept ?? 'default'}; this connection asked for ${xaiSttEndpoint ?? 'default'}`,
+			);
+		}
+	};
+
 	// Check for existing session (detached OR active)
 	if (sessionId && sessionManager.hasSession(sessionId)) {
 		// Detached session - resume from grace period
 		try {
 			session = sessionManager.reattachSession(sessionId, ws);
 			isResume = true;
+			warnIfEndpointDiffers(session);
 			logger.info(`[WS-${connectionId}] Session ${sessionId} resumed from detached state (original params will be used)`);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
@@ -757,6 +769,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		session = sessionManager.getActiveSession(sessionId)!;
 		session.reattachWebSocket(ws);
 		isResume = true;
+		warnIfEndpointDiffers(session);
 		logger.warn(`[WS-${connectionId}] Duplicate connection for ${sessionId}, force-closing previous connection (original params will be used)`);
 	} else {
 		// Create new session
@@ -785,6 +798,27 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 			// No provider specified, use default
 			provider = getDefaultProvider() || undefined;
 			logger.info(`[WS-${connectionId}] Using default provider: ${provider}`);
+		}
+
+		// A caller that names an xAI STT endpoint asked for it on purpose, for example to keep audio
+		// in a region. So the connection is never moved silently: it closes if the provider is not
+		// xAI (a provider override, a PROVIDERS_PRIORITY change or a missing xAI key can do that),
+		// and it closes if the name is not configured. Neither case falls back to another provider
+		// or to the default endpoint. The name was checked for shape in extractSessionParameters, so
+		// it is safe to log. This runs for a new session only. A resumed session keeps its options.
+		if (xaiSttEndpoint) {
+			let errorMessage: string | undefined;
+			if (provider !== 'xai') {
+				errorMessage = `xai_stt_endpoint needs the xAI provider, but the provider for this connection is ${provider ?? 'none'}`;
+			} else if (!config.xai.sttEndpoints.has(xaiSttEndpoint)) {
+				const configured = [...config.xai.sttEndpoints.keys()].join(', ') || 'none';
+				errorMessage = `Unknown xAI STT endpoint '${xaiSttEndpoint}'. Configured endpoints: ${configured}`;
+			}
+			if (errorMessage) {
+				logger.error(`[WS-${connectionId}] ${errorMessage}`);
+				ws.close(1002, errorMessage.slice(0, 123));
+				return;
+			}
 		}
 
 		// Validate openai_custom requirements early, before creating the session
@@ -844,7 +878,7 @@ export function handleWebSocketConnection(ws: WebSocket, parameters: ISessionPar
 		// Create transcription session
 		// Within this session, multiple participants (tags) can send audio
 		// Each tag gets its own backend connection, and transcripts are shared between tags
-		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, textTranslationProvider });
+		session = new TranscriberProxy(ws, { language, sessionId, provider, encoding, sendBack, sendBackInterim, tags, openaiCustomUrl, openaiCustomApiKey, deepgramMipOptOut, xaiEndpointing, xaiSmartTurn, xaiSmartTurnTimeout, xaiGranularFinals, xaiGranularStabilityMs, xaiGranularGuardWords, xaiSttEndpoint, textTranslationProvider });
 
 		// Register the new session
 		sessionManager.registerSession(sessionId, session);
@@ -869,6 +903,13 @@ server.listen(PORT, HOST, () => {
 	// Said on stderr when the config loaded, before the logger existed.
 	for (const warning of configWarnings) {
 		logger.warn(warning);
+	}
+	// Say which named xAI STT endpoints are live, so an operator can confirm a dropped entry. A
+	// connection that names an endpoint that is missing here closes with 1002.
+	if (config.xai.sttEndpoints.size > 0) {
+		logger.info(`XAI_STT_ENDPOINTS loaded: ${[...config.xai.sttEndpoints.keys()].join(', ')}`);
+	} else if (process.env.XAI_STT_ENDPOINTS?.trim()) {
+		logger.error('XAI_STT_ENDPOINTS is set but no entry is usable: every connection that names an xAI STT endpoint will close with 1002');
 	}
 	if (config.enableAgent && !provisioning().enabled) {
 		logger.warn('AGENT_PROVISIONING_URL is not set: dial configs cannot be fetched and the media leg is not reported; only the dev ?endpoint= path can dial.');

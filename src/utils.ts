@@ -16,6 +16,13 @@
 
 export type AudioEncoding = 'opus' | 'ogg-opus';
 
+export const ENDPOINT_NAME_MAX_LENGTH = 32;
+/**
+ * The shape of an endpoint name: lower case letters, digits and hyphens, at most 32 characters.
+ * Keep it the same as ENDPOINT_NAME_RE in worker/vars.ts, which cannot import from src/.
+ */
+export const ENDPOINT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
 export interface ISessionParameters {
 	url: URL;
 	sessionId?: string;
@@ -37,6 +44,11 @@ export interface ISessionParameters {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/**
+	 * Per-connection xAI STT endpoint: a name from XAI_STT_ENDPOINTS (undefined = XAI_STT_URL).
+	 * Well-formed here. server.ts checks that the name is configured.
+	 */
+	xaiSttEndpoint?: string;
 	/**
 	 * Per-connection text-translation provider (undefined = the first available entry of
 	 * TEXT_TRANSLATION_PROVIDERS_PRIORITY). Validated in server.ts, like the transcription `provider`.
@@ -113,6 +125,20 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	const xaiGranularFinals = granularFinalsParam === null ? undefined : granularFinalsParam === 'true';
 	const xaiGranularStabilityMs = parseIntParam('xai_granular_stability_ms');
 	const xaiGranularGuardWords = parseIntParam('xai_granular_guard_words');
+	// Per-connection xAI STT endpoint: the name of an endpoint that the operator configured in
+	// XAI_STT_ENDPOINTS, never a URL. A caller that names an endpoint may do so to keep audio in a
+	// region, so an empty value is rejected like any other malformed name: it would otherwise mean
+	// the default endpoint, for example when a URL template leaves a variable unresolved. The
+	// error does not echo the value, to keep caller text out of the response and the logs. Whether
+	// the name is configured is checked in server.ts, which has the config.
+	const rawXaiSttEndpoint = parsedUrl.searchParams.get('xai_stt_endpoint');
+	let xaiSttEndpoint: string | undefined;
+	if (rawXaiSttEndpoint !== null) {
+		xaiSttEndpoint = rawXaiSttEndpoint.toLowerCase();
+		if (!ENDPOINT_NAME_RE.test(xaiSttEndpoint)) {
+			throw new Error(`Invalid xai_stt_endpoint parameter. Use 1 to ${ENDPOINT_NAME_MAX_LENGTH} characters: a-z, 0-9 and hyphen. Start with a letter or digit.`);
+		}
+	}
 	// Per-connection text-translation provider override.
 	const textTranslationProvider = parsedUrl.searchParams.get('text_translation_provider')?.toLowerCase();
 
@@ -138,6 +164,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 		xaiGranularFinals,
 		xaiGranularStabilityMs,
 		xaiGranularGuardWords,
+		xaiSttEndpoint,
 		textTranslationProvider: textTranslationProvider ?? undefined,
 	};
 }

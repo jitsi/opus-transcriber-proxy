@@ -907,7 +907,22 @@ export class XAIBackend implements TranscriptionBackend {
 			params.set('smart_turn_timeout', smartTurnTimeout.toString());
 		}
 
-		return `${this.wsUrl}?${params.toString()}`;
+		return `${this.resolveSttUrl(backendConfig.xaiSttEndpoint)}?${params.toString()}`;
+	}
+
+	/**
+	 * The STT URL for this connection. No name means the default, XAI_STT_URL. A name selects an
+	 * entry of XAI_STT_ENDPOINTS, so a caller cannot send the API key to a host of its choosing.
+	 * A name that is not configured is an error and never a fallback to the default: the caller
+	 * asked for that endpoint on purpose, for example to keep audio in a region. server.ts rejects
+	 * such a name before the session starts, so this throw is the backstop. The name has the shape
+	 * that extractSessionParameters allows, so it is safe in the message.
+	 */
+	private resolveSttUrl(endpointName: string | undefined): string {
+		if (!endpointName) return this.wsUrl;
+		const url = config.xai.sttEndpoints.get(endpointName);
+		if (!url) throw new Error(`Unknown xAI STT endpoint "${endpointName}"`);
+		return url;
 	}
 
 	/**

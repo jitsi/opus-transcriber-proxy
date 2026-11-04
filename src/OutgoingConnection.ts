@@ -201,6 +201,7 @@ export class OutgoingConnection {
 			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
 			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
 			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+			backendConfig.xaiSttEndpoint = this.options.xaiSttEndpoint;
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -432,6 +433,7 @@ export class OutgoingConnection {
 		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
 		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
 		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+		backendConfig.xaiSttEndpoint = this.options.xaiSttEndpoint;
 
 		try {
 			const connectStartTime = Date.now();

@@ -15,7 +15,7 @@
  */
 
 import dotenv from 'dotenv';
-import { validateTags } from './utils';
+import { ENDPOINT_NAME_RE, validateTags } from './utils';
 import { parseIntOrUndefined } from './translate/env';
 
 // Load environment variables from .env file
@@ -46,6 +46,54 @@ function httpUrlOrEmpty(name: string, raw: string | undefined, checked: boolean)
 	if (protocol === 'http:' || protocol === 'https:') return value;
 	warnConfig(`${name}=${JSON.stringify(value)} is not an http(s) URL; ignoring it`);
 	return '';
+}
+
+/**
+ * A JSON object that maps endpoint names to wss URLs, for example
+ * `{"eu":"wss://eu-west-1.api.x.ai/v1/stt"}`. A connection picks an entry by name, so a caller can
+ * only choose among the URLs that the operator configured. An unusable entry is dropped with a
+ * warning that names the entry but never prints the URL: the Worker hands the variable to every
+ * container, so one bad entry must not stop the others, and a URL in a log can carry credentials.
+ */
+export function parseEndpointMap(name: string, raw: string | undefined): ReadonlyMap<string, string> {
+	const map = new Map<string, string>();
+	if (!raw || raw.trim() === '') return map;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		warnConfig(`${name} is not valid JSON; ignoring it`);
+		return map;
+	}
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		warnConfig(`${name} must be a JSON object that maps names to wss URLs; ignoring it`);
+		return map;
+	}
+	for (const [key, value] of Object.entries(parsed)) {
+		const label = JSON.stringify(key.slice(0, 40));
+		if (!ENDPOINT_NAME_RE.test(key)) {
+			warnConfig(`${name} has the entry name ${label}, which is not 1 to 32 characters of a-z, 0-9 and hyphen; ignoring that entry`);
+			continue;
+		}
+		// The URL is logged when a connection opens, so it may carry no credentials, and a query
+		// string would corrupt the stream URL that XAIBackend builds from it. The Worker applies the
+		// same rule to a KV override (`url()` in worker/vars.ts).
+		let usable = false;
+		if (typeof value === 'string') {
+			try {
+				const url = new URL(value);
+				usable = url.protocol === 'wss:' && !url.username && !url.password && !value.includes('?') && !value.includes('#');
+			} catch {
+				// not a URL: reported below
+			}
+		}
+		if (!usable) {
+			warnConfig(`${name} entry ${label} is not a wss URL without credentials, query or fragment; ignoring that entry`);
+			continue;
+		}
+		map.set(key, value as string);
+	}
+	return map;
 }
 
 /**
@@ -135,6 +183,9 @@ export const config = {
 	xai: {
 		apiKey: process.env.XAI_API_KEY || '',
 		sttUrl: process.env.XAI_STT_URL || 'wss://api.x.ai/v1/stt',
+		// Named STT endpoints. A connection that carries `xai_stt_endpoint=<name>` connects to that
+		// entry instead of `sttUrl`. server.ts rejects a name that is not in the map.
+		sttEndpoints: parseEndpointMap('XAI_STT_ENDPOINTS', process.env.XAI_STT_ENDPOINTS),
 		language: process.env.XAI_LANGUAGE || undefined,
 		diarize: process.env.XAI_DIARIZE === 'true',
 		includeLanguage: process.env.XAI_INCLUDE_LANGUAGE === 'true',
