@@ -54,6 +54,10 @@ function httpUrlOrEmpty(name: string, raw: string | undefined, checked: boolean)
  * only choose among the URLs that the operator configured. An unusable entry is dropped with a
  * warning that names the entry but never prints the URL: the Worker hands the variable to every
  * container, so one bad entry must not stop the others, and a URL in a log can carry credentials.
+ *
+ * The `x.ai` host rule and the default-port rule apply only to a KV override (`url()` in
+ * worker/vars.ts). Here any `wss` URL is accepted, like XAI_STT_URL: the container env is set by
+ * the operator, and KV is the path that a less trusted edit can reach.
  */
 export function parseEndpointMap(name: string, raw: string | undefined): ReadonlyMap<string, string> {
 	const map = new Map<string, string>();
