@@ -16,6 +16,8 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
+import { resolveConfigOverrides } from './configOverride';
+import { parseIntOr } from '../src/translate/env';
 
 /**
  * Container metadata tracked by the coordinator
@@ -34,6 +36,16 @@ interface CoordinatorConfig {
 	maxConnectionsPerContainer: number;
 	minContainers: number;
 	scaleDownIdleTime: number; // milliseconds
+}
+
+/** The coordinator's settings from an env (the Durable Object's own, or one with KV overrides overlaid). */
+export function coordinatorConfig(env: Pick<Env, 'MAX_CONNECTIONS_PER_CONTAINER' | 'MIN_CONTAINERS' | 'SCALE_DOWN_IDLE_TIME'>): CoordinatorConfig {
+	// parseIntOr: unset, empty (a null KV override) or non-numeric falls back to the default.
+	return {
+		maxConnectionsPerContainer: parseIntOr(env.MAX_CONNECTIONS_PER_CONTAINER, 10),
+		minContainers: parseIntOr(env.MIN_CONTAINERS, 2),
+		scaleDownIdleTime: parseIntOr(env.SCALE_DOWN_IDLE_TIME, 600000), // 10 minutes
+	};
 }
 
 /**
@@ -57,12 +69,8 @@ export class ContainerCoordinator extends DurableObject<Env> {
 		this.sessionToContainer = new Map();
 		this.nextContainerId = 0;
 
-		// Load configuration from env with defaults
-		this.config = {
-			maxConnectionsPerContainer: parseInt(env.MAX_CONNECTIONS_PER_CONTAINER || '10', 10),
-			minContainers: parseInt(env.MIN_CONTAINERS || '2', 10),
-			scaleDownIdleTime: parseInt(env.SCALE_DOWN_IDLE_TIME || '600000', 10), // 10 minutes
-		};
+		// Load configuration from env with defaults; `fetch` refreshes it with the KV config overrides.
+		this.config = coordinatorConfig(env);
 
 		// Initialize from durable storage
 		this.state.blockConcurrencyWhile(async () => {
@@ -283,6 +291,13 @@ export class ContainerCoordinator extends DurableObject<Env> {
 		const path = url.pathname;
 
 		try {
+			// The KV config overrides (worker/configOverride.ts) for MAX_CONNECTIONS_PER_CONTAINER,
+			// MIN_CONTAINERS and SCALE_DOWN_IDLE_TIME. This object's env never sees them, so it reads
+			// them itself, like the Worker does; a KV failure leaves the env values. An override of
+			// MIN_CONTAINERS affects only scale-down: the initial containers are created in the
+			// constructor, from this object's own env.
+			this.config = coordinatorConfig((await resolveConfigOverrides(this.env)).env);
+
 			if (path === '/assign' && request.method === 'POST') {
 				const { sessionId } = await request.json<{ sessionId: string }>();
 				const containerId = await this.assignContainer(sessionId);

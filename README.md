@@ -341,6 +341,38 @@ npm run cf:deploy
 
 See [CLOUDFLARE_DEPLOYMENT.md](CLOUDFLARE_DEPLOYMENT.md) for setup instructions.
 
+#### Runtime config overrides (KV)
+
+With a `CONFIG_KV` namespace bound, a KV entry can override a Worker variable without a release.
+The key is `config:<VARIABLE>`. The value is a JSON object:
+
+```json
+{"value": 1200, "until": 1767268800000, "reason": "tuning"}
+```
+
+- `value` must have the type of the variable. `null` removes the variable, so its default applies.
+- `until` is a Unix time in milliseconds. `-1` means no expiry.
+
+```bash
+wrangler kv key put config:XAI_ENDPOINTING '{"value":1200,"until":-1}' --namespace-id=<id> --remote
+```
+
+Only some variables can be overridden. `worker/vars.ts` lists every variable and marks the ones
+KV can override, with their type. Secrets and provider selection cannot be overridden this way.
+The Worker applies a change within 90 seconds, because KV and the Worker both cache the entries. A
+container applies it the next time it starts.
+
+The Worker logs an entry that is not valid and ignores it. If a KV read fails, the Worker keeps
+the entries it read last and tries again after 5 seconds. It keeps them until KV answers again.
+During a KV outage, an override that you delete stays in effect until KV recovers.
+
+Write access to the KV namespace gives the same control as editing the Worker variables. For
+example, an override can turn off an endpoint. KV cannot turn on the debug dumps of audio and
+transcripts, an override of `DEEPGRAM_MIP_OPT_OUT` can only set it to `true`, and an override of an
+xAI URL must name an `x.ai` host, so it cannot send the xAI key to another host. Give write access only
+to the people who may deploy the Worker. See "Config overrides" in
+[CLAUDE.md](CLAUDE.md) for the details.
+
 ## Development
 
 ```bash

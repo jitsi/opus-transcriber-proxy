@@ -23,6 +23,7 @@ import { selectContainerInstance } from './routing';
 import { handleWebSocketWithDispatcher } from './sessionProxy';
 import { startContainer, startResult } from './startRetry';
 import { containerFailureReason, containerStartPoints, containerUnreachablePoints, countLater, requestColo } from './metrics';
+import { logConfigOverrideDecisions, resolveConfigOverrides } from './configOverride';
 import { applyProviderOverrides, TEXT_TRANSLATION_PROVIDER_SLOT, TRANSCRIBE_PROVIDER_SLOT, TRANSLATE_PROVIDER_SLOT, type AppliedOverrides, type TranslateProvider } from './providerOverride';
 
 // wrangler resolves Durable Object classes from the entry module; the message types are
@@ -45,6 +46,23 @@ export default {
 		// Computed here rather than further down because the provider-override gate below needs it.
 		const isWebSocketUpgrade = request.headers.get('Upgrade')?.toLowerCase() === 'websocket';
 
+		// The operator config overrides (worker/configOverride.ts): KV entries that take precedence
+		// over the variables worker/vars.ts marks overridable. Resolved first and assigned to `env`,
+		// so that every read below — the endpoint gates, the provider-override slots, routing, the
+		// dispatcher choice, the Worker-hosted /translate and the env of a container started here —
+		// sees the effective value. Every failure inside degrades to the Worker variable. Decisions
+		// are logged for upgrades only, so health probes do not repeat them.
+		// The try keeps that promise against a bug too: a throw here would fail every request.
+		let configOverrides: Awaited<ReturnType<typeof resolveConfigOverrides<Env>>> = { env, applied: {}, decisions: [] };
+		try {
+			configOverrides = await resolveConfigOverrides(env);
+			if (isWebSocketUpgrade) logConfigOverrideDecisions(configOverrides.decisions);
+		} catch (error) {
+			console.error(`Config overrides not applied: ${error instanceof Error ? error.message : String(error)}`);
+			configOverrides = { env, applied: {}, decisions: [] };
+		}
+		env = configOverrides.env;
+
 		// Handle /translate entirely in this Worker (no container). The accepted WebSocket keeps the
 		// Worker alive for the session; the bridge's pings keep it active. Transcribe stays on the
 		// container path below (Worker outbound-connection limits — translate's fan-out is bounded).
@@ -63,7 +81,7 @@ export default {
 				request = result.request;
 				translateOverride = result.applied.translate as TranslateProvider | undefined;
 			}
-			return handleTranslate(request, env, ctx, translateOverride);
+			return handleTranslate(request, env, ctx, translateOverride, configOverrides.applied);
 		}
 
 		// Handle stats endpoint for monitoring
@@ -142,7 +160,7 @@ export default {
 						// it explicitly with the name the Worker routed by keeps a request-driven start
 						// independent of whether the Durable Object's id arrived with its name.
 						startOptions: {
-							envVars: { ...buildContainerEnvVars(env), CONTAINER_INSTANCE_NAME: containerInstanceId },
+							envVars: { ...buildContainerEnvVars(env, configOverrides.applied), CONTAINER_INSTANCE_NAME: containerInstanceId },
 						},
 						cancellationOptions: {
 							waitInterval: 100, // Poll every 100ms (default: 1000ms)
@@ -194,7 +212,7 @@ export default {
 
 		// If dispatcher is enabled and this is a WebSocket upgrade, intercept the connection
 		if (useDispatcher && isWebSocketUpgrade && env.DISPATCHER_DO) {
-			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, overrides);
+			return handleWebSocketWithDispatcher(request, container, env, ctx, sessionId, overrides, configOverrides.applied);
 		}
 
 		// Forward request directly to container (pass-through mode)

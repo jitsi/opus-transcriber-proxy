@@ -543,10 +543,11 @@ See README.md for complete configuration reference.
 
 The `worker/` directory contains:
 - `index.ts` - Cloudflare Worker entry point: the fetch router, plus the Durable Object class re-exports wrangler needs
-- `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, which marks its own failure responses with `X-Container-Failure`; `/status` idle probe)
+- `TranscriberContainer.ts` - the container Durable Object (passthrough `fetch` override, which marks its own failure responses with `X-Container-Failure`; `/status` idle probe; `startAndWaitForPorts` adopts the `SLEEP_AFTER` the Worker starts it with, so a KV config override reaches it)
 - `routing.ts` - `selectContainerInstance` (session / pool / shared / autoscale)
 - `sessionProxy.ts` - `handleWebSocketWithDispatcher`: the client<->container pipe with dispatcher forwarding and the keepalive loop. Every socket it holds (client, container, Dispatcher DO) gets a reply to a received close frame, since our compatibility date has no automatic reply; a close from a dispatcher socket that has already been replaced does not start another reconnect. A socket left CLOSING is not free: workerd runs every accepted socket's read loop as a `waitUntil` task, so one whose peer never replies is cancelled 30 s after the invocation ends with the "waitUntil() tasks did not complete" warning — that warning once per session means a peer (the Dispatcher DO is the candidate) is not answering our close. The dispatcher socket's close is logged at `info` only when it is the DO's 1000 reply to a close we sent (`dispatcherCloseSent`); every other close is an `error` (mid-session the DO dropping us, which the backoff reconnect recovers from; after our close a DO that vanished instead of replying). A dispatcher socket dialled after the session ended (the flush-on-close reconnect) gets no listeners, so its close is not logged at all. `closeCode.ts` holds `sendableCloseCode`, shared with `dispatcherForwarder.ts`, the `/translate` path's dispatcher socket, which replies to a received close frame the same way
-- `containerEnv.ts` - container env vars, instance name, the `worker` info block
+- `vars.ts` - **every Worker variable, defined once**: how it is forwarded to the container and whether (and with which value type) it can be overridden from KV. `Env` takes its variable fields from this table
+- `containerEnv.ts` - container env vars (a loop over `vars.ts`), instance name, the `worker` info block
 - `startRetry.ts` / `metrics.ts` - the container start retry, and the OTLP counters the Worker pushes for each start
 - `ContainerCoordinator.ts` - Manages container routing (pool vs session mode)
 - `handleTranslate.ts` - Worker-hosted `/translate` (no container; see Translation runtime abstraction)
@@ -554,6 +555,7 @@ The `worker/` directory contains:
 - `closeCode.ts` - `sendableCloseCode`, the close codes workerd will put in a close frame, shared by `sessionProxy.ts` and `dispatcherForwarder.ts`
 - `translationRuntime.ts` / `outboundWebSocket.ts` / `opusWasmSource.ts` - the Worker `TranslationRuntime`
 - `providerOverride.ts` - the KV-backed provider overrides: transcription, speech-to-speech translation, text translation (see below)
+- `configOverride.ts` - the KV-backed config overrides of the variables `vars.ts` marks overridable (see below); `kvEntry.ts` holds the entry parsing and `until` check both kinds share
 - Uses `@cloudflare/containers` to run the Node.js server for `/transcribe`
 
 Two routing modes:
@@ -648,8 +650,9 @@ in parallel (`applyProviderOverrides`).
   `?provider=<primary>` (rule 1 makes that immune to the override).
 - A standalone container deployment with no Worker in front gets no override.
 - **Only WebSocket upgrades on `/transcribe` and `/translate` are considered.** Health and status
-  probes, `/agent` upgrades and plain GETs are forwarded untouched, so they cost no KV read and
-  cannot log an override decision.
+  probes, `/agent` upgrades and plain GETs are forwarded untouched, so they cost no provider-override
+  KV read and cannot log an override decision. (The config overrides below are read on every
+  request, since any request can start a container.)
 - **For the two `/transcribe` slots, the target provider's key must already have been set when the
   running containers started.** The Worker checks its own current env, but a container validates
   against the env it was started with (`buildContainerEnvVars`). Adding a provider's secret and
@@ -670,6 +673,136 @@ the `worker` block `sessionProxy.ts` adds, which exists only on the dispatcher p
 (`USE_DISPATCHER`) — with pass-through routing those two are visible in the Worker log but not in
 `info`; and `worker.providerOverride` for the `translate` slot, in the `info` the Worker-hosted
 `/translate` builds itself (`worker/translationRuntime.ts`), on every routing mode.
+
+### Config overrides (`worker/configOverride.ts`)
+
+An operator lever to change a Worker variable at runtime, **without a release**. A KV entry under
+`config:<NAME>` in `CONFIG_KV` takes precedence over the Worker variable `<NAME>`. Only the
+variables `worker/vars.ts` declares with a `kv` type are read; the key is always derived from the
+name.
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<account id for this environment>
+# Until a computed time (milliseconds):
+wrangler kv key put config:XAI_ENDPOINTING \
+  "{\"value\":1200,\"until\":$(( $(date +%s) * 1000 + 7200000 )),\"reason\":\"tuning\"}" \
+  --namespace-id=<id> --remote
+# With no expiry:
+wrangler kv key put config:LOG_LEVEL '{"value":"debug","until":-1}' --namespace-id=<id> --remote
+# Remove the override (the Worker variable applies again):
+wrangler kv key delete config:LOG_LEVEL --namespace-id=<id> --remote
+```
+
+Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<optional>"}`.
+- `value` must have the variable's type: `bool` (`true`/`false`), `int` (with a lower bound where
+  one makes sense; `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` above the 100 ms RTP gap threshold),
+  `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, ...), a JSON object (`OPENAI_TURN_DETECTION`), a
+  `wss` URL on `x.ai` or a subdomain, on the default port, with no credentials, query or fragment
+  (`XAI_STT_URL`, `XAI_TRANSLATION_URL`: both carry the xAI key as a bearer and every conference's
+  audio, and the value is logged and reported in `info`), a duration (`SLEEP_AFTER`: the SDK's `"7m"` format,
+  from 4 minutes to 24 hours, because the SDK throws on any other form, the keepalive renews every
+  180 s, and an idle container is billed), or a string. `null` unsets the variable, so its default
+  applies. Two types check the value against the Worker's own env (the `env` argument of
+  `KvType.normalize`): `ROUTING_MODE=autoscale` is refused when the Worker has no
+  `CONTAINER_COORDINATOR` binding, since every upgrade would then fail; and `AGENT_ALLOWED_HOSTS`
+  (an empty allowlist allows any public host) must hold at least one host, cannot be `null`, is
+  written back normalized as the container reads it, and may only narrow a non-empty Worker list:
+  each entry must be a host or subdomain of a Worker entry. Delete the key to restore the Worker
+  value.
+- `until` is **mandatory** and in **milliseconds**; `-1` means no expiry. There is **no cap**,
+  unlike the provider overrides (whose 24 h cap forces a re-test of the primary). A `until` in
+  seconds (below `MIN_PLAUSIBLE_UNTIL_MS`) or in microseconds or nanoseconds (above
+  `MAX_PLAUSIBLE_UNTIL_MS`, the year 2286) is refused as malformed, for both kinds of override. Log
+  messages format a time with `isoTime`, which cannot throw.
+
+**How it works.** `index.ts` calls `resolveConfigOverrides(env)` first, on every request, and
+assigns the result to `env`: the Worker's env with the applied overrides overlaid. Everything after
+it reads that **effective env** — the `ENABLE_TRANSLATE` gate, the provider-override slots, routing,
+the dispatcher choice, the Worker-hosted `/translate`, and `buildContainerEnvVars` for a container it
+starts. All keys are read in one bulk KV read (split at `KV_BULK_GET_MAX_KEYS`, 100), edge-cached
+for 60 s like the provider overrides. **KV bills a bulk read per key read**, so the isolate also
+keeps the stored strings for `CONFIG_CACHE_TTL_MS` (30 s) and reads KV at most once per period;
+each request still decides the entries afresh, so an `until` takes effect on time. A change can
+therefore take up to 90 s to reach every request. The cache has one slot per KV binding object, and
+requests that miss it at the same time share one read. Decisions are logged on upgrades only
+(applied and expired at info, with `console.log`; mistakes at error), so health probes do not repeat
+them. The resolve and the log run inside a try in `index.ts`, so a bug in them cannot fail a
+request either: the request then goes ahead with the Worker's own env.
+
+**Every rejection degrades to the Worker variable**, for that one variable: malformed JSON, no
+`value`, a value of the wrong type (reported even on an expired entry), a bad `until`, or a KV read
+failure. A typo in KV cannot take the service down. After a failed read the isolate keeps the
+entries it last read, if any (their `until` is still checked per request), and reads KV again only
+after `KV_FAILURE_RETRY_MS` (5 s), so a KV outage does not make every request wait for a failing
+read. It keeps them until KV answers again, however long that takes: the overrides are incident
+levers (an endpoint turned off, a narrowed allowlist), and an outage must not silently drop them.
+The error decision names their age ("keeping the entries read N s ago"). The cost is that an
+override deleted during an outage stays in effect until the first good read drops it.
+
+**When an override takes effect** depends on who reads the variable:
+- **The Worker** (`ROUTING_MODE`, `CONTAINER_POOL_SIZE`, `USE_DISPATCHER`, `ENABLE_TRANSLATE`) and
+  **the Worker-hosted `/translate`** (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_*`,
+  `TRANSLATION_*`, `DEBUG`): the next request, after the edge cache.
+- **The container** (most variables): its **next start**. A container reads its env once, so a
+  running one keeps what it started with. With `ROUTING_MODE=session` that is the next conference;
+  in the other routing modes, and for a session that reconnects to its container, a running
+  container keeps serving with its old values. This includes the endpoint gates other than
+  `ENABLE_TRANSLATE`: `ENABLE_TRANSCRIBE`, `ENABLE_AGENT` and `ENABLE_TEXT_TRANSLATION` are enforced
+  inside the container, so an override of them is not an immediate kill switch. A container started
+  by the SDK's own start-on-fetch path (`TranscriberContainer.envVars`, a safety net) gets the plain
+  Worker env.
+- **`SLEEP_AFTER`** is read by the container Durable Object, whose own env never sees KV. The
+  Worker passes the effective value in the start call's env, and
+  `TranscriberContainer.startAndWaitForPorts` adopts it; the Worker calls that on every request it
+  routes to that object, so a running container picks up a change at its next activity-timer
+  renewal. A start env with no
+  `SLEEP_AFTER` restores the object's own value, so an override does not outlive its KV entry.
+- **The autoscale coordinator** (`MAX_CONNECTIONS_PER_CONTAINER`, `MIN_CONTAINERS`,
+  `SCALE_DOWN_IDLE_TIME`) resolves the same KV entries itself at the start of each request. An
+  override of `MIN_CONTAINERS` affects only scale-down: the coordinator creates its initial
+  containers in its constructor, from its own env, which never sees KV.
+- Changing `ROUTING_MODE` or `CONTAINER_POOL_SIZE` moves new sessions to other containers; a session
+  that reconnects after the change may land on a container that does not hold its detached state.
+
+**Visibility.** The container is started with `CONFIG_OVERRIDES`, a JSON record of the overrides
+it got; it logs it at start (`Config overrides from KV at start`) and reports it as
+`configOverrides` in its `info` message (`src/serverInfo.ts`). Those are what that container runs
+with. The Worker reports the overrides in effect for the current request as
+`worker.configOverrides`: on the dispatcher path's `worker` block and in the Worker-hosted
+`/translate` info. The two differ when an entry changed after the container started.
+
+**Write access to `CONFIG_KV` is the same trust as editing the Worker variables.** An override can
+move xAI traffic to another `x.ai` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable `/agent`,
+narrow the agent host allowlist, and turn off an endpoint. Give write access to the
+namespace only to the people who may deploy the Worker.
+
+**What is not overridable, and why** (each is a `vars.ts` entry with no `kv`):
+- Secrets (`*_API_KEY`, `*_CREDENTIALS_JSON`, `AGENT_SHARED_SECRET`, `AGENT_PROVISIONING_TOKEN`,
+  `OTLP_HEADERS`): KV is not a secret store, and a container validates provider keys against the env
+  it started with.
+- Provider selection (`PROVIDERS_PRIORITY`, `TRANSLATION_PROVIDER`,
+  `TEXT_TRANSLATION_PROVIDERS_PRIORITY`): the provider overrides do it with a credential check and
+  per-connection pinning; two mechanisms would conflict.
+- Endpoints other than the two xAI URLs (`TEXT_TRANSLATION_*_URL`, `AGENT_PROVISIONING_*`,
+  `TRANSLATION_USAGE_URL`, `OTLP_ENDPOINT`): they carry credentials or customer data. The two xAI
+  URLs carry them too, which is why their override may name only an `x.ai` host: it can move xAI
+  traffic to another xAI endpoint (a region, a new path) but cannot send it anywhere else.
+- The security posture of `openai_custom` and `/agent` (`ENABLE_OPENAI_CUSTOM_PROVIDER`,
+  `OPENAI_CUSTOM_REQUIRE_WSS`, `AGENT_REQUIRE_WSS`, `AGENT_ALLOW_PRIVATE_ENDPOINTS`,
+  `AGENT_ALLOW_UNAUTHENTICATED`): loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is
+  overridable, as an incident lever to tighten the allowlist.
+- The debug dumps (`DUMP_WEBSOCKET_MESSAGES`, `DUMP_TRANSCRIPTS`, `DUMP_BASE_PATH`): they record
+  every conference's audio and transcripts. `DEEPGRAM_MIP_OPT_OUT` is overridable, but only to
+  `true` and never to `null`: an override may opt out of Deepgram's model improvement programme,
+  not back in.
+- `DEEPGRAM_TAGS` (the container refuses to start on a bad tag), `ENABLE_TEXT_TRANSLATION_STUB`,
+  `OTLP_ENV`, `OTLP_RESOURCE_ATTRIBUTES`, `OTLP_STALE_MARKER_SENDS`, `SOURCE_IMAGE_TAG` (set by the
+  translate deploy to the codec's image tag). `PORT`/`HOST` are not variables: the container must listen
+  where `TranscriberContainer.defaultPort` expects it.
+
+**Adding a Worker variable**: add one entry to `WORKER_VARS` in `worker/vars.ts` — `container:
+'if-set'` (forwarded when set) or `{ default }` (always forwarded), and a `kv` type if it may be
+overridden. Do not add it to `env.d.ts` or to `buildContainerEnvVars`; both follow the table.
 
 ## Common Patterns
 
@@ -795,6 +928,9 @@ worker/
 ├── outboundWebSocket.ts       # Fetch-upgrade outbound WebSocket wrapped as IWebSocket
 ├── opusWasmSource.ts          # Import-loaded WASM binding for the Worker
 ├── providerOverride.ts        # KV-backed provider overrides, one slot per multi-backend service (operator lever)
+├── configOverride.ts          # KV-backed config overrides: config:<NAME> over the Worker variable (operator lever)
+├── kvEntry.ts                 # KV entry parsing and the `until` check, shared by both kinds of override
+├── vars.ts                    # Every Worker variable: container forwarding + KV overridability
 └── env.d.ts                   # Worker Env types
 
 scripts/check-worker-safe.mjs  # CI guard: the translation core must stay Worker-safe
@@ -978,6 +1114,8 @@ the CC panel ignores.
 }
 ```
 An informational/observability message describing the running build and effective session config. The block above is a composite showing every field that can appear; several are conditional and never all co-occur — e.g. the `worker` block is added only on the Worker path, and `sourceImageTag` is emitted by any runtime that has `SOURCE_IMAGE_TAG` in its environment, which in practice is only the translate-Worker deploy (the container shown by the `cloudflare-container` runtime here omits it, since code and codec are co-versioned in one image). Built by `src/serverInfo.ts` (`buildServerInfo`) and sent from `TranscriberProxy.sendServerInfo()` at the end of `setupWebSocketListeners()` (so on both initial connect and reattach). `gitHash` comes from `src/buildInfo.ts` — the `__GIT_HASH__` constant baked in at bundle time by `build.mjs` (esbuild `define`), falling back to the `GIT_HASH` env var then `'dev'` under tsx. `sourceImageTag` (emitted by any runtime with `SOURCE_IMAGE_TAG` set — in practice the translate Worker, whose WASM Opus codec is sourced from a Docker image tag chosen independently of the worker-code ref at deploy) reports that codec image tag, so a code/WASM version mismatch is visible against `gitHash`. The CF Worker augments the message **in-place** with a `worker` block (deployed worker version via the `version_metadata`/`CF_VERSION_METADATA` binding, edge `colo`/`country`/`city` from `request.cf`, `routingMode`, and `providerOverride` / `textTranslationProviderOverride` when a KV provider override changed this connection's transcription or text-translation provider — see **Provider overrides**) before forwarding it to the client. The client (JVB) may send its own `info` message (application/version/region); the proxy just logs it. An old client that doesn't know the `info` event type drops it harmlessly (its polymorphic parse fails and is caught).
+
+Two optional fields report the KV config overrides (see **Config overrides**): `configOverrides` (top level, from the container) is the record of the overrides that container was started with, and `worker.configOverrides` is the set in effect for the current request. Each is a map of variable name to value, present only when non-empty.
 
 The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, the connection's speech-to-speech `provider`, and a `worker` block with version/colo and, when the KV `translate` override chose this connection's provider, `providerOverride` — see **Provider overrides**). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
 

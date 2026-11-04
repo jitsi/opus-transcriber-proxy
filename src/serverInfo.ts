@@ -18,6 +18,41 @@ import { config, getAvailableProviders, getDefaultProvider, type Provider } from
 import { GIT_HASH } from './buildInfo';
 
 /**
+ * The KV config overrides this process was started with: the Cloudflare Worker resolves them
+ * (worker/configOverride.ts), overlays them on the env it starts the container with, and lists
+ * them in CONFIG_OVERRIDES as a JSON object of variable name to value. The values are already in
+ * the process env; this is only the record of which ones came from KV. Empty when unset or
+ * malformed (it is informational, so a bad value must not break anything). Parsed once per value,
+ * since every `info` message reads it.
+ */
+export function startupConfigOverrides(): Record<string, string> {
+	const raw = process.env.CONFIG_OVERRIDES;
+	if (raw !== parsedRaw) {
+		parsedRaw = raw;
+		parsedOverrides = parseConfigOverrides(raw).overrides;
+	}
+	return parsedOverrides;
+}
+
+let parsedRaw: string | undefined;
+let parsedOverrides: Record<string, string> = {};
+
+/** Parse a CONFIG_OVERRIDES value; `error` says why a set value is unusable. */
+export function parseConfigOverrides(raw: string | undefined): { overrides: Record<string, string>; error?: string } {
+	if (!raw) return { overrides: {} };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (e) {
+		return { overrides: {}, error: `not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		return { overrides: {}, error: 'not a JSON object' };
+	}
+	return { overrides: Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === 'string')) as Record<string, string> };
+}
+
+/**
  * Build the `info` message this server sends to the client (JVB) right after the WebSocket
  * connection is established. It carries build, deployment and per-session configuration details
  * for runtime observability — the goal is to make the running commit and effective config of a
@@ -58,6 +93,11 @@ export function buildServerInfo(opts: { sessionId?: string; provider?: Provider 
 	// practice the translate Worker (its codec is versioned independently of the code); unset on the
 	// container, where code + codec are one image. Reported alongside `gitHash` so a mismatch is visible.
 	if (process.env.SOURCE_IMAGE_TAG) info.sourceImageTag = process.env.SOURCE_IMAGE_TAG;
+	// The KV config overrides this container started with. Its env is fixed at start, so these are
+	// what it runs with, even after the KV entries have changed (the Worker's own `worker` block
+	// reports the ones in effect for the current request).
+	const overrides = startupConfigOverrides();
+	if (Object.keys(overrides).length > 0) info.configOverrides = overrides;
 
 	const city = process.env.CLOUDFLARE_LOCATION;
 	const country = process.env.CLOUDFLARE_COUNTRY_A2;

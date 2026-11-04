@@ -95,6 +95,54 @@ describe('TranscriberContainer configuration', () => {
 		expect(fixture({ sleepAfter: '20m' }).dobj.sleepAfter).toBe('20m');
 	});
 
+	it('adopts the SLEEP_AFTER the Worker starts it with (a KV override its own env never sees)', async () => {
+		const { dobj } = fixture({ sleepAfter: '20m' });
+		const args = { startOptions: { envVars: { SLEEP_AFTER: '30m', OPENAI_API_KEY: 'sk' } }, cancellationOptions: { waitInterval: 100 } };
+		await dobj.startAndWaitForPorts(args);
+		expect(dobj.sleepAfter).toBe('30m');
+		// The start itself is the SDK's, with the arguments unchanged.
+		expect(baseStart).toHaveBeenCalledWith(args);
+
+		// The positional form carries the start options third.
+		await dobj.startAndWaitForPorts(8080, undefined, { envVars: { SLEEP_AFTER: '9m' } });
+		expect(dobj.sleepAfter).toBe('9m');
+	});
+
+	it('goes back to its own SLEEP_AFTER once the Worker stops sending an override', async () => {
+		// An override removed from KV (or set to null) means the start env has no SLEEP_AFTER at all
+		// when the Worker has none of its own; the object must not keep the stale override.
+		const unset = fixture();
+		await unset.dobj.startAndWaitForPorts({ startOptions: { envVars: { SLEEP_AFTER: '30m' } } });
+		await unset.dobj.startAndWaitForPorts({ startOptions: { envVars: { OPENAI_API_KEY: 'sk' } } });
+		expect(unset.dobj.sleepAfter).toBe('7m');
+
+		const own = fixture({ sleepAfter: '20m' });
+		await own.dobj.startAndWaitForPorts({ startOptions: { envVars: { SLEEP_AFTER: '30m' } } });
+		await own.dobj.startAndWaitForPorts(8080, undefined, { envVars: {} });
+		expect(own.dobj.sleepAfter).toBe('20m');
+	});
+
+	it('keeps its SLEEP_AFTER when the start call carries no start env (its own safety-net start)', async () => {
+		const { dobj } = fixture();
+		await dobj.startAndWaitForPorts({ startOptions: { envVars: { SLEEP_AFTER: '30m' } } });
+		await dobj.startAndWaitForPorts({ ports: 8080 });
+		expect(dobj.sleepAfter).toBe('30m');
+	});
+
+	it('accepts a null first argument without reading start options from it', async () => {
+		const { dobj } = fixture({ sleepAfter: '20m' });
+		await expect(dobj.startAndWaitForPorts(null as never)).resolves.toBeUndefined();
+		expect(baseStart).toHaveBeenCalledWith(null);
+		expect(dobj.sleepAfter).toBe('20m');
+	});
+
+	it('keeps its SLEEP_AFTER when the start call carries none', async () => {
+		const { dobj } = fixture({ sleepAfter: '20m' });
+		await dobj.startAndWaitForPorts({ startOptions: { envVars: { OPENAI_API_KEY: 'sk' } } });
+		await dobj.startAndWaitForPorts({ ports: 8080 });
+		expect(dobj.sleepAfter).toBe('20m');
+	});
+
 	it('gives the container its instance name alongside the forwarded env', () => {
 		const { dobj } = fixture({ name: 'pool-3' });
 		expect(dobj.envVars.CONTAINER_INSTANCE_NAME).toBe('pool-3');

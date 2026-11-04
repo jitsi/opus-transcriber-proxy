@@ -262,8 +262,15 @@ View metrics in Cloudflare Dashboard:
 Edit `wrangler-container.jsonc` to configure:
 
 - `max_instances`: Maximum concurrent containers (default: 10)
-- `sleepAfter`: How long to keep idle containers running (default: 10m)
+- `sleepAfter`: How long to keep idle containers running (default: 7m)
 - Environment variables in the `vars` section
+
+Some variables can also be changed at runtime, without a deploy, through the `CONFIG_KV`
+namespace (key `config:<VARIABLE>`). See "Runtime config overrides (KV)" in
+[README.md](README.md). The Worker must have a `CONFIG_KV` binding for this. The deployed
+Workers use the wrapper `wrangler.jsonc` files in `infra-customizations-private`, so make sure that
+each wrapper has the binding. With no binding, the Worker applies no override and logs nothing
+about it.
 
 ### Scaling
 

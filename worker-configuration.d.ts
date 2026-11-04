@@ -10,7 +10,6 @@ declare namespace Cloudflare {
 		FORCE_COMMIT_TIMEOUT: "2";
 		DEBUG: "true";
 		ROUTING_MODE: "session";
-		TRANSLATION_MIXING_MODE: "true";
 		TRANSCRIBER: DurableObjectNamespace<import("./worker/index").TranscriberContainer>;
 	}
 }

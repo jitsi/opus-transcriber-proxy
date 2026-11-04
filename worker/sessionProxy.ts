@@ -19,6 +19,7 @@ import type { TranscriberContainer } from './TranscriberContainer';
 import type { DispatcherTranscriptionMessage, TranscriptionMessage } from './types';
 import { buildWorkerInfo } from './containerEnv';
 import type { AppliedOverrides } from './providerOverride';
+import type { AppliedConfigOverrides } from './configOverride';
 import { closeReason } from '../src/agent/closeReason';
 import { DISPATCHER_QUEUE_LIMIT } from './dispatcherForwarder';
 import { containerFailureReason, containerUnreachablePoints, countLater, requestColo } from './metrics';
@@ -40,6 +41,7 @@ export async function handleWebSocketWithDispatcher(
 	ctx: ExecutionContext,
 	sessionId: string,
 	overrides?: AppliedOverrides,
+	configOverrides?: AppliedConfigOverrides,
 ): Promise<Response> {
 	// Create WebSocket pair for the client
 	const clientPair = new WebSocketPair();
@@ -265,7 +267,7 @@ export async function handleWebSocketWithDispatcher(
 		// The container's `info` message: augment in-place with a `worker` block (edge/deployment
 		// details) and forward the combined message, so the client sees the whole path in one message.
 		if (parsed && parsed.event === 'info') {
-			parsed.worker = buildWorkerInfo(request, env, overrides);
+			parsed.worker = buildWorkerInfo(request, env, overrides, configOverrides);
 			if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
 				serverWs.send(JSON.stringify(parsed));
 			}

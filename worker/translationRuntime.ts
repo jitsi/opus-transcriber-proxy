@@ -27,6 +27,7 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 import { parseIntOr, parseIntOrUndefined } from '../src/translate/env';
+import type { AppliedConfigOverrides } from './configOverride';
 import type { TranslateProvider } from './providerOverride';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from '../src/translate/provider';
 
@@ -36,9 +37,15 @@ let warnedBadIdleClose = false;
 
 /**
  * `providerOverride` is the provider an operator override (worker/providerOverride.ts) wrote into the
- * request, if one did; `buildServerInfo` reports it as `worker.providerOverride`.
+ * request, if one did; `buildServerInfo` reports it as `worker.providerOverride`, and the KV config
+ * overrides already in `env` (worker/configOverride.ts) as `worker.configOverrides`.
  */
-export function createWorkerTranslationRuntime(env: Env, request?: Request, providerOverride?: TranslateProvider): TranslationRuntime {
+export function createWorkerTranslationRuntime(
+	env: Env,
+	request?: Request,
+	providerOverride?: TranslateProvider,
+	configOverrides?: AppliedConfigOverrides,
+): TranslationRuntime {
 	registerWorkerOpusWasm();
 	const debugEnabled = env.DEBUG === 'true';
 	const talkSilenceTimeoutMs = parseIntOr(env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS, 350);
@@ -121,6 +128,7 @@ export function createWorkerTranslationRuntime(env: Env, request?: Request, prov
 			// Only when an override changed this connection's provider: `provider` above is what the
 			// connection uses either way, and cannot tell an override apart from a client parameter.
 			if (providerOverride) worker.providerOverride = providerOverride;
+			if (configOverrides && Object.keys(configOverrides).length > 0) worker.configOverrides = { ...configOverrides };
 			if (env.CF_VERSION_METADATA) {
 				worker.versionId = env.CF_VERSION_METADATA.id;
 				worker.versionTag = env.CF_VERSION_METADATA.tag;

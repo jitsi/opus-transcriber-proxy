@@ -21,6 +21,7 @@
  */
 import type { Env } from './env';
 import type { AppliedOverrides } from './providerOverride';
+import { WORKER_VARS, type VarSpec } from './vars';
 
 /**
  * CONTAINER_INSTANCE_NAME for the container, from the name this Durable Object was looked up by.
@@ -39,136 +40,36 @@ export function instanceNameEnv(id: DurableObjectId): Record<string, string> {
 }
 
 /**
- * Build the container env vars from the worker env bindings. `TranscriberContainer.envVars`
- * adds CONTAINER_INSTANCE_NAME on top, so every start path (the Worker's explicit
- * `startAndWaitForPorts`, the SDK's start-on-fetch, the passthrough override's safety net)
- * gives the container the same identity.
+ * Build the container env vars from the worker env bindings, as worker/vars.ts declares them.
+ * `TranscriberContainer.envVars` adds CONTAINER_INSTANCE_NAME on top, so every start path (the
+ * Worker's explicit `startAndWaitForPorts`, the SDK's start-on-fetch, the passthrough override's
+ * safety net) gives the container the same identity.
+ *
+ * `env` is the effective env: the Worker's bindings with any KV config overrides already overlaid
+ * (worker/configOverride.ts). `configOverrides` lists those overrides; it is passed to the container
+ * as CONFIG_OVERRIDES so its `info` message can report what this container started with, which
+ * the Worker cannot know for a container that was already running.
  */
-export function buildContainerEnvVars(env: Env): Record<string, string> {
-	return {
-		OPENAI_API_KEY: env.OPENAI_API_KEY,
-		OPENAI_MODEL: env.OPENAI_MODEL || 'gpt-4o-transcribe',
-		// Only forwarded when explicitly set; otherwise the container defaults apply (endpoints/transcripts on).
-		...(env.OPENAI_TRANSLATION_MODEL && { OPENAI_TRANSLATION_MODEL: env.OPENAI_TRANSLATION_MODEL }),
-		// Optional separate key for translation; when unset the container falls back to OPENAI_API_KEY.
-		...(env.OPENAI_TRANSLATION_API_KEY && { OPENAI_TRANSLATION_API_KEY: env.OPENAI_TRANSLATION_API_KEY }),
-		// Speech-to-speech provider selection and the xAI translation settings (a standalone container
-		// serving /translate itself; in the CF deployment the Worker serves /translate). Forwarded only
-		// when set, so the container defaults (openai; XAI_API_KEY as the xAI key) apply otherwise.
-		...(env.TRANSLATION_PROVIDER && { TRANSLATION_PROVIDER: env.TRANSLATION_PROVIDER }),
-		...(env.TRANSLATION_IDLE_CLOSE_MS && { TRANSLATION_IDLE_CLOSE_MS: env.TRANSLATION_IDLE_CLOSE_MS }),
-		...(env.XAI_TRANSLATION_API_KEY && { XAI_TRANSLATION_API_KEY: env.XAI_TRANSLATION_API_KEY }),
-		...(env.XAI_TRANSLATION_URL && { XAI_TRANSLATION_URL: env.XAI_TRANSLATION_URL }),
-		...(env.XAI_TRANSLATION_VOICE && { XAI_TRANSLATION_VOICE: env.XAI_TRANSLATION_VOICE }),
-		...(env.ENABLE_TRANSCRIBE && { ENABLE_TRANSCRIBE: env.ENABLE_TRANSCRIBE }),
-		...(env.ENABLE_TRANSLATE && { ENABLE_TRANSLATE: env.ENABLE_TRANSLATE }),
-		// Text translation of transcripts (the /transcribe path, which the container serves).
-		// Forwarded only when set, so the container default (off) applies otherwise.
-		...(env.ENABLE_TEXT_TRANSLATION && { ENABLE_TEXT_TRANSLATION: env.ENABLE_TEXT_TRANSLATION }),
-		...(env.TEXT_TRANSLATION_PROVIDERS_PRIORITY && { TEXT_TRANSLATION_PROVIDERS_PRIORITY: env.TEXT_TRANSLATION_PROVIDERS_PRIORITY }),
-		...(env.ENABLE_TEXT_TRANSLATION_STUB && { ENABLE_TEXT_TRANSLATION_STUB: env.ENABLE_TEXT_TRANSLATION_STUB }),
-		...(env.TEXT_TRANSLATION_HISTORY_TURNS && { TEXT_TRANSLATION_HISTORY_TURNS: env.TEXT_TRANSLATION_HISTORY_TURNS }),
-		...(env.TEXT_TRANSLATION_HISTORY_MAX_CHARS && { TEXT_TRANSLATION_HISTORY_MAX_CHARS: env.TEXT_TRANSLATION_HISTORY_MAX_CHARS }),
-		...(env.TEXT_TRANSLATION_INCLUDE_SPEAKERS && { TEXT_TRANSLATION_INCLUDE_SPEAKERS: env.TEXT_TRANSLATION_INCLUDE_SPEAKERS }),
-		...(env.TEXT_TRANSLATION_TIMEOUT_MS && { TEXT_TRANSLATION_TIMEOUT_MS: env.TEXT_TRANSLATION_TIMEOUT_MS }),
-		...(env.TEXT_TRANSLATION_TEMPERATURE && { TEXT_TRANSLATION_TEMPERATURE: env.TEXT_TRANSLATION_TEMPERATURE }),
-		...(env.TEXT_TRANSLATION_REASONING_EFFORT && { TEXT_TRANSLATION_REASONING_EFFORT: env.TEXT_TRANSLATION_REASONING_EFFORT }),
-		...(env.TEXT_TRANSLATION_MAX_OUTPUT_TOKENS && { TEXT_TRANSLATION_MAX_OUTPUT_TOKENS: env.TEXT_TRANSLATION_MAX_OUTPUT_TOKENS }),
-		// Per-provider translation keys. Each falls back to that provider's transcription key inside
-		// the container, so only a separately-billed key needs forwarding here — except
-		// TEXT_TRANSLATION_GOOGLE_API_KEY, which has no fallback (Cloud Translation is a different
-		// API from Gemini) and is the only way to enable the `google` provider.
-		...(env.TEXT_TRANSLATION_OPENAI_API_KEY && { TEXT_TRANSLATION_OPENAI_API_KEY: env.TEXT_TRANSLATION_OPENAI_API_KEY }),
-		...(env.TEXT_TRANSLATION_OPENAI_URL && { TEXT_TRANSLATION_OPENAI_URL: env.TEXT_TRANSLATION_OPENAI_URL }),
-		...(env.TEXT_TRANSLATION_OPENAI_MODEL && { TEXT_TRANSLATION_OPENAI_MODEL: env.TEXT_TRANSLATION_OPENAI_MODEL }),
-		...(env.TEXT_TRANSLATION_XAI_API_KEY && { TEXT_TRANSLATION_XAI_API_KEY: env.TEXT_TRANSLATION_XAI_API_KEY }),
-		...(env.TEXT_TRANSLATION_XAI_URL && { TEXT_TRANSLATION_XAI_URL: env.TEXT_TRANSLATION_XAI_URL }),
-		...(env.TEXT_TRANSLATION_XAI_MODEL && { TEXT_TRANSLATION_XAI_MODEL: env.TEXT_TRANSLATION_XAI_MODEL }),
-		...(env.TEXT_TRANSLATION_GEMINI_API_KEY && { TEXT_TRANSLATION_GEMINI_API_KEY: env.TEXT_TRANSLATION_GEMINI_API_KEY }),
-		...(env.TEXT_TRANSLATION_GEMINI_BASE_URL && { TEXT_TRANSLATION_GEMINI_BASE_URL: env.TEXT_TRANSLATION_GEMINI_BASE_URL }),
-		...(env.TEXT_TRANSLATION_GEMINI_MODEL && { TEXT_TRANSLATION_GEMINI_MODEL: env.TEXT_TRANSLATION_GEMINI_MODEL }),
-		...(env.TEXT_TRANSLATION_GEMINI_THINKING_BUDGET && { TEXT_TRANSLATION_GEMINI_THINKING_BUDGET: env.TEXT_TRANSLATION_GEMINI_THINKING_BUDGET }),
-		...(env.TEXT_TRANSLATION_GEMINI_THINKING_LEVEL && { TEXT_TRANSLATION_GEMINI_THINKING_LEVEL: env.TEXT_TRANSLATION_GEMINI_THINKING_LEVEL }),
-		...(env.TEXT_TRANSLATION_GOOGLE_API_KEY && { TEXT_TRANSLATION_GOOGLE_API_KEY: env.TEXT_TRANSLATION_GOOGLE_API_KEY }),
-		...(env.TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON && { TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON: env.TEXT_TRANSLATION_GOOGLE_CREDENTIALS_JSON }),
-		...(env.TEXT_TRANSLATION_GOOGLE_URL && { TEXT_TRANSLATION_GOOGLE_URL: env.TEXT_TRANSLATION_GOOGLE_URL }),
-		...(env.TRANSLATE_TRANSCRIPTS && { TRANSLATE_TRANSCRIPTS: env.TRANSLATE_TRANSCRIPTS }),
-		// Forwarded only when set so the container default (350) applies otherwise; matches the other translation
-		// tunables above. In the CF deployment /translate is handled by the Worker (not the container); this
-		// forwarding is for a standalone container deployment that serves /translate itself. "0" (disable) is a
-		// non-empty string → truthy → still forwarded.
-		...(env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS && { TRANSLATION_TALK_SILENCE_TIMEOUT_MS: env.TRANSLATION_TALK_SILENCE_TIMEOUT_MS }),
-		GEMINI_API_KEY: env.GEMINI_API_KEY || '',
-		DEEPGRAM_API_KEY: env.DEEPGRAM_API_KEY || '',
-		DEEPGRAM_MODEL: env.DEEPGRAM_MODEL || 'nova-3-general',
-		DEEPGRAM_DETECT_LANGUAGE: env.DEEPGRAM_DETECT_LANGUAGE || 'true',
-		DEEPGRAM_INCLUDE_LANGUAGE: env.DEEPGRAM_INCLUDE_LANGUAGE || 'false',
-		DEEPGRAM_DIARIZE: env.DEEPGRAM_DIARIZE || 'false',
-		DEEPGRAM_PUNCTUATE: env.DEEPGRAM_PUNCTUATE || 'true',
-		DEEPGRAM_ENCODING: env.DEEPGRAM_ENCODING || 'opus',
-		DEEPGRAM_MIP_OPT_OUT: env.DEEPGRAM_MIP_OPT_OUT || 'false',
-		DEEPGRAM_TAGS: env.DEEPGRAM_TAGS || '',
-		// XAI_API_KEY is forwarded as '' when unset so the container treats xAI as
-		// unconfigured (provider disabled). The remaining XAI_* knobs are only
-		// forwarded when explicitly set, otherwise the container's code defaults apply.
-		XAI_API_KEY: env.XAI_API_KEY || '',
-		...(env.XAI_STT_URL && { XAI_STT_URL: env.XAI_STT_URL }),
-		...(env.XAI_LANGUAGE && { XAI_LANGUAGE: env.XAI_LANGUAGE }),
-		...(env.XAI_DIARIZE && { XAI_DIARIZE: env.XAI_DIARIZE }),
-		...(env.XAI_INCLUDE_LANGUAGE && { XAI_INCLUDE_LANGUAGE: env.XAI_INCLUDE_LANGUAGE }),
-		...(env.XAI_ENDPOINTING && { XAI_ENDPOINTING: env.XAI_ENDPOINTING }),
-		...(env.XAI_SMART_TURN && { XAI_SMART_TURN: env.XAI_SMART_TURN }),
-		...(env.XAI_SMART_TURN_TIMEOUT && { XAI_SMART_TURN_TIMEOUT: env.XAI_SMART_TURN_TIMEOUT }),
-		...(env.XAI_GRANULAR_FINALS && { XAI_GRANULAR_FINALS: env.XAI_GRANULAR_FINALS }),
-		...(env.XAI_GRANULAR_STABILITY_MS && { XAI_GRANULAR_STABILITY_MS: env.XAI_GRANULAR_STABILITY_MS }),
-		...(env.XAI_GRANULAR_GUARD_WORDS && { XAI_GRANULAR_GUARD_WORDS: env.XAI_GRANULAR_GUARD_WORDS }),
-		...(env.XAI_GRANULAR_MIN_WORDS && { XAI_GRANULAR_MIN_WORDS: env.XAI_GRANULAR_MIN_WORDS }),
-		...(env.XAI_CONNECT_ATTEMPTS && { XAI_CONNECT_ATTEMPTS: env.XAI_CONNECT_ATTEMPTS }),
-		...(env.XAI_CONNECT_BACKOFF_MS && { XAI_CONNECT_BACKOFF_MS: env.XAI_CONNECT_BACKOFF_MS }),
-		...(env.XAI_MAX_TURN_MS && { XAI_MAX_TURN_MS: env.XAI_MAX_TURN_MS }),
-		...(env.XAI_TURN_SOFT_MAX_WORDS && { XAI_TURN_SOFT_MAX_WORDS: env.XAI_TURN_SOFT_MAX_WORDS }),
-		...(env.XAI_TURN_HARD_MAX_WORDS && { XAI_TURN_HARD_MAX_WORDS: env.XAI_TURN_HARD_MAX_WORDS }),
-		...(env.XAI_IDLE_TURN_END_GRACE_MS && { XAI_IDLE_TURN_END_GRACE_MS: env.XAI_IDLE_TURN_END_GRACE_MS }),
-		...(env.XAI_ENCODING && { XAI_ENCODING: env.XAI_ENCODING }),
-		...(env.XAI_IDLE_FLUSH && { XAI_IDLE_FLUSH: env.XAI_IDLE_FLUSH }),
-		// MISTRAL_API_KEY is forwarded as '' when unset so the container treats Mistral as
-		// unconfigured (provider disabled). MISTRAL_MODEL is only forwarded when set.
-		MISTRAL_API_KEY: env.MISTRAL_API_KEY || '',
-		...(env.MISTRAL_MODEL && { MISTRAL_MODEL: env.MISTRAL_MODEL }),
-		PROVIDERS_PRIORITY: env.PROVIDERS_PRIORITY || 'openai',
-		ENABLE_OPENAI_CUSTOM_PROVIDER: env.ENABLE_OPENAI_CUSTOM_PROVIDER || 'false',
-		OPENAI_CUSTOM_REQUIRE_WSS: env.OPENAI_CUSTOM_REQUIRE_WSS || 'true',
-		FORCE_COMMIT_TIMEOUT: env.FORCE_COMMIT_TIMEOUT || '2',
-		DEBUG: env.DEBUG || 'false',
-		// If DEBUG=true is explicitly set on the Worker env, default LOG_LEVEL to
-		// 'debug' unless an operator overrides it (e.g. LOG_LEVEL=info).
-		LOG_LEVEL: env.LOG_LEVEL || (env.DEBUG === 'true' ? 'debug' : 'info'),
-		ROUTING_MODE: env.ROUTING_MODE || 'session',
-		CONTAINER_POOL_SIZE: env.CONTAINER_POOL_SIZE || '5',
-		MAX_CONNECTIONS_PER_CONTAINER: env.MAX_CONNECTIONS_PER_CONTAINER || '10',
-		MIN_CONTAINERS: env.MIN_CONTAINERS || '2',
-		SCALE_DOWN_IDLE_TIME: env.SCALE_DOWN_IDLE_TIME || '600000',
-		OTLP_ENDPOINT: env.OTLP_ENDPOINT || '',
-		OTLP_ENV: env.OTLP_ENV || '',
-		OTLP_RESOURCE_ATTRIBUTES: env.OTLP_RESOURCE_ATTRIBUTES || '',
-		OTLP_HEADERS: env.OTLP_HEADERS || '',
-		...(env.OTLP_STALE_MARKER_SENDS && { OTLP_STALE_MARKER_SENDS: env.OTLP_STALE_MARKER_SENDS }),
-		// Voice agents (/agent, served by the container): off unless the Worker env enables it; the AGENT_*
-		// knobs are forwarded only when set, so the container defaults apply otherwise.
-		...(env.ENABLE_AGENT && { ENABLE_AGENT: env.ENABLE_AGENT }),
-		...(env.AGENT_REQUIRE_WSS && { AGENT_REQUIRE_WSS: env.AGENT_REQUIRE_WSS }),
-		...(env.AGENT_ALLOWED_HOSTS && { AGENT_ALLOWED_HOSTS: env.AGENT_ALLOWED_HOSTS }),
-		...(env.AGENT_ALLOW_PRIVATE_ENDPOINTS && { AGENT_ALLOW_PRIVATE_ENDPOINTS: env.AGENT_ALLOW_PRIVATE_ENDPOINTS }),
-		...(env.AGENT_SHARED_SECRET && { AGENT_SHARED_SECRET: env.AGENT_SHARED_SECRET }),
-		...(env.AGENT_ALLOW_UNAUTHENTICATED && { AGENT_ALLOW_UNAUTHENTICATED: env.AGENT_ALLOW_UNAUTHENTICATED }),
-		...(env.AGENT_PACE_LEAD_MS && { AGENT_PACE_LEAD_MS: env.AGENT_PACE_LEAD_MS }),
-		...(env.AGENT_PROVISIONING_URL && { AGENT_PROVISIONING_URL: env.AGENT_PROVISIONING_URL }),
-		...(env.AGENT_PROVISIONING_TOKEN && { AGENT_PROVISIONING_TOKEN: env.AGENT_PROVISIONING_TOKEN }),
-		...(env.AGENT_PROVISIONING_HOST && { AGENT_PROVISIONING_HOST: env.AGENT_PROVISIONING_HOST }),
-		...(env.AGENT_PROVISIONING_ROUTING && { AGENT_PROVISIONING_ROUTING: env.AGENT_PROVISIONING_ROUTING }),
-		PORT: '8080',
-		HOST: '0.0.0.0',
-	};
+export function buildContainerEnvVars(env: Env, configOverrides?: Readonly<Record<string, string>>): Record<string, string> {
+	const vars: Record<string, string> = {};
+	const source = env as unknown as Readonly<Record<string, string | undefined>>;
+	for (const [name, spec] of Object.entries(WORKER_VARS) as Array<[string, VarSpec]>) {
+		const value = source[name];
+		if (spec.container === 'if-set') {
+			if (value) vars[name] = value;
+		} else if (spec.container) {
+			const fallback = spec.container.default;
+			vars[name] = value || (typeof fallback === 'function' ? fallback(source) : fallback);
+		}
+	}
+	if (configOverrides && Object.keys(configOverrides).length > 0) {
+		vars.CONFIG_OVERRIDES = JSON.stringify(configOverrides);
+	}
+	// The container must listen where TranscriberContainer.defaultPort expects it, so these are not
+	// configurable.
+	vars.PORT = '8080';
+	vars.HOST = '0.0.0.0';
+	return vars;
 }
 
 /**
@@ -182,8 +83,18 @@ export function buildContainerEnvVars(env: Env): Record<string, string> {
  * text-translation provider. The container reports the providers it used either way, but it cannot
  * tell an override apart from a client-supplied parameter — so recording them here is what makes an
  * active override visible in the peer's logs (JVB logs the info message verbatim).
+ *
+ * `configOverrides` are the KV config overrides (worker/configOverride.ts) in effect for this
+ * request, which is what the Worker's own decisions (routing, the dispatcher) used. The
+ * container reports, as its own `configOverrides`, the ones it was started with; the two differ
+ * when an override changed after the container started.
  */
-export function buildWorkerInfo(request: Request, env: Env, overrides?: AppliedOverrides): Record<string, unknown> {
+export function buildWorkerInfo(
+	request: Request,
+	env: Env,
+	overrides?: AppliedOverrides,
+	configOverrides?: Readonly<Record<string, string>>,
+): Record<string, unknown> {
 	const cf = (request.cf || {}) as Record<string, unknown>;
 	const worker: Record<string, unknown> = {
 		present: true,
@@ -191,6 +102,7 @@ export function buildWorkerInfo(request: Request, env: Env, overrides?: AppliedO
 	};
 	if (overrides?.transcribe) worker.providerOverride = overrides.transcribe;
 	if (overrides?.['text-translation']) worker.textTranslationProviderOverride = overrides['text-translation'];
+	if (configOverrides && Object.keys(configOverrides).length > 0) worker.configOverrides = { ...configOverrides };
 	if (env.CF_VERSION_METADATA) {
 		worker.versionId = env.CF_VERSION_METADATA.id;
 		worker.versionTag = env.CF_VERSION_METADATA.tag;

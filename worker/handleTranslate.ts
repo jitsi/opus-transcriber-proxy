@@ -37,6 +37,7 @@ import {
 	type TranslationTalkStopData,
 } from '../src/translate/messages';
 import { createDispatcherForwarder } from './dispatcherForwarder';
+import type { AppliedConfigOverrides } from './configOverride';
 import type { TranslateProvider } from './providerOverride';
 import { createWorkerTranslationRuntime } from './translationRuntime';
 import { flushTranslationUsage } from '../src/usage-reporter';
@@ -44,14 +45,22 @@ import { flushTranslationUsage } from '../src/usage-reporter';
 /**
  * `providerOverride` is the speech-to-speech provider an operator override (worker/providerOverride.ts)
  * wrote into this request's `provider` parameter, if one did; it is reported in the `info` message,
- * since the parameter alone cannot be told apart from a client-supplied one.
+ * since the parameter alone cannot be told apart from a client-supplied one. `env` already carries
+ * the KV config overrides (worker/configOverride.ts); `configOverrides` lists them for the same
+ * message.
  */
-export function handleTranslate(request: Request, env: Env, ctx: ExecutionContext, providerOverride?: TranslateProvider): Response {
+export function handleTranslate(
+	request: Request,
+	env: Env,
+	ctx: ExecutionContext,
+	providerOverride?: TranslateProvider,
+	configOverrides?: AppliedConfigOverrides,
+): Response {
 	if (request.headers.get('Upgrade') !== 'websocket') {
 		return new Response('Expected WebSocket upgrade', { status: 426 });
 	}
 
-	const runtime = createWorkerTranslationRuntime(env, request, providerOverride);
+	const runtime = createWorkerTranslationRuntime(env, request, providerOverride, configOverrides);
 	const url = new URL(request.url);
 
 	// The speech-to-speech provider: `?provider=` or the deployment default. Without its key every
