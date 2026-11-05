@@ -71,6 +71,9 @@ function makeHarness(configOverrides: Record<string, unknown> = {}): { runtime: 
 			translationUsageUrl: '',
 			usageReportIntervalMs: 0,
 			talkSilenceTimeoutMs: TALK_TIMEOUT_MS,
+			// Pacing off: these tests drive the talk timer with raw provider bursts; pacing has its own tests
+			// (TranslatorConnectionPacing.test.ts).
+			paceLeadMs: 0,
 			...configOverrides,
 		},
 		writeMetric: () => {},

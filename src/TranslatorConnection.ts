@@ -15,11 +15,13 @@
  */
 
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
+import { DEFAULT_PACE_LEAD_MS } from './translate/env';
+import { MediaPacer } from './MediaPacer';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
 import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
-import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
+import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
 import {
 	defaultTranslationProvider,
@@ -37,6 +39,18 @@ export { normalizeTargetLanguage };
 // 10 s of 24 kHz 16-bit mono PCM (~480 KB) before the provider session is ready — connect is normally
 // sub-second, so hitting this means the socket is stuck and the buffered audio is stale anyway.
 const MAX_PENDING_PCM_BYTES = 24000 * 2 * 10;
+// The most translated audio the pacer may hold, in frames (15 s). Translated speech can run longer than
+// the speech it translates, so a continuous speaker builds up lag; past this the oldest queued audio is
+// dropped (what is heard stays near the source, at the cost of a skip) rather than the lag and the queue
+// growing for the life of the direction. Before the pacer the client's jitter buffer did this dropping,
+// invisibly. Dropped in blocks of OVERFLOW_DROP_FRAMES (3 s): one clean skip per block, where dropping a
+// frame per push would punch a 20 ms hole into the audio about to play for every frame of a burst.
+const MAX_PACED_FRAMES = (15 * 1000) / FRAME_DURATION_MS;
+const OVERFLOW_DROP_FRAMES = (3 * 1000) / FRAME_DURATION_MS;
+// The most queued audio released in one burst when a direction closes (3 s). A WebRTC client's jitter
+// buffer holds about 4 s and flushes past that, so a longer burst would be partly discarded by the client
+// anyway; the proxy drops the tail itself and says so.
+const FLUSH_AT_CLOSE_MAX_FRAMES = (3 * 1000) / FRAME_DURATION_MS;
 // A provider with a `session` handshake (xAI) must answer `session.created` and `session.updated`
 // within this long of the socket opening, or the direction is failed: audio buffers behind the
 // handshake, so a session that never becomes ready would otherwise hold the direction open, silent.
@@ -179,7 +193,18 @@ export class TranslatorConnection {
 	private reportedSamples = 0;
 	private usageReportTimer?: ReturnType<typeof setInterval>;
 
-	private readonly rtpTimestamper = new RtpTimestamper();
+	private readonly rtpTimestamper: RtpTimestamper;
+	// Releases the encoded voice frames to the bridge at real time plus a small lead instead of as the provider
+	// delivers them. The providers stream faster than real time — xAI hands over each translated phrase, up to
+	// several seconds of audio, in one burst of a few hundred milliseconds — and a burst longer than a WebRTC
+	// client's jitter buffer (NetEQ: 200 packets, 4 s, by default) makes the client flush and lose part of the
+	// phrase, while the transcript arrives complete. Undefined when pacing is disabled (`paceLeadMs` 0).
+	private readonly pacer?: MediaPacer<EncodedFrame>;
+	private warnedPacerOverflow = false;
+	/** Frames the pacer dropped at its cap over the direction's life; reported at close. */
+	private pacerFramesDropped = 0;
+	/** Releases whose send threw; the first is logged, the total at close. */
+	private pacedSendFailures = 0;
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string, reason: TranslatorCloseReason) => void = undefined;
@@ -265,6 +290,40 @@ export class TranslatorConnection {
 		this.provider = getTranslationProvider(options.provider ?? defaultTranslationProvider(runtime.config), runtime.config);
 		this.measureLatency = runtime.config.debug;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
+		const paceLeadMs = runtime.config.paceLeadMs ?? DEFAULT_PACE_LEAD_MS;
+		// The timestamper keeps its default gap threshold with the pacer in front: paced frames reach it a full
+		// lead ahead of their playout, so an event-loop stall registers only as idle time beyond the lead, and
+		// the threshold absorbs a stall of up to the lead plus itself before a silence gap is spliced in.
+		this.rtpTimestamper = new RtpTimestamper();
+		if (paceLeadMs > 0) {
+			this.pacer = new MediaPacer<EncodedFrame>({
+				leadMs: paceLeadMs,
+				frameDurationMs: FRAME_DURATION_MS,
+				maxQueuedFrames: MAX_PACED_FRAMES,
+				overflowDropFrames: OVERFLOW_DROP_FRAMES,
+				onFrame: (frame) => this.sendAudioFrame(frame.data, frame.audioLevel),
+			});
+			// One line for the first failure and a total at close: a deterministic throw would otherwise log
+			// once per released frame, 50 a second per direction, and 150 in a row at a close-time flush.
+			this.pacer.onError = (error) => {
+				this.pacedSendFailures++;
+				if (this.pacedSendFailures === 1) {
+					this.logError('Failed to send a paced frame (further failures are counted and reported at close):', error);
+				}
+			};
+			this.pacer.onOverflow = (dropped) => {
+				this.pacerFramesDropped += dropped;
+				this.metricBatcher.increment({ name: 'translation_paced_frames_dropped', worker: 'opus-transcriber-proxy', errorType: 'overflow', count: dropped });
+				if (!this.warnedPacerOverflow) {
+					this.warnedPacerOverflow = true;
+					this.runtime.logger.warn(
+						`[${this.connectionId}] [${this.options.targetLanguage}] translated audio for tag ${this.localTag} is more than ` +
+							`${(MAX_PACED_FRAMES * FRAME_DURATION_MS) / 1000} s behind real time; dropping the oldest ` +
+							`${(dropped * FRAME_DURATION_MS) / 1000} s (warning once; the total is reported at close)`,
+					);
+				}
+			};
+		}
 		this.idleCloseMs = runtime.config.idleCloseMs ?? this.provider.defaultIdleCloseMs;
 		this.metricBatcher = runtime.createMetricBatcher();
 
@@ -461,8 +520,11 @@ export class TranslatorConnection {
 		if (this.isClosed) return;
 		// Not while translated audio is still playing out: translation lags the source by seconds, so a
 		// speaker who finishes and mutes would otherwise have the tail of the last utterance cut off. With
-		// the talk timer disabled a talk never ends, so it cannot be allowed to hold the direction open.
+		// the talk timer disabled a talk never ends, so it cannot be allowed to hold the direction open —
+		// but audio still queued in the pacer always can: the queue is bounded (MAX_PACED_FRAMES) and drains
+		// at real time, so once the provider stops producing the deferral lasts at most that long.
 		if (this.talkActive && this.talkSilenceTimeoutMs > 0) return;
+		if (this.pacer && this.pacer.queuedFrames > 0) return;
 		const idleFor = Date.now() - this.idleSince;
 		if (idleFor < this.idleCloseMs) return;
 		this.runtime.logger.info(
@@ -757,7 +819,19 @@ export class TranslatorConnection {
 						const pcmBytes = fromBase64(delta);
 						const opusFrames = this.opusEncoder.encodeFrame(pcmBytes);
 						for (const frame of opusFrames) {
-							this.sendAudioFrame(frame.data, frame.inDtx, frame.audioLevel);
+							// DTX frame: libopus's VAD marked this as comfort-noise/silence, not voice. Don't forward it to
+							// the bridge, don't pace it and don't count it as talk activity. The silence timer (armed only
+							// by the voice frames) then ends the talk after the configured silence, and the RtpTimestamper
+							// inserts the real gap when voice resumes — so a live mic's continuous ambient/near-silent
+							// output no longer holds the talk open forever, and no silence packets are sent downstream.
+							if (frame.inDtx) {
+								continue;
+							}
+							if (this.pacer) {
+								this.pacer.push(frame);
+							} else {
+								this.sendAudioFrame(frame.data, frame.audioLevel);
+							}
 						}
 					} catch (error) {
 						this.logError(`Failed to encode audio delta:`, error);
@@ -835,18 +909,14 @@ export class TranslatorConnection {
 		}
 	}
 
-	private sendAudioFrame(opusFrame: Uint8Array, inDtx: boolean, audioLevel: number): void {
-		// DTX frame: libopus's VAD marked this as comfort-noise/silence, not voice. Don't forward it to the
-		// bridge and don't count it as talk activity. The silence timer (armed only by the voice frames below)
-		// then ends the talk after the configured silence, and the RtpTimestamper inserts the real gap when
-		// voice resumes — so a live mic's continuous ambient/near-silent output no longer holds the talk open
-		// forever, and no silence packets are sent downstream.
-		if (inDtx) {
-			return;
-		}
-
+	/**
+	 * Forward one encoded voice frame to the bridge: stamp it, open the talk if none is active, re-arm the
+	 * talk silence timer and emit it. Reached from the pacer's release (the normal path, at real time plus the
+	 * lead) or directly when pacing is disabled. DTX frames never get here.
+	 */
+	private sendAudioFrame(opusFrame: Uint8Array, audioLevel: number): void {
 		// The RtpTimestamper produces a monotonic RTP timestamp (inserting a real-silence gap when the
-		// source idled longer than the buffered media — e.g. across the DTX frames we skipped above) and a
+		// source idled longer than the buffered media — e.g. across the DTX frames the caller dropped) and a
 		// uint16 RTP sequence number. JVB's Conference.handleMediaMessage reinterprets `media.chunk` as that
 		// 16-bit RTP sequence number.
 		const { timestamp, sequenceNumber: rtpSequenceNumber, bufferAheadMs } = this.rtpTimestamper.nextFrameTimestamp();
@@ -863,16 +933,18 @@ export class TranslatorConnection {
 		}
 		this.lastFrameTimestamp = timestamp;
 		this.talkBytes += opusFrame.length;
-		// (Re)arm the silence timer against the MEDIA playout, not frame arrival: OpenAI streams faster than real
-		// time (a 2 s utterance can arrive in ~200 ms), so the consumer is still playing out the buffered burst long
-		// after the last frame arrives. Wait until that buffered media would finish playing (bufferAheadMs) plus the
-		// silence margin before ending the talk.
+		// (Re)arm the silence timer against the MEDIA playout, not frame arrival: the providers stream faster than
+		// real time (a 2 s utterance can arrive in ~200 ms), so the consumer is still playing out the buffered burst
+		// long after the last frame arrives. Wait until that buffered media would finish playing (bufferAheadMs) plus
+		// the silence margin before ending the talk. With the pacer in front, frames reach here at real time and
+		// bufferAheadMs stays within the lead; frames still queued in the pacer keep re-arming the timer as they
+		// are released, so a talk cannot end while its audio is still waiting to go out.
 		this.armTalkSilenceTimer(bufferAheadMs);
 
 		const payload = bytesToBase64(opusFrame);
 
 		// The mediajson wire-envelope sequence number is assigned by the proxy (per-WebSocket), not here.
-		// Every frame that reaches here passed libopus's VAD (DTX frames were dropped above), hence vad = true.
+		// Every frame that reaches here passed libopus's VAD (the caller drops DTX frames before pacing), hence vad = true.
 		this.onAudioFrame?.(this.localTag, rtpSequenceNumber, timestamp, payload, audioLevel, /* vad */ true);
 	}
 
@@ -973,11 +1045,15 @@ export class TranslatorConnection {
 		}
 	}
 
-	close(): void {
-		this.doClose(false, 'local');
+	/**
+	 * Close the direction. `releaseQueuedAudio` false skips the burst of still-queued translated audio at close,
+	 * for an owner that knows nobody can hear it (the bridge socket closed, the synthetic source was removed).
+	 */
+	close(releaseQueuedAudio = true): void {
+		this.doClose(false, 'local', releaseQueuedAudio);
 	}
 
-	private doClose(notify: boolean, reason: TranslatorCloseReason): void {
+	private doClose(notify: boolean, reason: TranslatorCloseReason, releaseQueuedAudio = true): void {
 		if (this.isClosed) {
 			return;
 		}
@@ -1001,6 +1077,43 @@ export class TranslatorConnection {
 			this.usageReportTimer = undefined;
 		}
 		this.reportUsageDelta();
+
+		// Audio still queued in the pacer goes out now, at once, while onAudioFrame is still attached: releasing it
+		// at real time would take time this connection no longer has (its owner may be replacing it on the same
+		// tag), and dropping it would lose the end of the phrase the provider closed on, or the tail of a reopen
+		// after a provider drop. A burst at close is the pre-pacer behaviour for this tail, capped at what a
+		// client's jitter buffer holds (FLUSH_AT_CLOSE_MAX_FRAMES; a longer burst would be partly discarded by
+		// the client anyway, so the proxy drops the rest and says so); the talk stop below then covers the
+		// phrase. The owner skips the burst when the bridge socket is gone or the source was removed.
+		if (this.pacer) {
+			const queued = this.pacer.queuedFrames;
+			const released = releaseQueuedAudio ? this.pacer.flush(FLUSH_AT_CLOSE_MAX_FRAMES) : 0;
+			const dropped = queued - released;
+			if (dropped > 0 && releaseQueuedAudio) {
+				// Lost with a listener present, like an overflow drop; the no-listener case is not a loss.
+				this.metricBatcher.increment({ name: 'translation_paced_frames_dropped', worker: 'opus-transcriber-proxy', errorType: 'close', count: dropped });
+			}
+			if (queued > 0) {
+				const line =
+					`[${this.connectionId}] [${this.options.targetLanguage}] tag ${this.localTag} closing (${reason}) with ` +
+					`${(queued * FRAME_DURATION_MS) / 1000} s of translated audio still queued: released ${released} frame(s) at once` +
+					(dropped > 0 ? `, dropped ${dropped}` : '') +
+					(!releaseQueuedAudio ? ' (no listener)' : '');
+				if (dropped > 0 && releaseQueuedAudio) this.runtime.logger.warn(line);
+				else this.runtime.logger.info(line);
+			}
+			if (this.pacedSendFailures > 0) {
+				this.logError(`[${this.connectionId}] [${this.options.targetLanguage}] tag ${this.localTag}: ${this.pacedSendFailures} paced frame(s) failed to send`);
+			}
+			if (this.pacerFramesDropped > 0) {
+				this.runtime.logger.warn(
+					`[${this.connectionId}] [${this.options.targetLanguage}] tag ${this.localTag} dropped ` +
+						`${(this.pacerFramesDropped * FRAME_DURATION_MS) / 1000} s of translated audio in total because it ran more than ` +
+						`${(MAX_PACED_FRAMES * FRAME_DURATION_MS) / 1000} s behind real time`,
+				);
+			}
+			this.pacer.close();
+		}
 
 		// Close any talk still in progress so a receiver isn't left believing the source is still sending after the
 		// connection goes away. Fired while onTalkStop is still attached, before the detach below.

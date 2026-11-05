@@ -29,6 +29,7 @@ const CORE_FILES = [
 	'src/TranslatorConnection.ts',
 	'src/usage-reporter.ts',
 	'src/RtpTimestamper.ts',
+	'src/MediaPacer.ts',
 	'src/translate/runtime.ts',
 	'src/translate/provider.ts',
 	'src/textTranslate/TextTranslator.ts',
