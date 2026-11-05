@@ -66,7 +66,7 @@ hasn't finalized yet is not a backend failure. Passed to `replay-dump.cjs` as
 finals strictly.
 
 The target server's `info` message (`gitHash`, `runtime`, `provider`, `instanceId`, etc. — see
-"Info" under WebSocket Protocol) is logged on every attempt: `replay-dump.cjs` echoes it verbatim as
+"Info" in `protocol.md`) is logged on every attempt: `replay-dump.cjs` echoes it verbatim as
 `<info> {...}`, and `runAttempt` re-logs that line through the monitor's own timestamped `log()`, so
 which OTP build/version a check actually connected to is visible in the monitor's log stream, not
 just buried in the replay child's captured output.
@@ -99,6 +99,6 @@ bundle shipped in the same image (same build) instead. This is separate from the
 
 - `DUMP_WEBSOCKET_MESSAGES` - Enable message dumping for debugging
 - `OTLP_ENDPOINT` - OTLP HTTP endpoint for metrics/logs (disabled if empty)
-- `OTLP_STALE_MARKER_SENDS` - How many times the container sends the stale-marker export at SIGTERM, each on a new connection (default: 8; `0` disables). See "Stale markers at shutdown" under Observability. The CF Worker forwards it when set
+- `OTLP_STALE_MARKER_SENDS` - How many times the container sends the stale-marker export at SIGTERM, each on a new connection (default: 8; `0` disables). See "Stale markers at shutdown" above. The CF Worker forwards it when set
 
 `MONITOR_*` vars configure the separate monitor entrypoint (`src/monitor.ts`), not the proxy server — see "Monitor Mode" above.
