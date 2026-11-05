@@ -94,6 +94,35 @@ describe('config', () => {
 			expect(config.forceCommitTimeout).toBe(2); // Default
 		});
 
+		it('uses the default for a negative AGENT_PACE_LEAD_MS, which the pacer would refuse, and says so', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				vi.stubEnv('AGENT_PACE_LEAD_MS', '-200');
+				const { config } = await import('../../src/config');
+				expect(config.agent.paceLeadMs).toBe(200);
+				expect(warn.mock.calls.flat().join('\n')).toMatch(/AGENT_PACE_LEAD_MS=-200 is negative/);
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
+		it('raises an AGENT_PACE_LEAD_MS under one frame to one frame, as the translation lead is', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				vi.stubEnv('AGENT_PACE_LEAD_MS', '5');
+				const { config } = await import('../../src/config');
+				expect(config.agent.paceLeadMs).toBe(20);
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
+		it('keeps a zero AGENT_PACE_LEAD_MS, which the pacer raises to one frame', async () => {
+			vi.stubEnv('AGENT_PACE_LEAD_MS', '0');
+			const { config } = await import('../../src/config');
+			expect(config.agent.paceLeadMs).toBe(0);
+		});
+
 		it('should parse boolean flags correctly', async () => {
 			vi.stubEnv('ENABLE_DUMMY_PROVIDER', 'true');
 			vi.stubEnv('BROADCAST_TRANSCRIPTS', 'true');

@@ -122,6 +122,19 @@ export interface TranslationRuntimeConfig {
 	 * sending-change). Only disable when pointed at an endpoint that sends explicit done events.
 	 */
 	talkSilenceTimeoutMs?: number;
+	/**
+	 * How far ahead of real time (ms) translated audio may be released to the bridge. The providers deliver
+	 * output faster than real time — xAI hands over each translated phrase, often several seconds of audio,
+	 * in one burst of a few hundred milliseconds — and a burst longer than a WebRTC client's jitter buffer
+	 * (NetEQ: 200 packets, 4 s, by default) makes the client flush and lose part of the phrase while the
+	 * transcript arrives complete. `TranslatorConnection` therefore queues the encoded voice frames in a
+	 * `MediaPacer` and releases one per 20 ms, at most this far ahead of the playout clock. Default 200.
+	 * `0` disables pacing (frames are forwarded as they arrive, the pre-pacer behaviour); a value from 1 to 19
+	 * frame (20 ms) is raised to one, since no frame could fit a smaller lead. The talk boundaries are
+	 * unaffected either way, since they were already measured against the projected playout.
+	 * Resolved by each runtime from its environment (`TRANSLATION_PACE_LEAD_MS`, `parsePaceLeadMs`).
+	 */
+	paceLeadMs?: number;
 }
 
 /** Per-connection metric batcher (Node aggregates + flushes to OTLP; a Worker may no-op). */

@@ -43,6 +43,7 @@ interface Instruments {
 	backendAudioSentBytesTotal: Counter;
 	backendErrorsTotal: Counter;
 	backendHandshakeFailuresTotal: Counter;
+	translationPacedFramesDroppedTotal: Counter;
 	agentDialFailuresTotal: Counter;
 	agentStatusReportsGivenUpTotal: Counter;
 	transcriptionsReceivedTotal: Counter;
@@ -130,6 +131,15 @@ function createInstruments(): Instruments {
 		backendHandshakeFailuresTotal: meter.createCounter('otp_backend_handshake_failures_total', {
 			description: 'Backend WebSocket handshake attempts that failed (before any retry)',
 			unit: '{attempts}',
+		}),
+
+		// Translated 20 ms frames the pacer dropped. Labels: reason (overflow: the direction ran more than the
+		// queue cap behind real time and the oldest block was skipped | close: more than the flush cap was
+		// still queued when the direction closed with a listener). Container only: the Worker's metric
+		// sink is a no-op, and there the warnings and the total logged at close are the record.
+		translationPacedFramesDroppedTotal: meter.createCounter('otp_translation_paced_frames_dropped_total', {
+			description: 'Translated audio frames the pacer dropped (20 ms each)',
+			unit: '{frames}',
 		}),
 
 		// Labels: reason (config | ssrf). Permanent failures only: the bridge is told not to redial.
