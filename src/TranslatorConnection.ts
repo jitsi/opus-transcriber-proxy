@@ -17,6 +17,7 @@
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
+import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
@@ -813,6 +814,15 @@ export class TranslatorConnection {
 
 		if (parsedMessage.type === 'error') {
 			this.logError(`${provider.name} sent error message for ${this.localTag}: ${data}`);
+			// xAI names a voice it does not know when answering session.update; learn it so the sources that
+			// hash to it take the next voice from their reopen on (see translate/voices.ts for the fallbacks).
+			const refusedVoice = refusedVoiceOf(String(parsedMessage.error?.message ?? ''));
+			if (refusedVoice !== undefined && markVoiceRefused(refusedVoice)) {
+				this.logError(
+					`${provider.name} does not know voice '${refusedVoice}' (XAI_TRANSLATION_VOICES or XAI_TRANSLATION_VOICE); ` +
+						`directions that would use it take the next voice from their reopen on`,
+				);
+			}
 			this.runtime.writeMetric({
 				name: `${provider.id}_api_error`,
 				worker: 'opus-transcriber-proxy',

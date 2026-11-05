@@ -34,6 +34,7 @@
 
 import type { TranslationRuntimeConfig } from './runtime';
 import { isValidTargetLanguage } from '../textTranslate/TextTranslator';
+import { isVoiceRefused } from './voices';
 
 export type TranslationProviderId = 'openai' | 'xai';
 
@@ -79,17 +80,16 @@ export interface TranslationProviderSpec {
 	readonly defaultIdleCloseMs: number;
 	/**
 	 * The `session.update` message for a target language. `voice` is the TTS voice this direction
-	 * should speak in (see ./voices.ts); undefined → the configured voice, else the provider's
-	 * default. Ignored by a provider whose session takes no voice (OpenAI).
+	 * should speak in (see ./voices.ts); undefined → the configured voice, unless the provider has
+	 * refused it, else no voice and the provider's default. Ignored by a provider whose session
+	 * takes no voice (OpenAI).
 	 */
 	buildSessionUpdate(targetLanguage: string, voice?: string): Record<string, unknown>;
 }
 
 // Supported target languages for the gpt-realtime-translate endpoint.
 // From https://github.com/openai/openai-cookbook examples/voice_solutions/realtime_translation_guide/.
-const OPENAI_TARGET_LANGUAGES = new Set([
-	'en', 'es', 'pt', 'fr', 'ja', 'ru', 'zh', 'de', 'ko', 'hi', 'id', 'vi', 'it',
-]);
+const OPENAI_TARGET_LANGUAGES = new Set(['en', 'es', 'pt', 'fr', 'ja', 'ru', 'zh', 'de', 'ko', 'hi', 'id', 'vi', 'it']);
 
 const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
 	english: 'en',
@@ -125,9 +125,7 @@ function normalizeOpenAITargetLanguage(input: string): string {
 	if (OPENAI_TARGET_LANGUAGES.has(lower)) return lower;
 	const mapped = languageNameToIso(lower);
 	if (mapped && OPENAI_TARGET_LANGUAGES.has(mapped)) return mapped;
-	throw new Error(
-		`Unsupported target language "${input}". Supported: ${Array.from(OPENAI_TARGET_LANGUAGES).join(', ')}`,
-	);
+	throw new Error(`Unsupported target language "${input}". Supported: ${Array.from(OPENAI_TARGET_LANGUAGES).join(', ')}`);
 }
 
 // xAI documents "any non-empty tag", but a free-form string would let a typo through to a paid session,
@@ -199,7 +197,10 @@ export function resolveTranslationProvider(
 	| { provider?: undefined; error: string; kind: 'invalid' | 'unavailable' } {
 	const id = requested ? requested.toLowerCase() : defaultTranslationProvider(config);
 	if (!isTranslationProviderId(id)) {
-		return { kind: 'invalid', error: `Invalid translation provider: ${requested}. Valid providers are: ${TRANSLATION_PROVIDERS.join(', ')}` };
+		return {
+			kind: 'invalid',
+			error: `Invalid translation provider: ${requested}. Valid providers are: ${TRANSLATION_PROVIDERS.join(', ')}`,
+		};
 	}
 	if (!isTranslationProviderAvailable(id, config)) {
 		return { kind: 'unavailable', error: `Translation provider '${id}' is not available: its API key is not configured` };
@@ -222,20 +223,23 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 			handshake: 'session',
 			serverTranscriptFinals: true,
 			defaultIdleCloseMs: XAI_DEFAULT_IDLE_CLOSE_MS,
-			buildSessionUpdate: (targetLanguage, voice = configuredVoice) => ({
-				type: 'session.update',
-				session: {
-					audio: {
-						// Source captions are not needed: the bridge gets the source transcript from /transcribe.
-						input: { transcription: false, format: { type: 'audio/pcm', rate: 24000 } },
-						output: {
-							language: targetLanguage,
-							format: { type: 'audio/pcm', rate: 24000 },
-							...(voice ? { voice } : {}),
+			buildSessionUpdate: (targetLanguage, voice) => {
+				const chosen = voice ?? (configuredVoice !== undefined && !isVoiceRefused(configuredVoice) ? configuredVoice : undefined);
+				return {
+					type: 'session.update',
+					session: {
+						audio: {
+							// Source captions are not needed: the bridge gets the source transcript from /transcribe.
+							input: { transcription: false, format: { type: 'audio/pcm', rate: 24000 } },
+							output: {
+								language: targetLanguage,
+								format: { type: 'audio/pcm', rate: 24000 },
+								...(chosen ? { voice: chosen } : {}),
+							},
 						},
 					},
-				},
-			}),
+				};
+			},
 		};
 	}
 	return {

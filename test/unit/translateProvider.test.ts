@@ -25,6 +25,7 @@ import {
 	XAI_TRANSLATIONS_ENDPOINT,
 } from '../../src/translate/provider';
 import type { TranslationRuntimeConfig } from '../../src/translate/runtime';
+import { markVoiceRefused, resetRefusedVoices } from '../../src/translate/voices';
 
 const base: TranslationRuntimeConfig = {
 	openaiApiKey: 'oa-key',
@@ -104,6 +105,17 @@ describe('translation provider specs', () => {
 		const unconfigured = getTranslationProvider('xai', { ...base, xaiApiKey: 'k' });
 		expect((unconfigured.buildSessionUpdate('es', 'rex') as any).session.audio.output.voice).toBe('rex');
 		expect((unconfigured.buildSessionUpdate('es') as any).session.audio.output).not.toHaveProperty('voice');
+	});
+
+	it('xai: a refused configured voice is left out, so the provider default speaks', () => {
+		markVoiceRefused('Ara');
+		try {
+			const p = getTranslationProvider('xai', { ...base, xaiApiKey: 'k', xaiVoice: 'Ara' });
+			expect((p.buildSessionUpdate('es') as any).session.audio.output).not.toHaveProperty('voice');
+			expect((p.buildSessionUpdate('es', 'rex') as any).session.audio.output.voice).toBe('rex');
+		} finally {
+			resetRefusedVoices();
+		}
 	});
 
 	it('openai: ignores a voice, its session takes none', () => {
