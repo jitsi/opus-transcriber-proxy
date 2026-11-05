@@ -114,6 +114,11 @@ export class TranslatorProxy extends Emitter {
 	 */
 	private envelopeSequenceNumber = 0;
 
+	/** Set by the bridge socket's close event; the teardown runs once. */
+	private bridgeClosed = false;
+	/** The message of the bridge socket's `error` event, if one preceded its close (see onBridgeClosed). */
+	private bridgeError?: string;
+
 	constructor(ws: IWebSocket, options: TranslatorProxyOptions, runtime: TranslationRuntime) {
 		super();
 		this.ws = ws;
@@ -123,15 +128,14 @@ export class TranslatorProxy extends Emitter {
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
 
-		this.ws.addEventListener('close', () => {
-			// The bridge is gone: nothing a direction still holds in its pacer can reach anyone.
-			this.closeAllConnections(/* releaseQueuedAudio */ false);
-			this.emit('closed');
-		});
+		this.ws.addEventListener('close', (event) => this.onBridgeClosed(event));
 
 		this.ws.addEventListener('error', (event) => {
-			const message = (event as { message?: string; }).message ?? 'WebSocket error';
-			this.runtime.logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
+			// Not a failure of the session by itself: both runtimes follow an error with a close event, and
+			// in the Worker a bridge that closed normally arrives this way (see onBridgeClosed). The message
+			// is kept for the close line, which has the code to say what it meant.
+			this.bridgeError = (event as { message?: string }).message ?? 'WebSocket error';
+			this.runtime.logger.debug(`TranslatorProxy bridge WebSocket error: ${this.bridgeError}`);
 		});
 
 		this.ws.addEventListener('message', (event) => {
@@ -185,6 +189,30 @@ export class TranslatorProxy extends Emitter {
 	 * (which passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
 	 * {@link close}.
 	 */
+	/**
+	 * The bridge socket closed: tear down every direction (nothing a direction still holds in its pacer
+	 * can reach anyone) and report it. One info line carries the close code and, when an `error` event
+	 * preceded the close, its message. `ws` (Node) and workerd both dispatch a close after an error, so
+	 * the error itself is not reported at error level: the JVB sends its Close frame and cuts the TCP
+	 * connection at once, without waiting for the reply (`Exporter.stop`), so in the Worker every normal
+	 * bridge close comes with the error "Network connection lost.", before or after the close event
+	 * (measured both ways), and reporting it as an error made each healthy session's end look like a
+	 * failure. A peer that completes the handshake gets a clean close with its code and no error in
+	 * both runtimes. Idempotent, so a close after the proxy's own `close()` tears down once.
+	 */
+	private onBridgeClosed(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): void {
+		if (this.bridgeClosed) {
+			return;
+		}
+		this.bridgeClosed = true;
+		const afterError = this.bridgeError !== undefined ? ` after error: ${this.bridgeError}` : '';
+		this.runtime.logger.info(
+			`TranslatorProxy bridge WebSocket closed: code=${event?.code ?? 'none'} reason=${event?.reason || 'none'} wasClean=${event?.wasClean ?? 'unknown'}${afterError}`,
+		);
+		this.closeAllConnections(/* releaseQueuedAudio */ false);
+		this.emit('closed');
+	}
+
 	private closeAllConnections(releaseQueuedAudio = true): void {
 		for (const byLanguage of this.connections.values()) {
 			for (const conn of byLanguage.values()) {
