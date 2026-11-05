@@ -43,12 +43,13 @@ export interface TranslatorProxyOptions {
 	translationToken?: string;
 }
 
+/** Marker in `loggedVoices` for a source that fell through to the configured or default voice. */
+const NO_VOICE = '';
+
 // Per-direction reopen backoff after a connection failed (ms): base, doubling, capped. A direction whose
 // connection closed with an error, or was closed by the provider before it ever took audio, is not re-dialled
 // on the very next 20 ms frame, or an outage would turn into one connect attempt (a billable session start on
 // xAI) per frame per direction. A benign close (idle, or a provider-side close after audio flowed) is not paced.
-/** Marker in `loggedVoices` for a source that fell through to the configured or default voice. */
-const NO_VOICE = '';
 const REOPEN_BACKOFF_BASE_MS = 1000;
 const REOPEN_BACKOFF_MAX_MS = 15000;
 

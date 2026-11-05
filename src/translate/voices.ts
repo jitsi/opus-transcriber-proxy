@@ -26,10 +26,10 @@
  * bridge spreads a conference's directions over connections as jicofo's `translation.mode` says
  * (one per exported source by default, with a source's languages split across connects past a
  * cap), and a Worker's connections land in different isolates, so a stateful assignment would
- * have nothing to share through anyway. The
- * cost is collisions: two sources may hash to one voice while others go unused, with the odds set
- * by the length of the list (three speakers over 8 voices collide about one time in three, over 28
- * about one in ten), so configure every voice that is acceptable.
+ * have nothing to share through anyway. The cost is collisions: two sources may hash to one voice
+ * while others go unused, with the odds set by the length of the list (three speakers over 8 voices
+ * collide about one time in three, over 28 about one in ten), so configure every voice that is
+ * acceptable.
  *
  * The list is not checked against a known set of voices: xAI adds voices, and it says which id it
  * does not know (an `error` event answering the `session.update`, "Voice 'x' not found"), so a
@@ -37,8 +37,9 @@
  * to the next entry of the list from their reopen on, while every other source keeps its voice;
  * with every entry refused the single configured voice applies, and with that refused too no voice
  * is sent and the provider's default speaks. The record is per process (per isolate in the Worker)
- * and lasts until it restarts, so each one pays the directions already opened with a mistyped
- * voice when the first answer arrives (every language of every source that hashed to it).
+ * and lasts until it restarts. The price of a mistyped voice, paid once per process: every direction
+ * already opened with it when xAI's first answer arrives fails and reopens, which is every language
+ * of every source that hashed to it.
  *
  * Worker-safe: no Node imports.
  */
