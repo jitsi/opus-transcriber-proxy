@@ -383,6 +383,33 @@ describe('AgentProxy', () => {
 		expect(frames[0].vad).toBe(true);
 	});
 
+	it('paces the return path: the lead at once, then one frame per 20 ms, each with its level', async () => {
+		vi.useFakeTimers();
+		try {
+			const proxy = createProxy({ paceLeadMs: 20 });
+			const frames: any[] = [];
+			proxy.on('audioFrame', (data: any) => frames.push(data));
+			let level = 0;
+			encoder.encodeFrame.mockImplementation(() => [{ data: new Uint8Array([9, 9]), inDtx: false, audioLevel: 40 + level++ }]);
+			await settle();
+			bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+			endpointWs.fire('open', {});
+			await settle();
+
+			// A 200 ms answer arrives in one go: only the lead (one frame) goes out, the rest at real time.
+			for (let i = 0; i < 10; i++) endpointWs.receive({ event: 'media', media: { payload: PCM_B64 } });
+			await settle();
+			expect(frames.length).toBe(1);
+			await vi.advanceTimersByTimeAsync(20 * 4);
+			expect(frames.length).toBe(5);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(10);
+			expect(frames.map((f) => f.audioLevel)).toEqual([40, 41, 42, 43, 44, 45, 46, 47, 48, 49]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('encodes customer audio and emits it with talk boundaries on the agent tag', async () => {
 		const proxy = createProxy();
 		const frames: any[] = [];

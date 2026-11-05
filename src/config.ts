@@ -16,7 +16,7 @@
 
 import dotenv from 'dotenv';
 import { validateTags } from './utils';
-import { parseIntOrUndefined } from './translate/env';
+import { parseIntOrUndefined, parsePaceLeadMs } from './translate/env';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -243,8 +243,10 @@ export const config = {
 	agent: {
 		// Require wss:// for the customer endpoint URL (AGENT_REQUIRE_WSS=false allows ws:// for dev).
 		requireWss: process.env.AGENT_REQUIRE_WSS !== 'false',
-		// How much agent audio (ms) may be released ahead of real time by the pacer.
-		paceLeadMs: parseIntOrDefault(process.env.AGENT_PACE_LEAD_MS, 200),
+		// How much agent audio (ms) may be released ahead of real time by the pacer, read as the translation
+		// lead is (the pacer refuses a negative lead, and AgentProxy builds one per session, so a bad value
+		// must be caught here, not there). 0 is raised to one frame by the pacer: the agent path has no off switch.
+		paceLeadMs: parsePaceLeadMs(process.env.AGENT_PACE_LEAD_MS, warnConfig, 'AGENT_PACE_LEAD_MS'),
 		// Shared secret gating the /agent WebSocket upgrade. When set, the caller (the bridge) must send a
 		// matching X-Agent-Token header, so a network peer that reaches the proxy can't trigger a dial-out.
 		// Unset disables the check (a warning is logged) — only safe when the proxy is strictly bridge-only.

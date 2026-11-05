@@ -79,6 +79,9 @@ function makeHarness(talkSilenceTimeoutMs = TALK_TIMEOUT_MS): { runtime: Transla
 			translationUsageUrl: 'https://usage.test/report',
 			usageReportIntervalMs: 0,
 			talkSilenceTimeoutMs,
+			// Pacing off: these tests drive the talk timer with raw provider bursts; pacing has its own tests
+			// (TranslatorConnectionPacing.test.ts).
+			paceLeadMs: 0,
 		},
 		writeMetric: () => {},
 		createMetricBatcher: () => ({ increment: () => {}, flush: () => {} }),
