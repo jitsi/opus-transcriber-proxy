@@ -94,6 +94,18 @@ describe('config', () => {
 			expect(config.forceCommitTimeout).toBe(2); // Default
 		});
 
+		it('uses the default for a negative AGENT_PACE_LEAD_MS, which the pacer would refuse', async () => {
+			vi.stubEnv('AGENT_PACE_LEAD_MS', '-200');
+			const { config } = await import('../../src/config');
+			expect(config.agent.paceLeadMs).toBe(200);
+		});
+
+		it('keeps a zero AGENT_PACE_LEAD_MS, which the pacer raises to one frame', async () => {
+			vi.stubEnv('AGENT_PACE_LEAD_MS', '0');
+			const { config } = await import('../../src/config');
+			expect(config.agent.paceLeadMs).toBe(0);
+		});
+
 		it('should parse boolean flags correctly', async () => {
 			vi.stubEnv('ENABLE_DUMMY_PROVIDER', 'true');
 			vi.stubEnv('BROADCAST_TRANSCRIPTS', 'true');

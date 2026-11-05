@@ -67,6 +67,17 @@ function parseIntOrDefault(value: string | undefined, defaultValue: number): num
 	return isNaN(parsed) ? defaultValue : parsed;
 }
 
+/** An integer that must not be negative; a negative value is reported and the default used. */
+function parseNonNegativeIntOrDefault(name: string, defaultValue: number): number {
+	const raw = process.env[name];
+	const parsed = parseIntOrDefault(raw, defaultValue);
+	if (parsed < 0) {
+		warnConfig(`${name}=${JSON.stringify(raw)} is negative; using ${defaultValue}`);
+		return defaultValue;
+	}
+	return parsed;
+}
+
 function parseJsonOrDefault<T>(value: string | undefined, defaultValue: T): T {
 	if (!value) return defaultValue;
 	try {
@@ -243,8 +254,9 @@ export const config = {
 	agent: {
 		// Require wss:// for the customer endpoint URL (AGENT_REQUIRE_WSS=false allows ws:// for dev).
 		requireWss: process.env.AGENT_REQUIRE_WSS !== 'false',
-		// How much agent audio (ms) may be released ahead of real time by the pacer.
-		paceLeadMs: parseIntOrDefault(process.env.AGENT_PACE_LEAD_MS, 200),
+		// How much agent audio (ms) may be released ahead of real time by the pacer. The pacer refuses a
+		// negative lead, and AgentProxy builds one per session, so a negative value is caught here.
+		paceLeadMs: parseNonNegativeIntOrDefault('AGENT_PACE_LEAD_MS', 200),
 		// Shared secret gating the /agent WebSocket upgrade. When set, the caller (the bridge) must send a
 		// matching X-Agent-Token header, so a network peer that reaches the proxy can't trigger a dial-out.
 		// Unset disables the check (a warning is logged) — only safe when the proxy is strictly bridge-only.
