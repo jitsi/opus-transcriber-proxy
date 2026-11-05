@@ -60,10 +60,10 @@ describe('parsePaceLeadMs', () => {
 		expect(warnings).toEqual([expect.stringMatching(/TRANSLATION_PACE_LEAD_MS=abc is not an integer/)]);
 	});
 
-	it('warns and disables pacing for a negative value', () => {
-		const { result, warnings } = parse('-1');
-		expect(result).toBe(0);
-		expect(warnings).toEqual([expect.stringMatching(/negative; pacing disabled/)]);
+	it('warns and takes the default for a negative value, so a typo cannot turn pacing off', () => {
+		const { result, warnings } = parse('-200');
+		expect(result).toBe(DEFAULT_PACE_LEAD_MS);
+		expect(warnings).toEqual([expect.stringMatching(/negative; using 200/)]);
 	});
 
 	it('warns and raises a value under one frame to one frame, the floor the pacer applies anyway', () => {

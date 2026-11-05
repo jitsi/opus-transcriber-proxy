@@ -52,8 +52,10 @@ export function parsePaceLeadMs(value: string | undefined, warn: (message: strin
 		return DEFAULT_PACE_LEAD_MS;
 	}
 	if (parsed < 0) {
-		warn(`TRANSLATION_PACE_LEAD_MS=${value} is negative; pacing disabled (set 0 to disable it explicitly)`);
-		return 0;
+		// Not "pacing off": a typo such as -200 must not silently remove the fix, and AGENT_PACE_LEAD_MS
+		// treats a negative value the same way. 0 is the explicit off switch.
+		warn(`TRANSLATION_PACE_LEAD_MS=${value} is negative; using ${DEFAULT_PACE_LEAD_MS} (set 0 to disable pacing)`);
+		return DEFAULT_PACE_LEAD_MS;
 	}
 	if (parsed > 0 && parsed < MIN_PACE_LEAD_MS) {
 		warn(`TRANSLATION_PACE_LEAD_MS=${value} is less than one ${MIN_PACE_LEAD_MS} ms frame; using ${MIN_PACE_LEAD_MS}`);
