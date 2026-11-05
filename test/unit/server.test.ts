@@ -70,6 +70,8 @@ vi.mock('../../src/SessionManager', () => ({
 		hasSession: vi.fn().mockReturnValue(false),
 		hasActiveSession: vi.fn().mockReturnValue(false),
 		getActiveSession: vi.fn(),
+		getDetachedSession: vi.fn(),
+		reattachSession: vi.fn(),
 		registerSession: vi.fn(),
 		unregisterSession: vi.fn(),
 		detachSession: vi.fn(),
@@ -353,21 +355,78 @@ describe('handleWebSocketConnection – xai_stt_endpoint parameter', () => {
 		expect(TranscriberProxy).toHaveBeenCalled();
 	});
 
-	it('warns when a resumed session keeps a different endpoint than the new connection asked for', () => {
-		const existing = {
+	describe('resuming a session', () => {
+		/** A session as the manager holds it, created with the given endpoint (undefined = the default). */
+		const sessionWith = (xaiSttEndpoint?: string) => ({
 			on: vi.fn(),
-			getOptions: () => ({ sendBack: false, sendBackInterim: false, xaiSttEndpoint: 'eu' }),
+			getOptions: () => ({ sendBack: false, sendBackInterim: false, xaiSttEndpoint }),
 			getWebSocket: vi.fn(),
 			reattachWebSocket: vi.fn(),
 			close: vi.fn(),
+		});
+		const resume = (kind: 'active' | 'detached', existing: ReturnType<typeof sessionWith>) => {
+			if (kind === 'active') {
+				vi.mocked(sessionManager.hasActiveSession).mockReturnValue(true);
+				vi.mocked(sessionManager.getActiveSession as any).mockReturnValue(existing);
+			} else {
+				vi.mocked(sessionManager.hasSession).mockReturnValue(true);
+				vi.mocked(sessionManager.getDetachedSession as any).mockReturnValue(existing);
+				vi.mocked(sessionManager.reattachSession as any).mockReturnValue(existing);
+			}
 		};
-		vi.mocked(sessionManager.hasActiveSession).mockReturnValue(true);
-		vi.mocked(sessionManager.getActiveSession as any).mockReturnValue(existing);
 
-		handleWebSocketConnection(makeMockWs() as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: undefined }, undefined);
+		for (const kind of ['active', 'detached'] as const) {
+			describe(`a ${kind} session`, () => {
+				it('is refused with 1002, and left as it was, when the connection names another endpoint than the session uses', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
 
-		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('keeps its xAI STT endpoint eu; this connection asked for default'));
-		expect(TranscriberProxy).not.toHaveBeenCalled(); // resumed, not recreated
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'us' }, undefined);
+
+					expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining("uses xAI STT endpoint eu, not 'us'"));
+					// Not resumed: a refused connection must not kill the current connection or cancel the grace timer.
+					expect(existing.reattachWebSocket).not.toHaveBeenCalled();
+					expect(sessionManager.reattachSession).not.toHaveBeenCalled();
+					expect(TranscriberProxy).not.toHaveBeenCalled();
+				});
+
+				it('is refused when the session was created on the default endpoint and the connection names one', () => {
+					const existing = sessionWith(undefined);
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'eu' }, undefined);
+
+					expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining("uses xAI STT endpoint default, not 'eu'"));
+					expect(existing.reattachWebSocket).not.toHaveBeenCalled();
+					expect(sessionManager.reattachSession).not.toHaveBeenCalled();
+				});
+
+				it('resumes when the connection names the same endpoint, with no warning', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'eu' }, undefined);
+
+					expect(mockWs.close).not.toHaveBeenCalled();
+					expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('keeps its xAI STT endpoint'));
+				});
+
+				it('resumes, with a warning, when the connection names none and the session has one', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: undefined }, undefined);
+
+					expect(mockWs.close).not.toHaveBeenCalled();
+					expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('keeps its xAI STT endpoint eu; this connection named none'));
+					expect(TranscriberProxy).not.toHaveBeenCalled(); // resumed, not recreated
+				});
+			});
+		}
 	});
 });
 

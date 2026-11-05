@@ -193,6 +193,27 @@ describe('value types', () => {
 		}
 	});
 
+	it('XAI_STT_ENDPOINTS: a rejected value never appears in the error, because the error goes to the Worker log', () => {
+		const secret = 'hunter2';
+		const rejected = [
+			{ eu: `wss://user:${secret}@eu-west-1.api.x.ai/v1/stt` }, // credentials in an entry
+			{ eu: `wss://evil.example/v1/stt?token=${secret}` }, // wrong host and a query
+			[`wss://user:${secret}@api.x.ai/v1/stt`], // not an object
+			`{"eu": "wss://user:${secret}@api.x.ai/v1/stt"`, // not valid JSON (unterminated)
+		];
+		for (const value of rejected) {
+			const result = normalize('XAI_STT_ENDPOINTS', value);
+			expect(result).toHaveProperty('error');
+			expect(JSON.stringify(result), JSON.stringify(value)).not.toContain(secret);
+		}
+		// The error still names the entry that failed.
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: `wss://user:${secret}@api.x.ai/v1/stt` })).toMatchObject({ error: expect.stringContaining('entry "eu"') });
+	});
+
+	it('XAI_STT_ENDPOINTS: surrounding whitespace of a URL is removed before it is stored', () => {
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: '  wss://eu-west-1.api.x.ai/v1/stt \n' })).toBe('{"eu":"wss://eu-west-1.api.x.ai/v1/stt"}');
+	});
+
 	it('XAI_STT_ENDPOINTS: the name rule matches ENDPOINT_NAME_RE of the container, so the two copies cannot drift', () => {
 		for (const name of ['eu', 'eu-west-1', 'a', '0', 'x'.repeat(32), 'x'.repeat(33), 'EU', '-eu', 'e_u', 'e.u', '', 'a b', 'eu\n', '__proto__']) {
 			const accepted = typeof normalize('XAI_STT_ENDPOINTS', { [name]: 'wss://api.x.ai/v1/stt' }) === 'string';

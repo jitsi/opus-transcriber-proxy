@@ -86,6 +86,20 @@ describe('buildContainerEnvVars', () => {
 		expect(set).toMatchObject({ GEMINI_MODEL: 'g', SESSION_RESUME_GRACE_PERIOD: '30', SLEEP_AFTER: '10m' });
 	});
 
+	it('forwards a JSON object binding as JSON, not as "[object Object]"', () => {
+		// A wrangler `vars` entry can be an object, and KV accepts one for these variables too.
+		const set = buildContainerEnvVars(
+			env({
+				XAI_STT_ENDPOINTS: { eu: 'wss://eu-west-1.api.x.ai/v1/stt' },
+				OPENAI_TURN_DETECTION: { type: 'server_vad', threshold: 0.6 },
+			} as never),
+		);
+		expect(set.XAI_STT_ENDPOINTS).toBe('{"eu":"wss://eu-west-1.api.x.ai/v1/stt"}');
+		expect(set.OPENAI_TURN_DETECTION).toBe('{"type":"server_vad","threshold":0.6}');
+		// A string binding is forwarded as it is.
+		expect(buildContainerEnvVars(env({ XAI_STT_ENDPOINTS: '{"eu":"wss://api.x.ai/v1/stt"}' })).XAI_STT_ENDPOINTS).toBe('{"eu":"wss://api.x.ai/v1/stt"}');
+	});
+
 	it('never forwards a Worker-only variable', () => {
 		const vars = buildContainerEnvVars(env({ USE_DISPATCHER: 'true', TRANSLATION_USAGE_URL: 'https://u', SOURCE_IMAGE_TAG: 't' }));
 		expect(vars).not.toHaveProperty('USE_DISPATCHER');

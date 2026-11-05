@@ -56,49 +56,62 @@ function httpUrlOrEmpty(name: string, raw: string | undefined, checked: boolean)
  * container, so one bad entry must not stop the others, and a URL in a log can carry credentials.
  *
  * The `x.ai` host rule and the default-port rule apply only to a KV override (`url()` in
- * worker/vars.ts). Here any `wss` URL is accepted, like XAI_STT_URL: the container env is set by
- * the operator, and KV is the path that a less trusted edit can reach.
+ * worker/vars.ts). Here a `wss` URL on any host is accepted, and XAI_STT_URL itself is not
+ * validated at all: the container env is set by the operator, and KV is the path that a less
+ * trusted edit can reach.
+ *
+ * `dropped` counts what was lost: each entry that was not usable, or 1 when the whole value was
+ * unusable. The server logs it at start. A value of `{}` drops nothing.
  */
-export function parseEndpointMap(name: string, raw: string | undefined): ReadonlyMap<string, string> {
+export function parseEndpointMap(name: string, raw: string | undefined): { map: ReadonlyMap<string, string>; dropped: number } {
 	const map = new Map<string, string>();
-	if (!raw || raw.trim() === '') return map;
+	if (!raw || raw.trim() === '') return { map, dropped: 0 };
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(raw);
-	} catch {
-		warnConfig(`${name} is not valid JSON; ignoring it`);
-		return map;
+	} catch (error) {
+		// The SyntaxError message names the position and the token, never the value.
+		warnConfig(`${name} is not valid JSON (${error instanceof Error ? error.message : String(error)}); ignoring it`);
+		return { map, dropped: 1 };
 	}
 	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
 		warnConfig(`${name} must be a JSON object that maps names to wss URLs; ignoring it`);
-		return map;
+		return { map, dropped: 1 };
 	}
+	let dropped = 0;
 	for (const [key, value] of Object.entries(parsed)) {
 		const label = JSON.stringify(key.slice(0, 40));
+		// A map key is not lower-cased, unlike the URL parameter: an entry named "EU" is dropped.
 		if (!ENDPOINT_NAME_RE.test(key)) {
-			warnConfig(`${name} has the entry name ${label}, which is not 1 to 32 characters of a-z, 0-9 and hyphen; ignoring that entry`);
+			warnConfig(
+				`${name} has the entry name ${label}, which is not 1 to 32 characters of a-z, 0-9 and hyphen that start with a letter or digit; ignoring that entry`,
+			);
+			dropped++;
 			continue;
 		}
 		// The URL is logged when a connection opens, so it may carry no credentials, and a query
 		// string would corrupt the stream URL that XAIBackend builds from it. The Worker applies the
-		// same rule to a KV override (`url()` in worker/vars.ts).
+		// same rule to a KV override (`url()` in worker/vars.ts). Surrounding whitespace is removed:
+		// `new URL` ignores it, but it would stay in the stored value and end up in the stream URL.
+		const url = typeof value === 'string' ? value.trim() : '';
 		let usable = false;
-		if (typeof value === 'string') {
-			try {
-				const url = new URL(value);
-				usable = url.protocol === 'wss:' && !url.username && !url.password && !value.includes('?') && !value.includes('#');
-			} catch {
-				// not a URL: reported below
-			}
+		try {
+			const parsedUrl = new URL(url);
+			usable = parsedUrl.protocol === 'wss:' && !parsedUrl.username && !parsedUrl.password && !url.includes('?') && !url.includes('#');
+		} catch {
+			// not a URL: reported below
 		}
 		if (!usable) {
 			warnConfig(`${name} entry ${label} is not a wss URL without credentials, query or fragment; ignoring that entry`);
+			dropped++;
 			continue;
 		}
-		map.set(key, value as string);
+		map.set(key, url);
 	}
-	return map;
+	return { map, dropped };
 }
+
+const xaiSttEndpoints = parseEndpointMap('XAI_STT_ENDPOINTS', process.env.XAI_STT_ENDPOINTS);
 
 /**
  * An env var restricted to a fixed set of values. A value outside the set falls back to the default
@@ -189,7 +202,9 @@ export const config = {
 		sttUrl: process.env.XAI_STT_URL || 'wss://api.x.ai/v1/stt',
 		// Named STT endpoints. A connection that carries `xai_stt_endpoint=<name>` connects to that
 		// entry instead of `sttUrl`. server.ts rejects a name that is not in the map.
-		sttEndpoints: parseEndpointMap('XAI_STT_ENDPOINTS', process.env.XAI_STT_ENDPOINTS),
+		sttEndpoints: xaiSttEndpoints.map,
+		// How many entries of XAI_STT_ENDPOINTS were not usable (logged at start by server.ts).
+		sttEndpointsDropped: xaiSttEndpoints.dropped,
 		language: process.env.XAI_LANGUAGE || undefined,
 		diarize: process.env.XAI_DIARIZE === 'true',
 		includeLanguage: process.env.XAI_INCLUDE_LANGUAGE === 'true',

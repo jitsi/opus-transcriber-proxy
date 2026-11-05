@@ -201,8 +201,12 @@ function jsonObject(): KvType {
 }
 
 /**
- * The shape of an endpoint name: lower case letters, digits and hyphens, at most 32 characters.
- * Keep it the same as ENDPOINT_NAME_RE in src/utils.ts, which this file cannot import.
+ * The shape of an endpoint name: 1 to 32 characters, lower case letters, digits and hyphens, the
+ * first a letter or digit. Keep it the same as ENDPOINT_NAME_RE in src/utils.ts. This file has no
+ * imports on purpose, so that the variable table stays a plain data file. src/utils.ts reads
+ * `./config` lazily, and an import of it from here would pull dotenv and the loading of
+ * `process.env` into the Worker bundle. A test in configOverride.test.ts checks that the two agree
+ * on a sample of names.
  */
 const ENDPOINT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -210,27 +214,33 @@ const ENDPOINT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * A JSON object, given as an object or as a string holding one, that maps endpoint names to URLs.
  * Each URL must pass `inner`. The container lets a connection pick an entry by name, so a caller
  * can only choose among the URLs that KV or the deployment configured. Written back as JSON.
+ *
+ * An error never repeats a value. The container side of the variable does not print a URL either,
+ * because a rejected URL can carry credentials and the error goes to the Worker log.
  */
 function urlMap(inner: KvType): KvType {
 	const t: KvType = {
-		describe: `a JSON object that maps endpoint names (1 to 32 characters of a-z, 0-9 and hyphen) to URLs, each URL being ${inner.describe}`,
+		describe: `a JSON object that maps endpoint names (1 to 32 characters of a-z, 0-9 and hyphen, the first a letter or digit) to URLs, each URL being ${inner.describe}`,
 		normalize(v) {
 			let obj = v;
 			if (typeof v === 'string') {
 				try {
 					obj = JSON.parse(v);
 				} catch {
-					return fail(t, v);
+					return { error: `expected ${t.describe}, got text that is not valid JSON` };
 				}
 			}
-			if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return fail(t, v);
+			if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+				return { error: `expected ${t.describe}, got ${Array.isArray(obj) ? 'an array' : obj === null ? 'null' : typeof obj}` };
+			}
 			const out: Record<string, string> = {};
 			for (const [key, value] of Object.entries(obj)) {
 				if (!ENDPOINT_NAME_RE.test(key)) {
-					return { error: `the entry name ${JSON.stringify(key.slice(0, 40))} is not 1 to 32 characters of a-z, 0-9 and hyphen` };
+					return { error: `the entry name ${JSON.stringify(key.slice(0, 40))} is not 1 to 32 characters of a-z, 0-9 and hyphen, the first a letter or digit` };
 				}
-				const normalized = inner.normalize(value);
-				if (typeof normalized !== 'string') return { error: `entry "${key}": ${normalized.error}` };
+				// Surrounding whitespace is removed, so it does not reach the stream URL.
+				const normalized = inner.normalize(typeof value === 'string' ? value.trim() : value);
+				if (typeof normalized !== 'string') return { error: `entry "${key}" is not ${inner.describe}` };
 				out[key] = normalized;
 			}
 			return JSON.stringify(out);

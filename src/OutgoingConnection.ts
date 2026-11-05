@@ -23,7 +23,7 @@ import { MetricCache } from './MetricCache';
 import { config, getDefaultProvider } from './config';
 import logger from './logger';
 import { createBackend, getBackendConfig, type OpenAICustomOptions } from './backends/BackendFactory';
-import type { TranscriptionBackend } from './backends/TranscriptionBackend';
+import type { BackendConfig, TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
 
@@ -167,6 +167,27 @@ export class OutgoingConnection {
 		};
 	}
 
+	/**
+	 * The BackendConfig for a connect: the provider's defaults plus this connection's per-connection
+	 * options. One place for the first connect and for a reconnect in place (a format change or a
+	 * recovery), so that a new per-connection option cannot be added to one and missed in the other,
+	 * which would send a reconnected stream to the default setting without any error.
+	 */
+	private buildBackendConfig(): BackendConfig {
+		const backendConfig = getBackendConfig(this.options.provider);
+		backendConfig.language = this.options.language;
+		backendConfig.tags = this.options.tags;
+		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
+		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
+		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
+		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
+		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
+		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
+		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
+		backendConfig.xaiSttEndpoint = this.options.xaiSttEndpoint;
+		return backendConfig;
+	}
+
 	private async initializeBackend(): Promise<void> {
 		// The backend this call created. A concurrent reinitializeDecoder() can replace this.backend
 		// through reconnectBackend() at any await below, having connected the replacement itself;
@@ -191,17 +212,7 @@ export class OutgoingConnection {
 			this.setupBackendHandlers(this.backend);
 
 			// Get backend configuration
-			const backendConfig = getBackendConfig(this.options.provider);
-			backendConfig.language = this.options.language;
-			backendConfig.tags = this.options.tags;
-			backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-			backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-			backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-			backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-			backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-			backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-			backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
-			backendConfig.xaiSttEndpoint = this.options.xaiSttEndpoint;
+			const backendConfig = this.buildBackendConfig();
 
 			// Connect the backend
 			const connectStartTime = Date.now();
@@ -423,17 +434,7 @@ export class OutgoingConnection {
 		// are correctly configured before connect() is called.
 		newBackend.getDesiredAudioFormat(this.inputAudioFormat);
 
-		const backendConfig = getBackendConfig(this.options.provider);
-		backendConfig.language = this.options.language;
-		backendConfig.tags = this.options.tags;
-		backendConfig.deepgramMipOptOut = this.options.deepgramMipOptOut;
-		backendConfig.xaiEndpointing = this.options.xaiEndpointing;
-		backendConfig.xaiSmartTurn = this.options.xaiSmartTurn;
-		backendConfig.xaiSmartTurnTimeout = this.options.xaiSmartTurnTimeout;
-		backendConfig.xaiGranularFinals = this.options.xaiGranularFinals;
-		backendConfig.xaiGranularStabilityMs = this.options.xaiGranularStabilityMs;
-		backendConfig.xaiGranularGuardWords = this.options.xaiGranularGuardWords;
-		backendConfig.xaiSttEndpoint = this.options.xaiSttEndpoint;
+		const backendConfig = this.buildBackendConfig();
 
 		try {
 			const connectStartTime = Date.now();

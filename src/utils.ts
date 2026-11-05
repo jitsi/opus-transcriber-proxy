@@ -16,10 +16,13 @@
 
 export type AudioEncoding = 'opus' | 'ogg-opus';
 
-export const ENDPOINT_NAME_MAX_LENGTH = 32;
 /**
- * The shape of an endpoint name: lower case letters, digits and hyphens, at most 32 characters.
- * Keep it the same as ENDPOINT_NAME_RE in worker/vars.ts, which cannot import from src/.
+ * The shape of an endpoint name: 1 to 32 characters, lower case letters, digits and hyphens, the
+ * first a letter or digit. Keep it the same as ENDPOINT_NAME_RE in worker/vars.ts. That file has no
+ * imports on purpose, so that the variable table stays a plain data file. This file reads
+ * `./config` lazily, and an import of this file from there would pull dotenv and the loading of
+ * `process.env` into the Worker bundle. A test in configOverride.test.ts checks that the two
+ * agree on a sample of names.
  */
 export const ENDPOINT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -136,7 +139,7 @@ export function extractSessionParameters(url: string): ISessionParameters {
 	if (rawXaiSttEndpoint !== null) {
 		xaiSttEndpoint = rawXaiSttEndpoint.toLowerCase();
 		if (!ENDPOINT_NAME_RE.test(xaiSttEndpoint)) {
-			throw new Error(`Invalid xai_stt_endpoint parameter. Use 1 to ${ENDPOINT_NAME_MAX_LENGTH} characters: a-z, 0-9 and hyphen. Start with a letter or digit.`);
+			throw new Error(`Invalid xai_stt_endpoint parameter. Use 1 to 32 characters: a-z, 0-9 and hyphen. Start with a letter or digit.`);
 		}
 	}
 	// Per-connection text-translation provider override.
