@@ -63,6 +63,12 @@ export interface BackendConfig {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/**
+	 * Per-connection xAI STT endpoint (undefined = the default, XAI_STT_URL). The name of an entry
+	 * in XAI_STT_ENDPOINTS. Never a URL: the caller can only pick a configured endpoint. An
+	 * unconfigured name makes connect() fail, and does not fall back to the default.
+	 */
+	xaiSttEndpoint?: string;
 }
 
 export interface TranscriptionBackend {

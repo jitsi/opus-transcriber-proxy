@@ -24,6 +24,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ISessionParameters } from '../../src/utils';
 
+// State that the config mock reads. vi.hoisted makes it available to the hoisted vi.mock factory.
+const providerState = vi.hoisted(() => ({ defaultProvider: 'openai' as string | null }));
+
 // ── Mock all server.ts dependencies before the module loads ──────────────────
 // Note: vi.mock() factories are hoisted – no references to outer variables allowed.
 
@@ -66,6 +69,9 @@ vi.mock('../../src/SessionManager', () => ({
 	sessionManager: {
 		hasSession: vi.fn().mockReturnValue(false),
 		hasActiveSession: vi.fn().mockReturnValue(false),
+		getActiveSession: vi.fn(),
+		getDetachedSession: vi.fn(),
+		reattachSession: vi.fn(),
 		registerSession: vi.fn(),
 		unregisterSession: vi.fn(),
 		detachSession: vi.fn(),
@@ -84,6 +90,7 @@ vi.mock('../../src/config', () => ({
 		dumpBasePath: '/tmp',
 		useDispatcher: false,
 		openaiCustomRequireWss: true,
+		xai: { sttEndpoints: new Map([['eu', 'wss://eu-west-1.api.x.ai/v1/stt']]) },
 		dispatcher: { wsUrl: '', headers: {} },
 		server: { port: 8080, host: '0.0.0.0' },
 		textTranslation: {
@@ -102,8 +109,8 @@ vi.mock('../../src/config', () => ({
 	},
 	// Plain functions (not vi.fn) so mockReset doesn't clear their implementations
 	getAvailableProviders: () => ['openai', 'openai_custom'],
-	getDefaultProvider: () => 'openai',
-	isValidProvider: (p: string) => ['openai', 'openai_custom', 'deepgram', 'gemini', 'dummy'].includes(p),
+	getDefaultProvider: () => providerState.defaultProvider,
+	isValidProvider: (p: string) => ['openai', 'openai_custom', 'deepgram', 'gemini', 'xai', 'dummy'].includes(p),
 	isProviderAvailable: () => true,
 }));
 
@@ -137,6 +144,7 @@ import { config as mockedConfig } from '../../src/config';
 import { TranscriberProxy } from '../../src/transcriberproxy';
 import http from 'http';
 import { sessionManager } from '../../src/SessionManager';
+import logger from '../../src/logger';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -238,6 +246,187 @@ describe('handleWebSocketConnection – openai_custom validation', () => {
 		);
 
 		expect(mockWs.close).not.toHaveBeenCalledWith(1002, expect.anything());
+	});
+});
+
+describe('handleWebSocketConnection – xai_stt_endpoint parameter', () => {
+	const xaiParams: ISessionParameters = {
+		url: new URL('ws://localhost/transcribe'),
+		sessionId: undefined,
+		useDispatcher: false,
+		sendBack: false,
+		sendBackInterim: false,
+		encoding: 'opus',
+		tags: [],
+		provider: 'xai',
+	};
+
+	beforeEach(() => {
+		vi.mocked(TranscriberProxy as any).mockReturnValue({
+			on: vi.fn(),
+			getOptions: () => ({ sendBack: false, sendBackInterim: false }),
+			getWebSocket: vi.fn(),
+			close: vi.fn(),
+		});
+	});
+
+	it('hands a configured endpoint name to the session', () => {
+		const mockWs = makeMockWs();
+		handleWebSocketConnection(mockWs as any, { ...xaiParams, xaiSttEndpoint: 'eu' }, undefined);
+
+		expect(mockWs.close).not.toHaveBeenCalled();
+		expect(TranscriberProxy).toHaveBeenCalledWith(mockWs, expect.objectContaining({ provider: 'xai', xaiSttEndpoint: 'eu' }));
+	});
+
+	it('closes with 1002 for a name that is not configured, and starts no session', () => {
+		const mockWs = makeMockWs();
+		handleWebSocketConnection(mockWs as any, { ...xaiParams, xaiSttEndpoint: 'mars' }, undefined);
+
+		expect(mockWs.close).toHaveBeenCalledOnce();
+		expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining("Unknown xAI STT endpoint 'mars'. Configured endpoints: eu"));
+		expect(TranscriberProxy).not.toHaveBeenCalled();
+	});
+
+	it('says "none" when no endpoint is configured at all', () => {
+		const original = (mockedConfig as any).xai.sttEndpoints;
+		(mockedConfig as any).xai.sttEndpoints = new Map();
+		try {
+			const mockWs = makeMockWs();
+			handleWebSocketConnection(mockWs as any, { ...xaiParams, xaiSttEndpoint: 'eu' }, undefined);
+
+			expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining('Configured endpoints: none'));
+			expect(TranscriberProxy).not.toHaveBeenCalled();
+		} finally {
+			(mockedConfig as any).xai.sttEndpoints = original;
+		}
+	});
+
+	it('keeps the close reason within the 123 bytes a WebSocket allows, with many endpoints', () => {
+		const original = (mockedConfig as any).xai.sttEndpoints;
+		(mockedConfig as any).xai.sttEndpoints = new Map(Array.from({ length: 30 }, (_, i) => [`region-${i}`, 'wss://api.x.ai/v1/stt']));
+		try {
+			const mockWs = makeMockWs();
+			handleWebSocketConnection(mockWs as any, { ...xaiParams, xaiSttEndpoint: 'mars' }, undefined);
+
+			const reason = mockWs.close.mock.calls[0][1] as string;
+			expect(mockWs.close.mock.calls[0][0]).toBe(1002);
+			expect(Buffer.byteLength(reason)).toBeLessThanOrEqual(123);
+		} finally {
+			(mockedConfig as any).xai.sttEndpoints = original;
+		}
+	});
+
+	it('closes with 1002, and never moves the audio to another vendor, when the provider is not xAI', () => {
+		// An explicit other provider: for example the Worker rewrote `provider` during an outage.
+		const mockWs = makeMockWs();
+		handleWebSocketConnection(mockWs as any, { ...xaiParams, provider: 'openai', xaiSttEndpoint: 'eu' }, undefined);
+
+		expect(mockWs.close).toHaveBeenCalledOnce();
+		expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining('needs the xAI provider, but the provider for this connection is openai'));
+		expect(TranscriberProxy).not.toHaveBeenCalled();
+	});
+
+	it('checks the resolved default provider, not only the requested one', () => {
+		// No `provider` parameter: the default applies. With xAI as the default the name is honoured.
+		providerState.defaultProvider = 'xai';
+		try {
+			const mockWs = makeMockWs();
+			handleWebSocketConnection(mockWs as any, { ...xaiParams, provider: undefined, xaiSttEndpoint: 'eu' }, undefined);
+			expect(mockWs.close).not.toHaveBeenCalled();
+			expect(TranscriberProxy).toHaveBeenCalledWith(mockWs, expect.objectContaining({ provider: 'xai', xaiSttEndpoint: 'eu' }));
+
+			// With another default, the same request closes instead of reaching that provider.
+			providerState.defaultProvider = 'openai';
+			vi.mocked(TranscriberProxy as any).mockClear();
+			const otherWs = makeMockWs();
+			handleWebSocketConnection(otherWs as any, { ...xaiParams, provider: undefined, xaiSttEndpoint: 'eu' }, undefined);
+			expect(otherWs.close).toHaveBeenCalledWith(1002, expect.stringContaining('provider for this connection is openai'));
+			expect(TranscriberProxy).not.toHaveBeenCalled();
+		} finally {
+			providerState.defaultProvider = 'openai';
+		}
+	});
+
+	it('does not touch a connection that names no endpoint', () => {
+		const mockWs = makeMockWs();
+		handleWebSocketConnection(mockWs as any, { ...xaiParams, provider: 'openai' }, undefined);
+
+		expect(mockWs.close).not.toHaveBeenCalled();
+		expect(TranscriberProxy).toHaveBeenCalled();
+	});
+
+	describe('resuming a session', () => {
+		/** A session as the manager holds it, created with the given endpoint (undefined = the default). */
+		const sessionWith = (xaiSttEndpoint?: string) => ({
+			on: vi.fn(),
+			getOptions: () => ({ sendBack: false, sendBackInterim: false, xaiSttEndpoint }),
+			getWebSocket: vi.fn(),
+			reattachWebSocket: vi.fn(),
+			close: vi.fn(),
+		});
+		const resume = (kind: 'active' | 'detached', existing: ReturnType<typeof sessionWith>) => {
+			if (kind === 'active') {
+				vi.mocked(sessionManager.hasActiveSession).mockReturnValue(true);
+				vi.mocked(sessionManager.getActiveSession as any).mockReturnValue(existing);
+			} else {
+				vi.mocked(sessionManager.hasSession).mockReturnValue(true);
+				vi.mocked(sessionManager.getDetachedSession as any).mockReturnValue(existing);
+				vi.mocked(sessionManager.reattachSession as any).mockReturnValue(existing);
+			}
+		};
+
+		for (const kind of ['active', 'detached'] as const) {
+			describe(`a ${kind} session`, () => {
+				it('is refused with 1002, and left as it was, when the connection names another endpoint than the session uses', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'us' }, undefined);
+
+					expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining("uses xAI STT endpoint eu, not 'us'"));
+					// Not resumed: a refused connection must not kill the current connection or cancel the grace timer.
+					expect(existing.reattachWebSocket).not.toHaveBeenCalled();
+					expect(sessionManager.reattachSession).not.toHaveBeenCalled();
+					expect(TranscriberProxy).not.toHaveBeenCalled();
+				});
+
+				it('is refused when the session was created on the default endpoint and the connection names one', () => {
+					const existing = sessionWith(undefined);
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'eu' }, undefined);
+
+					expect(mockWs.close).toHaveBeenCalledWith(1002, expect.stringContaining("uses xAI STT endpoint default, not 'eu'"));
+					expect(existing.reattachWebSocket).not.toHaveBeenCalled();
+					expect(sessionManager.reattachSession).not.toHaveBeenCalled();
+				});
+
+				it('resumes when the connection names the same endpoint, with no warning', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: 'eu' }, undefined);
+
+					expect(mockWs.close).not.toHaveBeenCalled();
+					expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('keeps its xAI STT endpoint'));
+				});
+
+				it('resumes, with a warning, when the connection names none and the session has one', () => {
+					const existing = sessionWith('eu');
+					resume(kind, existing);
+					const mockWs = makeMockWs();
+
+					handleWebSocketConnection(mockWs as any, { ...xaiParams, sessionId: 's-resume', xaiSttEndpoint: undefined }, undefined);
+
+					expect(mockWs.close).not.toHaveBeenCalled();
+					expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('keeps its xAI STT endpoint eu; this connection named none'));
+					expect(TranscriberProxy).not.toHaveBeenCalled(); // resumed, not recreated
+				});
+			});
+		}
 	});
 });
 

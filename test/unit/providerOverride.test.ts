@@ -328,6 +328,35 @@ describe('resolveProviderOverride', () => {
 		const decision = await resolveProviderOverride(new Request('https://example.test/transcribe'), e, TRANSCRIBE_PROVIDER_SLOT, NOW);
 		expect(decision.applied).toBe(false);
 	});
+
+	describe('a request that names an xAI STT endpoint', () => {
+		// Production URL templates carry no `provider`, so a template that pins an endpoint would
+		// otherwise be rewritten to the override target and closed with 1002 on every redial.
+		const pinned = 'https://example.test/transcribe?xai_stt_endpoint=eu';
+
+		it('is not moved to the override provider, and says so at warn', async () => {
+			const decision = await resolveProviderOverride(new Request(pinned), env(j(VALID)), TRANSCRIBE_PROVIDER_SLOT, NOW);
+			expect(decision).toMatchObject({ applied: false, level: 'warn' });
+			expect((decision as { why: string }).why).toContain('pins the provider with xai_stt_endpoint');
+			expect((decision as { why: string }).why).toContain('deepgram');
+		});
+
+		it('is silent when no override is armed for it', async () => {
+			const decision = await resolveProviderOverride(new Request(pinned), env(null), TRANSCRIBE_PROVIDER_SLOT, NOW);
+			expect(decision).toMatchObject({ applied: false, level: 'debug' });
+		});
+
+		it('still reports a malformed entry at error', async () => {
+			const decision = await resolveProviderOverride(new Request(pinned), env('garbage'), TRANSCRIBE_PROVIDER_SLOT, NOW);
+			expect(decision).toMatchObject({ applied: false, level: 'error' });
+		});
+
+		it('does not pin another slot: text translation is still overridden', async () => {
+			const e: ProviderOverrideEnv = { TEXT_TRANSLATION_GOOGLE_API_KEY: 'k', CONFIG_KV: { get: vi.fn().mockResolvedValue(j({ provider: 'google', until: NOW + 1000 })) } };
+			const decision = await resolveProviderOverride(new Request(pinned), e, TEXT_TRANSLATION_PROVIDER_SLOT, NOW);
+			expect(decision).toMatchObject({ applied: true, provider: 'google' });
+		});
+	});
 });
 
 describe('applyProviderOverrides', () => {
@@ -386,6 +415,26 @@ describe('applyProviderOverrides', () => {
 			expect(store.get).toHaveBeenCalledWith(TEXT_TRANSLATION_PROVIDER_SLOT.key, expect.anything());
 		} finally {
 			log.mockRestore();
+		}
+	});
+
+	it('leaves a request with xai_stt_endpoint on its own provider and logs the skipped override at warn', async () => {
+		const store = kv({ [TRANSCRIBE_PROVIDER_SLOT.key]: j({ provider: 'deepgram', until: NOW + 1000 }) });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const { request, applied } = await applyProviderOverrides(
+				new Request('https://example.test/transcribe?xai_stt_endpoint=eu&sessionId=s'),
+				{ ...allKeys, CONFIG_KV: store },
+				[TRANSCRIBE_PROVIDER_SLOT],
+				NOW,
+			);
+			expect(new URL(request.url).searchParams.has('provider')).toBe(false);
+			expect(new URL(request.url).searchParams.get('xai_stt_endpoint')).toBe('eu');
+			expect(applied).toEqual({});
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn.mock.calls[0][0]).toMatch(/^Transcription provider override not applied: request pins the provider with xai_stt_endpoint/);
+		} finally {
+			warn.mockRestore();
 		}
 	});
 

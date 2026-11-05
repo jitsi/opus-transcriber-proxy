@@ -37,6 +37,7 @@ import {
 } from '../../../worker/configOverride';
 import { configKey, KV_OVERRIDABLE_VARS, WORKER_VARS, type KvType, type VarSpec } from '../../../worker/vars';
 import { buildContainerEnvVars, buildWorkerInfo } from '../../../worker/containerEnv';
+import { ENDPOINT_NAME_RE } from '../../../src/utils';
 import { ContainerCoordinator, coordinatorConfig } from '../../../worker/ContainerCoordinator';
 
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
@@ -169,6 +170,55 @@ describe('value types', () => {
 		expect(normalize('XAI_STT_URL', 'ws://api.x.ai/v1/stt')).toHaveProperty('error');
 		expect(normalize('XAI_STT_URL', 'https://api.x.ai/v1/stt')).toHaveProperty('error');
 		expect(normalize('XAI_STT_URL', 'api.x.ai')).toHaveProperty('error');
+	});
+
+	it('XAI_STT_ENDPOINTS: a name to URL map, each URL on x.ai and each name well formed', () => {
+		const good = { eu: 'wss://eu-west-1.api.x.ai/v1/stt', 'us-east': 'wss://api.x.ai/v1/stt' };
+		expect(normalize('XAI_STT_ENDPOINTS', good)).toBe(JSON.stringify(good));
+		expect(normalize('XAI_STT_ENDPOINTS', JSON.stringify(good))).toBe(JSON.stringify(good));
+		expect(normalize('XAI_STT_ENDPOINTS', {})).toBe('{}');
+		// A URL off x.ai would hand the key and the audio to another host.
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: 'wss://evil.example/v1/stt' })).toMatchObject({ error: expect.stringContaining('entry "eu"') });
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: 'ws://eu-west-1.api.x.ai/v1/stt' })).toHaveProperty('error');
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: 42 })).toHaveProperty('error');
+		// Names: lower case letters, digits and hyphen, 1 to 32 characters.
+		for (const name of ['EU', 'a b', '-eu', '', 'x'.repeat(33), 'eu\nforged']) {
+			expect(normalize('XAI_STT_ENDPOINTS', { [name]: 'wss://api.x.ai/v1/stt' }), JSON.stringify(name)).toHaveProperty('error');
+		}
+		expect(normalize('XAI_STT_ENDPOINTS', '[1]')).toHaveProperty('error');
+		expect(normalize('XAI_STT_ENDPOINTS', '{bad')).toHaveProperty('error');
+		// The same host rule as XAI_STT_URL: a wrong host, a port, credentials, a query or a fragment.
+		for (const other of ['wss://x.ai.evil.example/v1', 'wss://notx.ai/v1', 'wss://api.x.ai:8443/v1', 'wss://user:pw@api.x.ai/v1', 'wss://api.x.ai/v1?token=1', 'wss://api.x.ai/v1#f']) {
+			expect(normalize('XAI_STT_ENDPOINTS', { eu: other }), other).toHaveProperty('error');
+		}
+	});
+
+	it('XAI_STT_ENDPOINTS: a rejected value never appears in the error, because the error goes to the Worker log', () => {
+		const secret = 'hunter2';
+		const rejected = [
+			{ eu: `wss://user:${secret}@eu-west-1.api.x.ai/v1/stt` }, // credentials in an entry
+			{ eu: `wss://evil.example/v1/stt?token=${secret}` }, // wrong host and a query
+			[`wss://user:${secret}@api.x.ai/v1/stt`], // not an object
+			`{"eu": "wss://user:${secret}@api.x.ai/v1/stt"`, // not valid JSON (unterminated)
+		];
+		for (const value of rejected) {
+			const result = normalize('XAI_STT_ENDPOINTS', value);
+			expect(result).toHaveProperty('error');
+			expect(JSON.stringify(result), JSON.stringify(value)).not.toContain(secret);
+		}
+		// The error still names the entry that failed.
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: `wss://user:${secret}@api.x.ai/v1/stt` })).toMatchObject({ error: expect.stringContaining('entry "eu"') });
+	});
+
+	it('XAI_STT_ENDPOINTS: surrounding whitespace of a URL is removed before it is stored', () => {
+		expect(normalize('XAI_STT_ENDPOINTS', { eu: '  wss://eu-west-1.api.x.ai/v1/stt \n' })).toBe('{"eu":"wss://eu-west-1.api.x.ai/v1/stt"}');
+	});
+
+	it('XAI_STT_ENDPOINTS: the name rule matches ENDPOINT_NAME_RE of the container, so the two copies cannot drift', () => {
+		for (const name of ['eu', 'eu-west-1', 'a', '0', 'x'.repeat(32), 'x'.repeat(33), 'EU', '-eu', 'e_u', 'e.u', '', 'a b', 'eu\n', '__proto__']) {
+			const accepted = typeof normalize('XAI_STT_ENDPOINTS', { [name]: 'wss://api.x.ai/v1/stt' }) === 'string';
+			expect(accepted, JSON.stringify(name)).toBe(ENDPOINT_NAME_RE.test(name));
+		}
 	});
 
 	it('xAI URLs must stay on x.ai: both carry the xAI key as a bearer and all xAI audio', () => {

@@ -90,6 +90,13 @@ export interface ProviderOverrideSlot<P extends string = string> {
 	readonly param: string;
 	/** The providers an override may select. */
 	readonly providers: readonly P[];
+	/**
+	 * Other URL parameters that pin this slot's provider, as `param` does. A request that carries one
+	 * has chosen where its audio goes (for example `xai_stt_endpoint`, which names an xAI endpoint),
+	 * so an override must not move it to another provider. The container would close it with 1002,
+	 * and the bridge would redial into the same 1002 until the override lapsed.
+	 */
+	readonly pinParams?: readonly string[];
 	isConfigured(env: ProviderOverrideEnv, provider: P): boolean;
 }
 
@@ -107,6 +114,8 @@ export const TRANSCRIBE_PROVIDER_SLOT: ProviderOverrideSlot<TranscribeProvider> 
 	key: 'transcribe:provider-override',
 	param: 'provider',
 	providers: TRANSCRIBE_PROVIDERS,
+	// A named xAI endpoint (src/server.ts) only works with the xAI provider, so it pins the slot.
+	pinParams: ['xai_stt_endpoint'],
 	// Mirrors the container's isProviderAvailable. Caveat: this reads the Worker's *current* env,
 	// while a running container validates against the env it was started with
 	// (`buildContainerEnvVars`, at container start). The two disagree for a container that started
@@ -196,7 +205,7 @@ export { MIN_PLAUSIBLE_UNTIL_MS, OVERRIDE_CACHE_TTL_SECONDS } from './kvEntry';
 
 export type OverrideDecision<P extends string = string> =
 	| { applied: true; provider: P; until: number; reason?: string }
-	| { applied: false; level: 'debug' | 'info' | 'error'; why: string };
+	| { applied: false; level: 'debug' | 'info' | 'warn' | 'error'; why: string };
 
 /** The overrides that changed a connection, by slot. What the `info` message reports. */
 export type AppliedOverrides = Partial<Record<OverrideSlotId, string>>;
@@ -286,12 +295,28 @@ export async function resolveProviderOverride<P extends string>(
 		return { applied: false, level: 'error', why: `KV read failed: ${msg}` };
 	}
 
-	return decideProviderOverride(raw, {
+	const decision = decideProviderOverride(raw, {
 		slot,
 		hasProviderParam,
 		isConfigured: (provider) => slot.isConfigured(env, provider),
 		now,
 	});
+
+	// A request that pins the provider through another parameter is left alone, like one that names
+	// `param`. Unlike that case this needs the KV read first, on purpose: an operator who armed an
+	// override must be told that these connections are not following it, or they would look at the
+	// meetings still failing on the old provider with no explanation. Nothing is logged when no
+	// override is armed for the request. A pinned connection then fails on its own pinned provider,
+	// where the backend errors are counted, instead of closing with 1002 on every redial.
+	const pinnedBy = slot.pinParams?.find((p) => new URL(request.url).searchParams.has(p));
+	if (pinnedBy && decision.applied) {
+		return {
+			applied: false,
+			level: 'warn',
+			why: `request pins the provider with ${pinnedBy}, so the override to ${decision.provider} is not applied to it`,
+		};
+	}
+	return decision;
 }
 
 /**
@@ -341,6 +366,8 @@ export async function applyProviderOverrides(
 			console.log(describeOverrideDecision(slot, decision));
 		} else if (decision.level === 'error') {
 			console.error(describeOverrideDecision(slot, decision));
+		} else if (decision.level === 'warn') {
+			console.warn(describeOverrideDecision(slot, decision));
 		} else if (decision.level === 'info') {
 			console.log(describeOverrideDecision(slot, decision));
 		}

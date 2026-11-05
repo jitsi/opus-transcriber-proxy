@@ -137,6 +137,7 @@ vi.mock('../../../src/config', () => ({
 		xai: {
 			apiKey: 'test-xai-key',
 			sttUrl: 'wss://api.x.ai/v1/stt',
+			sttEndpoints: new Map<string, string>(),
 			language: undefined,
 			diarize: false,
 			includeLanguage: false,
@@ -883,6 +884,46 @@ describe('XAIBackend', () => {
 			const url = new URL(getMockWs().url);
 			expect(url.searchParams.get('encoding')).toBe('pcm');
 			expect(url.searchParams.get('sample_rate')).toBe('16000');
+		});
+	});
+
+	describe('named STT endpoint', () => {
+		const EU_URL = 'wss://eu-west-1.api.x.ai/v1/stt';
+
+		beforeEach(() => {
+			(config.xai as any).sttEndpoints = new Map([['eu', EU_URL]]);
+		});
+
+		afterEach(() => {
+			(config.xai as any).sttEndpoints = new Map();
+		});
+
+		async function connectedUrl(backendConfig: BackendConfig): Promise<URL> {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			const connectPromise = backend.connect(backendConfig);
+			getMockWs().simulateOpen();
+			await connectPromise;
+			return new URL(getMockWs().url);
+		}
+
+		it('uses XAI_STT_URL when no endpoint is named', async () => {
+			const url = await connectedUrl(DEFAULT_CONFIG);
+			expect(url.origin + url.pathname).toBe('wss://api.x.ai/v1/stt');
+		});
+
+		it('uses the named entry of XAI_STT_ENDPOINTS', async () => {
+			const url = await connectedUrl({ ...DEFAULT_CONFIG, xaiSttEndpoint: 'eu' });
+			expect(url.origin + url.pathname).toBe(EU_URL);
+			// The other stream parameters do not depend on the endpoint.
+			expect(url.searchParams.get('interim_results')).toBe('true');
+			expect(url.searchParams.get('endpointing')).toBe('850');
+		});
+
+		it('fails, and never falls back to XAI_STT_URL, for a name that is not configured', async () => {
+			const backend = new XAIBackend('test-tag', { id: 'p1' });
+			await expect(backend.connect({ ...DEFAULT_CONFIG, xaiSttEndpoint: 'mars' })).rejects.toThrow('Unknown xAI STT endpoint "mars"');
+			// No socket was opened to any endpoint, in particular not to the default one.
+			expect(lastWsInstance).toBeNull();
 		});
 	});
 

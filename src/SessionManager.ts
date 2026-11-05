@@ -164,6 +164,16 @@ class SessionManager {
 	}
 
 	/**
+	 * The detached session for this id, without resuming it. For a caller that must look at the
+	 * session before it decides to reattach (reattachSession cancels the grace timer and rebinds the
+	 * socket, which a refused connection must not do).
+	 */
+	getDetachedSession(sessionId: string | undefined): TranscriberProxy | undefined {
+		if (!sessionId) return undefined;
+		return this.detachedSessions.get(sessionId)?.transcriberProxy;
+	}
+
+	/**
 	 * Reattach a detached session to a new WebSocket connection
 	 */
 	reattachSession(sessionId: string, newWs: WebSocket): TranscriberProxy {
