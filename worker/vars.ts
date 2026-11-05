@@ -362,6 +362,7 @@ export const WORKER_VARS = {
 	XAI_TRANSLATION_API_KEY: { container: IF_SET },
 	XAI_TRANSLATION_URL: tunable(url('wss', 'x.ai')),
 	XAI_TRANSLATION_VOICE: tunable(str()),
+	XAI_TRANSLATION_VOICES: tunable(str()),
 	TRANSLATE_TRANSCRIPTS: tunable(bool()),
 	// "0" (disable) is a non-empty string, so it is still forwarded.
 	// Above the 100 ms RTP gap threshold; <= 0 (a talk never ends) is unsafe for the realtime

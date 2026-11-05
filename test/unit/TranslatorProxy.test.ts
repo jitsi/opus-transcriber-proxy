@@ -301,6 +301,57 @@ describe('TranslatorProxy (sources model)', () => {
 		expect(MockedConnection).toHaveBeenCalledWith('523834112-a0', expect.objectContaining({ provider: 'xai' }), expect.anything());
 	});
 
+	describe('per-source voices (xaiVoices)', () => {
+		const voiceRuntime: any = { ...mockRuntime, config: { provider: 'xai', xaiApiKey: 'k', xaiVoices: ['ara', 'rex'] } };
+		const voiceOf = (call: number) => MockedConnection.mock.calls[call][1].voice;
+
+		it('gives each source its own voice, and every direction of a source the same one', () => {
+			new TranslatorProxy(mockWebSocket, {}, voiceRuntime);
+			mockWebSocket.emit('message', {
+				data: sourcesMessage(['a-a0', 'b-a0'], ['a-a0.en', 'a-a0.de', 'b-a0.en']),
+			});
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+			const byPair = new Map(MockedConnection.mock.calls.map((c: any) => [`${c[0]}.${c[1].targetLanguage}`, c[1].voice]));
+			expect(byPair.get('a-a0.en')).toBe('ara');
+			expect(byPair.get('a-a0.de')).toBe('ara');
+			expect(byPair.get('b-a0.en')).toBe('rex');
+		});
+
+		it('keeps a source on its voice when its directions close, reopen or change language', () => {
+			new TranslatorProxy(mockWebSocket, {}, voiceRuntime);
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0', 'b-a0'], ['a-a0.en', 'b-a0.en']) });
+			expect(voiceOf(0)).toBe('ara');
+			expect(voiceOf(1)).toBe('rex');
+
+			// The listener switches language: a's direction is replaced.
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0', 'b-a0'], ['a-a0.fr', 'b-a0.en']) });
+			expect(MockedConnection).toHaveBeenCalledTimes(3);
+			expect(voiceOf(2)).toBe('ara');
+
+			// Translation off for everyone, then back on, b first this time: b is still rex, a still ara.
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0', 'b-a0'], []) });
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0', 'b-a0'], ['b-a0.de']) });
+			expect(voiceOf(3)).toBe('rex');
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0', 'b-a0'], ['b-a0.de', 'a-a0.de']) });
+			expect(voiceOf(4)).toBe('ara');
+
+			// A provider-side close reopens on media with the same voice.
+			MockedConnection.mock.instances[4].onClosed('a-a0', 'remote');
+			mockWebSocket.emit('message', { data: mediaMessage('a-a0') });
+			expect(voiceOf(5)).toBe('ara');
+		});
+
+		it('sends no voice when the list is unset, or the provider is not xAI', () => {
+			new TranslatorProxy(mockWebSocket, {}, { ...mockRuntime, config: { provider: 'xai', xaiApiKey: 'k' } });
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0'], ['a-a0.en']) });
+			expect(MockedConnection.mock.calls[0][1]).not.toHaveProperty('voice');
+
+			new TranslatorProxy(mockWebSocket, { provider: 'openai' }, voiceRuntime);
+			mockWebSocket.emit('message', { data: sourcesMessage(['a-a0'], ['a-a0.en']) });
+			expect(MockedConnection.mock.calls[1][1]).not.toHaveProperty('voice');
+		});
+	});
+
 	describe('reopening a requested direction whose connection went away', () => {
 		beforeEach(() => vi.useFakeTimers());
 		afterEach(() => vi.useRealTimers());

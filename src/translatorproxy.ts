@@ -17,6 +17,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import type { TranslatorCloseReason } from './TranslatorConnection';
 import { defaultTranslationProvider, type TranslationProviderId } from './translate/provider';
+import { VoiceAssigner } from './translate/voices';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 import { reportTranslationUsage } from './usage-reporter';
@@ -108,6 +109,14 @@ export class TranslatorProxy extends Emitter {
 	private readonly provider: TranslationProviderId;
 
 	/**
+	 * Per-source TTS voices (`runtime.config.xaiVoices`, xAI only): a speaker keeps one voice across
+	 * every direction opened for it on this connection, however often they close and reopen. Scoped
+	 * to this proxy, which is one bridge connection, so one conference; a bridge that reconnects
+	 * starts the assignment over.
+	 */
+	private readonly voices?: VoiceAssigner;
+
+	/**
 	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
 	 * (i.e. this WebSocket, which carries every synthetic source). The per-source RTP sequence number
 	 * is the separate `chunk` field produced by each connection's RtpTimestamper.
@@ -122,6 +131,10 @@ export class TranslatorProxy extends Emitter {
 		this.connections = new Map<string, Map<string, TranslatorConnection>>();
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
+		const voices = runtime.config.xaiVoices;
+		if (this.provider === 'xai' && voices !== undefined && voices.length > 0) {
+			this.voices = new VoiceAssigner(voices);
+		}
 
 		this.ws.addEventListener('close', () => {
 			this.closeAllConnections();
@@ -360,6 +373,19 @@ export class TranslatorProxy extends Emitter {
 		}
 	}
 
+	/** The voice a source's directions speak in, assigned on first sight and logged then; undefined when not rotating. */
+	private voiceFor(inputSourceName: string): string | undefined {
+		if (this.voices === undefined) {
+			return undefined;
+		}
+		const known = this.voices.has(inputSourceName);
+		const voice = this.voices.voiceFor(inputSourceName);
+		if (!known) {
+			this.runtime.logger.info(`translation source ${inputSourceName} speaks in voice ${voice}`);
+		}
+		return voice;
+	}
+
 	/**
 	 * Ensure a translation session exists for (inputSourceName, language). Returned audio
 	 * is emitted tagged with `outputTag` — the synthetic source name verbatim (from a
@@ -382,11 +408,13 @@ export class TranslatorProxy extends Emitter {
 		// Without a token there is nothing to attribute, so we pass no onUsageReport at all — that also
 		// means the connection starts no periodic reporting timer on the dev/replay `?lang=` path.
 		const token = this.options.translationToken;
+		const voice = this.voiceFor(inputSourceName);
 		const conn = new TranslatorConnection(
 			inputSourceName,
 			{
 				targetLanguage: language,
 				provider: this.provider,
+				...(voice !== undefined ? { voice } : {}),
 				...(token
 					? {
 							onUsageReport: (durationSeconds: number, targetLanguage: string) =>

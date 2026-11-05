@@ -77,8 +77,12 @@ export interface TranslationProviderSpec {
 	readonly serverTranscriptFinals: boolean;
 	/** Idle-close default when `TranslationRuntimeConfig.idleCloseMs` is unset; 0 disables. */
 	readonly defaultIdleCloseMs: number;
-	/** The `session.update` message for a target language. */
-	buildSessionUpdate(targetLanguage: string): Record<string, unknown>;
+	/**
+	 * The `session.update` message for a target language. `voice` is the TTS voice this direction
+	 * should speak in (see ./voices.ts); undefined → the configured voice, else the provider's
+	 * default. Ignored by a provider whose session takes no voice (OpenAI).
+	 */
+	buildSessionUpdate(targetLanguage: string, voice?: string): Record<string, unknown>;
 }
 
 // Supported target languages for the gpt-realtime-translate endpoint.
@@ -205,7 +209,7 @@ export function resolveTranslationProvider(
 
 export function getTranslationProvider(id: TranslationProviderId, config: TranslationRuntimeConfig): TranslationProviderSpec {
 	if (id === 'xai') {
-		const voice = config.xaiVoice;
+		const configuredVoice = config.xaiVoice;
 		return {
 			id,
 			name: 'xAI',
@@ -218,7 +222,7 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 			handshake: 'session',
 			serverTranscriptFinals: true,
 			defaultIdleCloseMs: XAI_DEFAULT_IDLE_CLOSE_MS,
-			buildSessionUpdate: (targetLanguage) => ({
+			buildSessionUpdate: (targetLanguage, voice = configuredVoice) => ({
 				type: 'session.update',
 				session: {
 					audio: {

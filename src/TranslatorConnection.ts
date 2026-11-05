@@ -107,6 +107,12 @@ export interface TranslatorConnectionOptions {
 	/** Speech-to-speech provider; undefined → the runtime's default (`openai`). */
 	provider?: TranslationProviderId;
 	/**
+	 * TTS voice for this direction, on a provider whose session takes one (xAI); undefined → the
+	 * configured voice. The proxy assigns it per source (`VoiceAssigner`) so a speaker keeps one
+	 * voice across directions.
+	 */
+	voice?: string;
+	/**
 	 * Called periodically with the audio duration translated since the previous
 	 * report, plus a final delta on close; the deltas sum to this direction's total.
 	 * Reporting incrementally (rather than once at close) means an abrupt kill —
@@ -370,7 +376,7 @@ export class TranslatorConnection {
 				this.log(`${provider.name} WebSocket connected for translation to ${this.options.targetLanguage}`);
 				if (provider.handshake === 'open') {
 					// OpenAI: configure and stream at once.
-					ws.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+					ws.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage, this.options.voice)));
 					this.markConnected();
 					return;
 				}
@@ -708,7 +714,7 @@ export class TranslatorConnection {
 		if (parsedMessage.type === 'session.created') {
 			this.log(`[${this.options.targetLanguage}] ${provider.name} session created: ${JSON.stringify(parsedMessage.session ?? {})}`);
 			if (provider.handshake === 'session' && this.providerWebSocket && this.connectionStatus === 'pending') {
-				this.providerWebSocket.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+				this.providerWebSocket.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage, this.options.voice)));
 			}
 			return;
 		}

@@ -27,6 +27,7 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 import { parseIntOr, parseIntOrUndefined } from '../src/translate/env';
+import { parseVoiceList } from '../src/translate/voices';
 import type { AppliedConfigOverrides } from './configOverride';
 import type { TranslateProvider } from './providerOverride';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from '../src/translate/provider';
@@ -82,6 +83,7 @@ export function createWorkerTranslationRuntime(
 			xaiApiKey: env.XAI_TRANSLATION_API_KEY || env.XAI_API_KEY || '',
 			xaiTranslationUrl: env.XAI_TRANSLATION_URL || undefined,
 			xaiVoice: env.XAI_TRANSLATION_VOICE || undefined,
+			xaiVoices: parseVoiceList(env.XAI_TRANSLATION_VOICES),
 			idleCloseMs,
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,

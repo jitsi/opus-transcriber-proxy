@@ -43,7 +43,7 @@ Uses xAI's realtime translation (`grok-realtime-translation-fast`) over `wss://a
 - Any BCP-47 language tag as the target (no allowlist; Dutch, Cebuano and region tags such as `pt-BR` work)
 - Per-segment transcript finals from the server (`session.output_transcript.updated`)
 - Output audio in one burst per source phrase, nothing during silence
-- Optional TTS voice
+- Optional TTS voice, or a list of voices spread over a conference's speakers (one per speaker)
 - Faster connect than OpenAI (0.3 s against 0.5-1.5 s, measured)
 
 **Configuration:**
@@ -51,7 +51,8 @@ Uses xAI's realtime translation (`grok-realtime-translation-fast`) over `wss://a
 XAI_API_KEY=your-key-here
 XAI_TRANSLATION_API_KEY=          # Separate key for translation (optional; falls back to XAI_API_KEY)
 XAI_TRANSLATION_URL=wss://api.x.ai/v1/realtime/translations   # Override the endpoint (optional)
-XAI_TRANSLATION_VOICE=            # TTS voice (optional; unset = xAI's default)
+XAI_TRANSLATION_VOICE=            # TTS voice (optional; unset = xAI's default, Ara)
+XAI_TRANSLATION_VOICES=           # Voices to spread speakers over, comma separated (optional; set, XAI_TRANSLATION_VOICE is not used)
 TRANSLATION_IDLE_CLOSE_MS=120000  # Close a direction with no media for this long (default for xAI; 0 disables)
 
 # Make xAI the default provider
@@ -66,6 +67,7 @@ The team behind the key needs xAI's realtime-translation entitlement. Without it
 - The server speaks first with `session.created`; the proxy answers `session.update` and holds audio in the pending-PCM buffer until `session.updated` (`handshake: 'session'`). A handshake that does not complete within 10 s fails the direction
 - Node authenticates with the `xai-insecure-api-key.<key>` subprotocol, the Worker with an `Authorization: Bearer` header. Under header auth xAI echoes no subprotocol, and a client that requested one fails the handshake, so none is requested. Under subprotocol auth xAI echoes the key subprotocol back: never log the negotiated protocol
 - `session.update` carries `audio.input.transcription: false` (the bridge gets the source transcript from `/transcribe`), PCM 24 kHz in both directions, and the voice when configured
+- **Voices.** xAI synthesises in one TTS voice per session; it does not follow the speaker's voice. All 28 of xAI's built-in voices were accepted by the translations endpoint when probed (2026-11-05): `ara` (the default), `eve`, `leo`, `rex`, `sal`, `carina`, `zagan`, `helix`, `orion`, `luna`, `iris`, `altair`, `zenith`, `perseus`, `helios`, `lux`, `kepler`, `rigel`, `cosmo`, `celeste`, `ursa`, `sirius`, `lumen`, `castor`, `naksh`, `atlas`, `aurora`, `liora`; xAI documents them for its TTS and voice-agent APIs and says every voice speaks every supported language. An unknown voice is answered with an `error` event (`invalid_value`, "Voice 'x' not found") after `session.update`, so the direction fails and is reopened on backoff, and nothing is heard: check the list before changing it. `XAI_TRANSLATION_VOICES` gives each speaker its own voice (`VoiceAssigner`, `src/translate/voices.ts`): `TranslatorProxy` assigns a source the least-used voice of the list on first sight (list order on a tie) and keeps it for every direction opened for that source for the life of the bridge connection, across language changes, translation turned off and on, the idle close and provider drops, remembering up to 256 sources least-recently-used. The assignment is per bridge connection, so a bridge reconnect starts over, and two speakers share a voice once the list is exhausted. The Worker forwards the variable to the container and it is KV-overridable
 - `session.output_transcript.updated` carries a segment's whole translation, equal to the concatenated deltas (measured). It is emitted as the final at once and the delta buffer reset; the silence-timer finalization publishes nothing on xAI, since it would print each segment twice. It lands about 1.5 s after the source phrase ends and 0.3-6 s before the segment's audio, because TTS queues behind a continuous speaker, so the subtitle leads the translated speech
 - Segments are short phrases endpointed at about 400 ms of silence (17-21 per 46 s of speech, measured), so captions are choppier than OpenAI's sentence-level ones
 - Output audio arrives as one burst per segment at 7-900x real time; the `RtpTimestamper` lays it onto the same monotonic timeline as OpenAI's output

@@ -17,6 +17,7 @@
 import dotenv from 'dotenv';
 import { validateTags } from './utils';
 import { parseIntOrUndefined } from './translate/env';
+import { parseVoiceList } from './translate/voices';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -393,6 +394,9 @@ export const config = {
 		xaiUrl: process.env.XAI_TRANSLATION_URL || undefined,
 		// xAI TTS voice id; unset → xAI's default voice (Ara).
 		xaiVoice: process.env.XAI_TRANSLATION_VOICE || undefined,
+		// xAI TTS voices to spread a conference's speakers over, comma separated; set, each speaker
+		// keeps one of them and XAI_TRANSLATION_VOICE is not used. See src/translate/voices.ts.
+		xaiVoices: parseVoiceList(process.env.XAI_TRANSLATION_VOICES),
 		// Close a direction with no media for this long (ms) and reopen it on the next frame. Unset →
 		// per provider: never for OpenAI, 120 s for xAI, which bills idle wall-clock time. 0 disables.
 		idleCloseMs: parseIntOrUndefined(process.env.TRANSLATION_IDLE_CLOSE_MS),

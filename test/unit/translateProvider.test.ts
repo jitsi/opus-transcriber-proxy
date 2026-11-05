@@ -97,6 +97,19 @@ describe('translation provider specs', () => {
 		expect(p.url).toBe('wss://proxy.test/rt');
 		expect((p.buildSessionUpdate('es') as any).session.audio.output.voice).toBe('Ara');
 	});
+
+	it('xai: a voice given per direction wins over the configured one; none configured, none sent', () => {
+		const configured = getTranslationProvider('xai', { ...base, xaiApiKey: 'k', xaiVoice: 'Ara' });
+		expect((configured.buildSessionUpdate('es', 'rex') as any).session.audio.output.voice).toBe('rex');
+		const unconfigured = getTranslationProvider('xai', { ...base, xaiApiKey: 'k' });
+		expect((unconfigured.buildSessionUpdate('es', 'rex') as any).session.audio.output.voice).toBe('rex');
+		expect((unconfigured.buildSessionUpdate('es') as any).session.audio.output).not.toHaveProperty('voice');
+	});
+
+	it('openai: ignores a voice, its session takes none', () => {
+		const p = getTranslationProvider('openai', base);
+		expect(p.buildSessionUpdate('es', 'rex')).toEqual(p.buildSessionUpdate('es'));
+	});
 });
 
 describe('normalizeTargetLanguage', () => {

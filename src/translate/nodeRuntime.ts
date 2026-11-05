@@ -67,6 +67,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			xaiApiKey: config.translation.xaiApiKey,
 			xaiTranslationUrl: config.translation.xaiUrl,
 			xaiVoice: config.translation.xaiVoice,
+			xaiVoices: config.translation.xaiVoices,
 			idleCloseMs: config.translation.idleCloseMs,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,
