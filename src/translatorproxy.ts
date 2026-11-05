@@ -113,8 +113,8 @@ export class TranslatorProxy extends Emitter {
 	 * its id hashes to (`voiceForSource`), the same on every direction, connection and runtime.
 	 */
 	private readonly voices?: readonly string[];
-	/** Sources this proxy has already logged a voice for: bounded by the sources of this connection. */
-	private readonly voicedSources = new Set<string>();
+	/** The voice last logged for each source, so a change (a voice xAI refused) is logged too; bounded by this connection's sources. */
+	private readonly loggedVoices = new Map<string, string>();
 
 	/**
 	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
@@ -374,17 +374,23 @@ export class TranslatorProxy extends Emitter {
 	}
 
 	/**
-	 * The voice a source's directions speak in, logged the first time this proxy sees the source;
-	 * undefined when not configured, or when the provider has refused every voice of the list.
+	 * The voice a source's directions speak in, logged the first time this proxy sees the source and
+	 * whenever it changes; undefined when not configured, or when the provider has refused every
+	 * voice of the list.
 	 */
 	private voiceFor(inputSourceName: string): string | undefined {
 		if (this.voices === undefined) {
 			return undefined;
 		}
 		const voice = voiceForSource(this.voices, inputSourceName);
-		if (voice !== undefined && !this.voicedSources.has(inputSourceName)) {
-			this.voicedSources.add(inputSourceName);
-			this.runtime.logger.info(`translation source ${inputSourceName} speaks in voice ${voice}`);
+		if (voice !== undefined && this.loggedVoices.get(inputSourceName) !== voice) {
+			const previous = this.loggedVoices.get(inputSourceName);
+			this.loggedVoices.set(inputSourceName, voice);
+			this.runtime.logger.info(
+				previous === undefined
+					? `translation source ${inputSourceName} speaks in voice ${voice}`
+					: `translation source ${inputSourceName} now speaks in voice ${voice} (was ${previous})`,
+			);
 		}
 		return voice;
 	}

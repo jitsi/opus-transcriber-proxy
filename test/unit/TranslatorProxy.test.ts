@@ -29,7 +29,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TranslatorProxy } from '../../src/translatorproxy';
-import { voiceForSource } from '../../src/translate/voices';
+import { markVoiceRefused, resetRefusedVoices, voiceForSource } from '../../src/translate/voices';
 import { TranslatorConnection } from '../../src/TranslatorConnection';
 
 vi.mock('../../src/logger', () => ({
@@ -351,6 +351,29 @@ describe('TranslatorProxy (sources model)', () => {
 			MockedConnection.mock.instances[4].onClosed(a, 'remote');
 			mockWebSocket.emit('message', { data: mediaMessage(a) });
 			expect(voiceOf(5)).toBe(va);
+		});
+
+		it('logs a source\'s voice once, and again when a refused voice moves it', () => {
+			resetRefusedVoices();
+			try {
+				const runtime: any = { ...voiceRuntime, logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } };
+				new TranslatorProxy(mockWebSocket, {}, runtime);
+				mockWebSocket.emit('message', { data: sourcesMessage([a], [`${a}.en`]) });
+				mockWebSocket.emit('message', { data: sourcesMessage([a], [`${a}.en`, `${a}.de`]) });
+				const voiceLogs = () => runtime.logger.info.mock.calls.map((c: any[]) => String(c[0])).filter((m: string) => m.includes('speaks in voice'));
+				expect(voiceLogs()).toEqual([`translation source ${a} speaks in voice ${voiceForSource(voices, a)}`]);
+
+				const was = voiceForSource(voices, a)!;
+				markVoiceRefused(was);
+				const now = voiceForSource(voices, a)!;
+				expect(now).not.toBe(was);
+				mockWebSocket.emit('message', { data: sourcesMessage([a], [`${a}.en`, `${a}.de`, `${a}.fr`]) });
+				expect(voiceLogs()).toHaveLength(2);
+				expect(voiceLogs()[1]).toBe(`translation source ${a} now speaks in voice ${now} (was ${was})`);
+				expect(MockedConnection.mock.calls.at(-1)![1].voice).toBe(now);
+			} finally {
+				resetRefusedVoices();
+			}
 		});
 
 		it('sends no voice when the list is unset, or the provider is not xAI', () => {
