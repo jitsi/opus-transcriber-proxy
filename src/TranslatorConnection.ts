@@ -19,6 +19,7 @@ import { DEFAULT_PACE_LEAD_MS } from './translate/env';
 import { MediaPacer } from './MediaPacer';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
+import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
@@ -120,6 +121,12 @@ export interface TranslatorConnectionOptions {
 	targetLanguage: string;
 	/** Speech-to-speech provider; undefined → the runtime's default (`openai`). */
 	provider?: TranslationProviderId;
+	/**
+	 * TTS voice for this direction, on a provider whose session takes one (xAI); undefined → the
+	 * configured voice. The proxy derives it from the source id (`voiceForSource`) so a speaker
+	 * keeps one voice across directions and connections.
+	 */
+	voice?: string;
 	/**
 	 * Called periodically with the audio duration translated since the previous
 	 * report, plus a final delta on close; the deltas sum to this direction's total.
@@ -429,7 +436,7 @@ export class TranslatorConnection {
 				this.log(`${provider.name} WebSocket connected for translation to ${this.options.targetLanguage}`);
 				if (provider.handshake === 'open') {
 					// OpenAI: configure and stream at once.
-					ws.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+					ws.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage, this.options.voice)));
 					this.markConnected();
 					return;
 				}
@@ -770,7 +777,7 @@ export class TranslatorConnection {
 		if (parsedMessage.type === 'session.created') {
 			this.log(`[${this.options.targetLanguage}] ${provider.name} session created: ${JSON.stringify(parsedMessage.session ?? {})}`);
 			if (provider.handshake === 'session' && this.providerWebSocket && this.connectionStatus === 'pending') {
-				this.providerWebSocket.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage)));
+				this.providerWebSocket.send(JSON.stringify(provider.buildSessionUpdate(this.options.targetLanguage, this.options.voice)));
 			}
 			return;
 		}
@@ -881,10 +888,20 @@ export class TranslatorConnection {
 
 		if (parsedMessage.type === 'error') {
 			this.logError(`${provider.name} sent error message for ${this.localTag}: ${data}`);
+			// xAI names a voice it does not know when answering session.update; learn it so the directions
+			// that would use it fall back from their reopen on (see translate/voices.ts for the chain).
+			const refusedVoice = provider.takesVoice ? refusedVoiceOf(String(parsedMessage.error?.message ?? '')) : undefined;
+			if (refusedVoice !== undefined && markVoiceRefused(refusedVoice)) {
+				this.logError(
+					`${provider.name} does not know voice '${refusedVoice}' (XAI_TRANSLATION_VOICES or XAI_TRANSLATION_VOICE); ` +
+						`it is skipped from now on in this process: affected directions take the next voice of the list, ` +
+						`else XAI_TRANSLATION_VOICE, else ${provider.name}'s default, from their reopen on`,
+				);
+			}
 			this.runtime.writeMetric({
 				name: `${provider.id}_api_error`,
 				worker: 'opus-transcriber-proxy',
-				errorType: 'api_error',
+				errorType: refusedVoice !== undefined ? 'unknown_voice' : 'api_error',
 			});
 			// Notify before doClose() detaches the callbacks.
 			this.onError?.(this.localTag, `${provider.name} service sent error message: ${data}`);
