@@ -85,8 +85,8 @@ export interface TranslationRuntimeConfig {
 	xaiVoice?: string;
 	/**
 	 * xAI TTS voices to spread speakers over (`XAI_TRANSLATION_VOICES`, comma separated; see
-	 * ./voices.ts). Set, each source speaks in the voice its id hashes to and `xaiVoice` is not
-	 * used. Unset → every direction speaks in `xaiVoice`.
+	 * ./voices.ts). Set, each source speaks in the voice its id hashes to, and `xaiVoice` is used only
+	 * once every voice of the list has been refused by xAI. Unset → every direction speaks in `xaiVoice`.
 	 */
 	xaiVoices?: readonly string[];
 	/**

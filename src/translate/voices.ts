@@ -23,8 +23,10 @@
  * connection opened for the source (a listener switching language or turning translation off and
  * on, the idle close, a provider drop, a bridge reconnect) and in every runtime, with no shared
  * state. A participant who leaves and rejoins has a new source id, and may get a new voice. The
- * bridge opens one `/translate` connection per exported source, and a Worker's connections land in
- * different isolates, so a stateful assignment would have nothing to share through anyway. The
+ * bridge spreads a conference's directions over connections as jicofo's `translation.mode` says
+ * (one per exported source by default, with a source's languages split across connects past a
+ * cap), and a Worker's connections land in different isolates, so a stateful assignment would
+ * have nothing to share through anyway. The
  * cost is collisions: two sources may hash to one voice while others go unused, with the odds set
  * by the length of the list (three speakers over 8 voices collide about one time in three, over 28
  * about one in ten), so configure every voice that is acceptable.
@@ -34,8 +36,9 @@
  * refused voice is learned from that answer (`markVoiceRefused`). The sources that hash to it move
  * to the next entry of the list from their reopen on, while every other source keeps its voice;
  * with every entry refused the single configured voice applies, and with that refused too no voice
- * is sent and the provider's default speaks. The record is per process (per isolate in the Worker),
- * so each one pays one failed direction per mistyped voice.
+ * is sent and the provider's default speaks. The record is per process (per isolate in the Worker)
+ * and lasts until it restarts, so each one pays the directions already opened with a mistyped
+ * voice when the first answer arrives (every language of every source that hashed to it).
  *
  * Worker-safe: no Node imports.
  */
@@ -43,23 +46,40 @@
 /**
  * The voice list from an environment variable: comma separated, trimmed, empty entries dropped,
  * duplicates (compared case-insensitively, as xAI compares voice ids) dropped after the first.
- * `undefined` when nothing usable remains.
+ * `undefined` when nothing usable remains. `warn`, when given, is told what was dropped and about an
+ * entry that looks like two ids joined by the wrong separator (whitespace or a semicolon inside it),
+ * which xAI would refuse as one unknown voice.
  */
-export function parseVoiceList(value: string | undefined): string[] | undefined {
+export function parseVoiceList(value: string | undefined, warn?: (message: string) => void): string[] | undefined {
 	if (value === undefined) {
 		return undefined;
 	}
 	const seen = new Set<string>();
 	const voices: string[] = [];
+	const dropped: string[] = [];
 	for (const entry of value.split(',')) {
 		const voice = entry.trim();
-		if (voice === '' || seen.has(voice.toLowerCase())) {
+		if (voice === '') {
 			continue;
+		}
+		if (seen.has(voice.toLowerCase())) {
+			dropped.push(voice);
+			continue;
+		}
+		if (/[\s;]/.test(voice)) {
+			warn?.(`XAI_TRANSLATION_VOICES entry ${JSON.stringify(voice)} contains whitespace or ';'; the separator is a comma, and xAI will refuse it as one voice`);
 		}
 		seen.add(voice.toLowerCase());
 		voices.push(voice);
 	}
-	return voices.length > 0 ? voices : undefined;
+	if (dropped.length > 0) {
+		warn?.(`XAI_TRANSLATION_VOICES repeats ${dropped.map((v) => JSON.stringify(v)).join(', ')}; a voice is listed once`);
+	}
+	if (voices.length === 0) {
+		warn?.(`XAI_TRANSLATION_VOICES=${JSON.stringify(value)} names no voice; the single configured voice applies`);
+		return undefined;
+	}
+	return voices;
 }
 
 /**
@@ -84,8 +104,8 @@ export function voiceForSource(voices: readonly string[], source: string): strin
 /** Voices the provider has refused in this process, lower-cased (xAI compares ids case-insensitively). */
 const refusedVoices = new Set<string>();
 
-/** xAI's answer to a `session.update` naming a voice it does not know. */
-const XAI_UNKNOWN_VOICE_RE = /Voice '([^']+)' not found/;
+/** xAI's answer to a `session.update` naming a voice it does not know ("Voice 'x' not found"), tolerant of case and quote style. */
+const XAI_UNKNOWN_VOICE_RE = /voice\s+['"\u2018\u2019\u201c\u201d]([^'"\u2018\u2019\u201c\u201d]+)['"\u2018\u2019\u201c\u201d]\s+not\s+found/i;
 
 /** The voice id an xAI error message says is unknown, or undefined for any other error. */
 export function refusedVoiceOf(errorMessage: string): string | undefined {

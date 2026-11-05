@@ -120,9 +120,9 @@ describe('TranslatorConnection on xAI', () => {
 		vi.restoreAllMocks();
 	});
 
-	async function open(configOverrides: Record<string, unknown> = {}) {
+	async function open(configOverrides: Record<string, unknown> = {}, voice?: string) {
 		const { runtime, sockets } = makeHarness(configOverrides);
-		const conn = new TranslatorConnection('55555555-a0', { targetLanguage: 'nl', provider: 'xai' }, runtime);
+		const conn = new TranslatorConnection('55555555-a0', { targetLanguage: 'nl', provider: 'xai', ...(voice ? { voice } : {}) }, runtime);
 		const transcripts: Array<[string, boolean]> = [];
 		const closed: TranslatorCloseReason[] = [];
 		const errors: unknown[] = [];
@@ -390,6 +390,31 @@ describe('TranslatorConnection on xAI', () => {
 		b.ws.fireMessage(JSON.stringify({ type: 'error', error: { type: 'invalid_request', code: 'invalid_value', message: 'nope' } }));
 		expect(b.errors).toHaveLength(1);
 		expect(b.closed).toEqual(['error']);
+	});
+
+	it('puts the direction voice into the session.update it sends, else the configured voice unless refused', async () => {
+		resetRefusedVoices();
+		try {
+			const sentUpdate = (ws: FakeWs) => JSON.parse((ws.send as any).mock.calls.find((c: any[]) => JSON.parse(c[0]).type === 'session.update')[0]);
+
+			const a = await open({ xaiVoice: 'Ara' }, 'rex');
+			a.ws.fireOpen();
+			a.ws.fireMessage(sessionCreated());
+			expect(sentUpdate(a.ws).session.audio.output.voice).toBe('rex');
+
+			const b = await open({ xaiVoice: 'Ara' });
+			b.ws.fireOpen();
+			b.ws.fireMessage(sessionCreated());
+			expect(sentUpdate(b.ws).session.audio.output.voice).toBe('Ara');
+
+			b.ws.fireMessage(JSON.stringify({ type: 'error', error: { code: 'invalid_value', message: "TTS synthesis failed: Voice 'Ara' not found" } }));
+			const c = await open({ xaiVoice: 'Ara' });
+			c.ws.fireOpen();
+			c.ws.fireMessage(sessionCreated());
+			expect(sentUpdate(c.ws).session.audio.output).not.toHaveProperty('voice');
+		} finally {
+			resetRefusedVoices();
+		}
 	});
 
 	it('learns a voice xAI does not know from its error, once, and fails the direction as usual', async () => {

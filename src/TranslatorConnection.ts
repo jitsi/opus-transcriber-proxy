@@ -814,19 +814,20 @@ export class TranslatorConnection {
 
 		if (parsedMessage.type === 'error') {
 			this.logError(`${provider.name} sent error message for ${this.localTag}: ${data}`);
-			// xAI names a voice it does not know when answering session.update; learn it so the sources that
-			// hash to it take the next voice from their reopen on (see translate/voices.ts for the fallbacks).
-			const refusedVoice = refusedVoiceOf(String(parsedMessage.error?.message ?? ''));
+			// xAI names a voice it does not know when answering session.update; learn it so the directions
+			// that would use it fall back from their reopen on (see translate/voices.ts for the chain).
+			const refusedVoice = provider.takesVoice ? refusedVoiceOf(String(parsedMessage.error?.message ?? '')) : undefined;
 			if (refusedVoice !== undefined && markVoiceRefused(refusedVoice)) {
 				this.logError(
 					`${provider.name} does not know voice '${refusedVoice}' (XAI_TRANSLATION_VOICES or XAI_TRANSLATION_VOICE); ` +
-						`directions that would use it take the next voice from their reopen on`,
+						`it is skipped from now on in this process: affected directions take the next voice of the list, ` +
+						`else XAI_TRANSLATION_VOICE, else ${provider.name}'s default, from their reopen on`,
 				);
 			}
 			this.runtime.writeMetric({
 				name: `${provider.id}_api_error`,
 				worker: 'opus-transcriber-proxy',
-				errorType: 'api_error',
+				errorType: refusedVoice !== undefined ? 'unknown_voice' : 'api_error',
 			});
 			// Notify before doClose() detaches the callbacks.
 			this.onError?.(this.localTag, `${provider.name} service sent error message: ${data}`);

@@ -30,6 +30,17 @@ describe('parseVoiceList', () => {
 		expect(parseVoiceList('ara, rex ,, Eve,eve,ARA')).toEqual(['ara', 'rex', 'Eve']);
 	});
 
+	it('reports what it drops and a probable wrong separator, when given a warn', () => {
+		const warnings: string[] = [];
+		const warn = (m: string) => warnings.push(m);
+		expect(parseVoiceList('ara;rex, eve, EVE', warn)).toEqual(['ara;rex', 'eve']);
+		expect(warnings).toEqual([expect.stringMatching(/"ara;rex".*separator is a comma/), expect.stringMatching(/repeats "EVE"/)]);
+		warnings.length = 0;
+		expect(parseVoiceList(' , ', warn)).toBeUndefined();
+		expect(warnings).toEqual([expect.stringMatching(/names no voice/)]);
+		expect(parseVoiceList('ara, rex')).toEqual(['ara', 'rex']);
+	});
+
 	it('is undefined when unset or nothing usable remains', () => {
 		expect(parseVoiceList(undefined)).toBeUndefined();
 		expect(parseVoiceList('')).toBeUndefined();
@@ -111,6 +122,8 @@ describe('voiceForSource', () => {
 describe('refusedVoiceOf', () => {
 	it("reads the id out of xAI's unknown-voice error and nothing else", () => {
 		expect(refusedVoiceOf("TTS synthesis failed: Voice 'bogus_voice' not found")).toBe('bogus_voice');
+		expect(refusedVoiceOf('voice "Bogus" not found')).toBe('Bogus');
+		expect(refusedVoiceOf('Voice \u2018bogus\u2019 Not Found')).toBe('bogus');
 		expect(refusedVoiceOf('LLM stream timed out')).toBeUndefined();
 		expect(refusedVoiceOf('')).toBeUndefined();
 	});

@@ -35,6 +35,7 @@ import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from
 // Warn at most once per isolate about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
 let warnedBadIdleClose = false;
+let warnedVoiceList = false;
 
 /**
  * `providerOverride` is the provider an operator override (worker/providerOverride.ts) wrote into the
@@ -65,6 +66,12 @@ export function createWorkerTranslationRuntime(
 		warnedBadIdleClose = true;
 		console.warn(`TRANSLATION_IDLE_CLOSE_MS=${env.TRANSLATION_IDLE_CLOSE_MS} is not a number; using the provider default`);
 	}
+	const xaiVoices = parseVoiceList(env.XAI_TRANSLATION_VOICES, (m) => {
+		if (!warnedVoiceList) {
+			warnedVoiceList = true;
+			console.warn(m);
+		}
+	});
 	return {
 		logger: {
 			// Gate debug on the flag (mirrors the Node LOG_LEVEL behaviour). Unconditional console.debug
@@ -83,7 +90,7 @@ export function createWorkerTranslationRuntime(
 			xaiApiKey: env.XAI_TRANSLATION_API_KEY || env.XAI_API_KEY || '',
 			xaiTranslationUrl: env.XAI_TRANSLATION_URL || undefined,
 			xaiVoice: env.XAI_TRANSLATION_VOICE || undefined,
-			xaiVoices: parseVoiceList(env.XAI_TRANSLATION_VOICES),
+			xaiVoices,
 			idleCloseMs,
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,

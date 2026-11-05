@@ -78,6 +78,8 @@ export interface TranslationProviderSpec {
 	readonly serverTranscriptFinals: boolean;
 	/** Idle-close default when `TranslationRuntimeConfig.idleCloseMs` is unset; 0 disables. */
 	readonly defaultIdleCloseMs: number;
+	/** Whether the session takes a TTS voice, so per-source voices (./voices.ts) apply. */
+	readonly takesVoice: boolean;
 	/**
 	 * The `session.update` message for a target language. `voice` is the TTS voice this direction
 	 * should speak in (see ./voices.ts); undefined → the configured voice, unless the provider has
@@ -224,6 +226,7 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 			handshake: 'session',
 			serverTranscriptFinals: true,
 			defaultIdleCloseMs: XAI_DEFAULT_IDLE_CLOSE_MS,
+			takesVoice: true,
 			buildSessionUpdate: (targetLanguage, voice) => {
 				// The direction's own voice, else the configured one unless xAI has refused it, else none.
 				const chosen = voice ?? (configuredVoice !== undefined && !isVoiceRefused(configuredVoice) ? configuredVoice : undefined);
@@ -256,6 +259,7 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 		handshake: 'open',
 		serverTranscriptFinals: false,
 		defaultIdleCloseMs: 0,
+		takesVoice: false,
 		// Canonical session schema per openai/openai-cookbook examples/voice_solutions/realtime_translation_guide/:
 		// the target language under audio.output.language as a 2-letter ISO code. The endpoint rejects
 		// session.instructions, session.type, session.output_modalities, voice, etc. — the model is
