@@ -71,6 +71,12 @@ const REOPEN_BACKOFF_MAX_MS = 15000;
  * language to every incoming source (conference-wide) and tag returned audio as
  * `{inputSource}.{language}`.
  */
+/**
+ * workerd's error for a peer whose connection went away without a Close frame it could deliver: how the
+ * JVB's normal close arrives in the Worker (see TranslatorProxy.onBridgeClosed). Not a failure.
+ */
+const BENIGN_BRIDGE_ERROR_RE = /Network connection lost/;
+
 export class TranslatorProxy extends Emitter {
 	private readonly ws: IWebSocket;
 	private options: TranslatorProxyOptions;
@@ -116,6 +122,8 @@ export class TranslatorProxy extends Emitter {
 
 	/** Set by the bridge socket's close event; the teardown runs once. */
 	private bridgeClosed = false;
+	/** Set by {@link close}, so the close event it causes is reported as the proxy's own. */
+	private closedLocally = false;
 	/** The message of the bridge socket's `error` event, if one preceded its close (see onBridgeClosed). */
 	private bridgeError?: string;
 
@@ -131,11 +139,13 @@ export class TranslatorProxy extends Emitter {
 		this.ws.addEventListener('close', (event) => this.onBridgeClosed(event));
 
 		this.ws.addEventListener('error', (event) => {
-			// Not a failure of the session by itself: both runtimes follow an error with a close event, and
-			// in the Worker a bridge that closed normally arrives this way (see onBridgeClosed). The message
-			// is kept for the close line, which has the code to say what it meant.
+			// Both runtimes follow an error with a close event, so the message is kept for the close line,
+			// which has the code to say what it meant. workerd's "Network connection lost." is how a bridge
+			// that closed normally arrives in the Worker (see onBridgeClosed), so it is not an error of the
+			// session; any other error (a reset connection, a bad frame) still is.
 			this.bridgeError = (event as { message?: string }).message ?? 'WebSocket error';
-			this.runtime.logger.debug(`TranslatorProxy bridge WebSocket error: ${this.bridgeError}`);
+			const level = BENIGN_BRIDGE_ERROR_RE.test(this.bridgeError) ? 'debug' : 'error';
+			this.runtime.logger[level](`TranslatorProxy bridge WebSocket error: ${this.bridgeError}`);
 		});
 
 		this.ws.addEventListener('message', (event) => {
@@ -184,35 +194,38 @@ export class TranslatorProxy extends Emitter {
 	}
 
 	/**
-	 * Close every active translation connection — each flushes its final usage delta on close — and
-	 * clear the map. Idempotent (connection close is guarded). Shared by the bridge-ws close handler
-	 * (which passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
-	 * {@link close}.
-	 */
-	/**
 	 * The bridge socket closed: tear down every direction (nothing a direction still holds in its pacer
 	 * can reach anyone) and report it. One info line carries the close code and, when an `error` event
-	 * preceded the close, its message. `ws` (Node) and workerd both dispatch a close after an error, so
-	 * the error itself is not reported at error level: the JVB sends its Close frame and cuts the TCP
-	 * connection at once, without waiting for the reply (`Exporter.stop`), so in the Worker every normal
-	 * bridge close comes with the error "Network connection lost.", before or after the close event
-	 * (measured both ways), and reporting it as an error made each healthy session's end look like a
-	 * failure. A peer that completes the handshake gets a clean close with its code and no error in
-	 * both runtimes. Idempotent, so a close after the proxy's own `close()` tears down once.
+	 * preceded the close, its message. The JVB sends its Close frame and cuts the TCP connection at once,
+	 * without waiting for the reply (`Exporter.stop`), so in the Worker every normal bridge close comes
+	 * with workerd's error "Network connection lost.", before or after the close event (measured both
+	 * ways), and reporting that as an error made each healthy session's end look like a failure. A peer
+	 * that completes the handshake gets a clean close with its code and no error in both runtimes. A
+	 * close that {@link close} asked for is reported as the proxy's own, so a rollout does not read as
+	 * a run of bridge disconnects. The reason is the peer's string and is quoted, so it cannot break
+	 * the line. Neither runtime dispatches a second close event; the guard only keeps a stray one from
+	 * emitting `closed` twice.
 	 */
 	private onBridgeClosed(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): void {
 		if (this.bridgeClosed) {
 			return;
 		}
 		this.bridgeClosed = true;
+		const who = this.closedLocally ? 'TranslatorProxy closed the bridge WebSocket' : 'TranslatorProxy bridge WebSocket closed';
 		const afterError = this.bridgeError !== undefined ? ` after error: ${this.bridgeError}` : '';
 		this.runtime.logger.info(
-			`TranslatorProxy bridge WebSocket closed: code=${event?.code ?? 'none'} reason=${event?.reason || 'none'} wasClean=${event?.wasClean ?? 'unknown'}${afterError}`,
+			`${who}: code=${event?.code ?? 'none'} reason=${JSON.stringify(event?.reason ?? '')} wasClean=${event?.wasClean ?? 'unknown'}${afterError}`,
 		);
 		this.closeAllConnections(/* releaseQueuedAudio */ false);
 		this.emit('closed');
 	}
 
+	/**
+	 * Close every active translation connection — each flushes its final usage delta on close — and
+	 * clear the map. Idempotent (connection close is guarded). Shared by {@link onBridgeClosed} (which
+	 * passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
+	 * {@link close}.
+	 */
 	private closeAllConnections(releaseQueuedAudio = true): void {
 		for (const byLanguage of this.connections.values()) {
 			for (const conn of byLanguage.values()) {
@@ -232,6 +245,7 @@ export class TranslatorProxy extends Emitter {
 		// caller can drain the reporter right after). ws.close() then fires the bridge 'close' handler,
 		// which calls closeAllConnections() again on the now-empty map (harmless no-op) and emits 'closed'.
 		this.closeAllConnections();
+		this.closedLocally = true;
 		try {
 			this.ws.close();
 		} catch {
