@@ -39,31 +39,31 @@ const MIN_PACE_LEAD_MS = 20;
 const LARGE_PACE_LEAD_MS = 2000;
 
 /**
- * Parse `TRANSLATION_PACE_LEAD_MS`, saying through `warn` what a value that is not what the operator meant is
- * taken as: unset → the default; not a number → the default; negative → 0 (pacing off; the documented way to
- * disable is `0`); 1-19 → 20, the one-frame floor the pacer applies anyway; over 2 s → accepted with a warning.
- * Shared by the Node and Worker runtimes so the two read the same string the same way.
+ * Parse a pacer lead variable (`TRANSLATION_PACE_LEAD_MS`, `AGENT_PACE_LEAD_MS`), saying through `warn` what a
+ * value that is not what the operator meant is taken as: unset → the default; not a whole number → the default
+ * (a typo must not silently change the lead); negative → the default (a typo such as -200 must not silently
+ * remove the fix; 0 is the explicit off switch for translation, and for the agent the pacer raises 0 to one
+ * frame); 1-19 → 20, the one-frame floor the pacer applies anyway; over 2 s → accepted with a warning. Shared
+ * by the Node and Worker runtimes and by the agent config, so every lead is read the same way.
  */
-export function parsePaceLeadMs(value: string | undefined, warn: (message: string) => void): number {
+export function parsePaceLeadMs(value: string | undefined, warn: (message: string) => void, name = 'TRANSLATION_PACE_LEAD_MS'): number {
 	if (value === undefined || value === '') return DEFAULT_PACE_LEAD_MS;
-	const parsed = parseInt(value, 10);
-	if (Number.isNaN(parsed)) {
-		warn(`TRANSLATION_PACE_LEAD_MS=${value} is not an integer; using ${DEFAULT_PACE_LEAD_MS}`);
+	if (!/^\s*-?\d+\s*$/.test(value)) {
+		warn(`${name}=${value} is not a whole number of milliseconds; using ${DEFAULT_PACE_LEAD_MS}`);
 		return DEFAULT_PACE_LEAD_MS;
 	}
+	const parsed = parseInt(value, 10);
 	if (parsed < 0) {
-		// Not "pacing off": a typo such as -200 must not silently remove the fix, and AGENT_PACE_LEAD_MS
-		// treats a negative value the same way. 0 is the explicit off switch.
-		warn(`TRANSLATION_PACE_LEAD_MS=${value} is negative; using ${DEFAULT_PACE_LEAD_MS} (set 0 to disable pacing)`);
+		warn(`${name}=${value} is negative; using ${DEFAULT_PACE_LEAD_MS} (set 0 to disable pacing)`);
 		return DEFAULT_PACE_LEAD_MS;
 	}
 	if (parsed > 0 && parsed < MIN_PACE_LEAD_MS) {
-		warn(`TRANSLATION_PACE_LEAD_MS=${value} is less than one ${MIN_PACE_LEAD_MS} ms frame; using ${MIN_PACE_LEAD_MS}`);
+		warn(`${name}=${value} is less than one ${MIN_PACE_LEAD_MS} ms frame; using ${MIN_PACE_LEAD_MS}`);
 		return MIN_PACE_LEAD_MS;
 	}
 	if (parsed > LARGE_PACE_LEAD_MS) {
 		warn(
-			`TRANSLATION_PACE_LEAD_MS=${value} lets ${parsed} ms of translated audio run ahead of real time, ` +
+			`${name}=${value} lets ${parsed} ms of audio run ahead of real time, ` +
 				`which a client's jitter buffer (about 4 s) may not hold`,
 		);
 	}

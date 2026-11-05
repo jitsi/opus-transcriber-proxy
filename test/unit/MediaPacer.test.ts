@@ -72,6 +72,31 @@ describe('MediaPacer', () => {
 		expect(released.length).toBe(5);
 	});
 
+	it('a release that closes the pacer ends a flush, and a close from onOverflow drops the incoming frame', () => {
+		let seen = 0;
+		const closing = manualPacer(20, {
+			onFrame: () => {
+				seen++;
+				if (seen === 2) closing.pacer.close();
+			},
+		});
+		for (let i = 0; i < 10; i++) closing.pacer.push(frame(i));
+		expect(closing.pacer.flush()).toBe(1); // the second release closed the pacer; nothing after it was released
+		expect(seen).toBe(2);
+		expect(closing.pacer.queuedFrames).toBe(0);
+
+		const overflow = manualPacer(20, { maxQueuedFrames: 4, overflowDropFrames: 2 });
+		overflow.pacer.onOverflow = () => overflow.pacer.close();
+		for (let i = 0; i < 6; i++) overflow.pacer.push(frame(i));
+		expect(overflow.pacer.queuedFrames).toBe(0); // closed inside onOverflow: the frame being pushed is not queued
+	});
+
+	it('refuses a negative or NaN flush limit', () => {
+		const { pacer } = manualPacer(100);
+		expect(() => pacer.flush(-1)).toThrow(RangeError);
+		expect(() => pacer.flush(Number.NaN)).toThrow(RangeError);
+	});
+
 	it('holds frames beyond the lead budget until media plays out', () => {
 		const { pacer, released, advance } = manualPacer(100);
 		for (let i = 0; i < 10; i++) {

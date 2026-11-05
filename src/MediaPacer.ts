@@ -25,12 +25,12 @@
  * could never cut the bot off, and a WebRTC client's jitter buffer (NetEQ, 200 packets = 4 s by
  * default) overflows and flushes, so the listener hears only part of the burst while the
  * transcript, which travels over signalling, arrives complete. The pacer holds encoded frames in
- * a queue and releases one 20 ms frame per 20 ms of wall-clock time, allowing at most `leadMs`
- * of media to be in flight ahead of real time (a small cushion against scheduler jitter). The lead
- * is never less than one frame: with less, no frame could ever fit the budget and nothing would be
- * released.
- * `clear()` drops everything still queued — only the ≤ `leadMs` already released can still play
- * out downstream.
+ * a queue and releases one frame per `frameDurationMs` (default 20 ms) of wall-clock time, allowing
+ * at most `leadMs` of media to be in flight ahead of real time (a small cushion against scheduler
+ * jitter). The lead is never less than one frame: with less, no frame could ever fit the budget and
+ * nothing would be released; a negative lead is a construction error.
+ * `clear()` drops every queued frame (queued marks are flushed, see below) — only the ≤ `leadMs`
+ * already released can still play out downstream.
  *
  * `mark(name)` enqueues a playback checkpoint behind the audio queued so far; `onMark` fires when
  * the queue drains past it (approximately when that audio has been *sent*, not when remote
@@ -40,7 +40,10 @@
  * A throw from `onFrame` or `onMark` is reported to `onError` and the release goes on with the
  * next item: the pacer's timer callback has no caller to catch it, and one bad frame must not
  * strand the rest of the queue (nor, at close, abort the owner's teardown). Without an `onError`
- * the throw propagates as it would from any callback.
+ * the throw propagates as it would from any callback, and the rest of the queue waits for the
+ * next push. `onOverflow` is not guarded: it runs inside `push`, which has a caller. A callback
+ * may call back into the pacer (`push`, `clear`, `close`); a release loop checks `closed` before
+ * each item, so a close from inside a callback ends the loop.
  *
  * Used by `AgentProxy` (the agent's return path) and `TranslatorConnection` (translated audio).
  * Pure and clock/timer-injectable for tests; no I/O, no Node imports (it is part of the
@@ -55,8 +58,9 @@ export interface MediaPacerOptions<F> {
 	/** A frame is due to be sent to the bridge. The pacer's one output. */
 	onFrame: (frame: F) => void;
 	/**
-	 * How much media (ms) may be released ahead of real time. Default 200. Raised to one frame
-	 * (`frameDurationMs`) when smaller, see the class doc.
+	 * How much media (ms) may be released ahead of real time. Default 200. Must not be negative (a
+	 * RangeError); 0 and anything below one frame (`frameDurationMs`) are raised to one frame, see the
+	 * class doc. "Pacing off" is the owner's decision (no pacer), not a lead of 0.
 	 */
 	leadMs?: number;
 	/**
@@ -107,7 +111,7 @@ export class MediaPacer<F> {
 
 	/** The queue drained past a mark (or a clear() flushed it). */
 	onMark?: (name: string) => void;
-	/** `maxQueuedFrames` was hit: this many of the oldest queued frames were dropped to make room. */
+	/** `maxQueuedFrames` was hit: this many of the oldest queued frames were dropped to make room. Not covered by `onError`. */
 	onOverflow?: (dropped: number) => void;
 	/** `onFrame` or `onMark` threw; the release continues with the next item. Unset: the throw propagates. */
 	onError?: (error: unknown) => void;
@@ -163,6 +167,7 @@ export class MediaPacer<F> {
 				}
 			}
 			this.onOverflow?.(dropped);
+			if (this.closed) return; // the handler closed the pacer
 		}
 		this.queue.push({ kind: 'frame', frame });
 		this.frameCount++;
@@ -211,9 +216,13 @@ export class MediaPacer<F> {
 	 * since a burst longer than the client's jitter buffer would be flushed by the client anyway. Marks all
 	 * fire. The playout clock advances by the frames released, so a later push paces against it (a property
 	 * of the pacer; the owners that call this close right after). Returns the number of frames released; the
-	 * caller knows how many were dropped from `queuedFrames` before the call.
+	 * caller knows how many were dropped from `queuedFrames` before the call. A release that closes the pacer
+	 * ends the flush; the rest is dropped. `maxFrames` must not be negative or NaN.
 	 */
 	flush(maxFrames = Infinity): number {
+		if (!(maxFrames >= 0)) {
+			throw new RangeError(`MediaPacer: maxFrames must be a non-negative number, got ${maxFrames}`);
+		}
 		if (this.closed) return 0;
 		this.stopTimer();
 		const items = this.queue;
@@ -225,6 +234,7 @@ export class MediaPacer<F> {
 		}
 		let released = 0;
 		for (const item of items) {
+			if (this.closed) break;
 			if (item.kind === 'frame') {
 				if (released >= maxFrames) continue;
 				released++;

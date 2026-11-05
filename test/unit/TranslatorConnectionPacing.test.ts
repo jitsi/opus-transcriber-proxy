@@ -319,6 +319,37 @@ describe('TranslatorConnection pacing', () => {
 		expect(stops).toHaveLength(0); // (the harness's recorder was replaced above)
 	});
 
+	it('a send that throws during the close-time flush is counted once and does not stop the teardown', async () => {
+		const { conn, ws, stops } = await connect();
+		const runtime = (conn as any).runtime;
+		let sent = 0;
+		conn.onAudioFrame = () => {
+			sent++;
+			throw new Error('socket gone');
+		};
+		const closed: string[] = [];
+		conn.onClosed = (_tag, reason) => closed.push(reason);
+		for (let i = 0; i < 30; i++) ws.fireMessage(audioDelta());
+		ws.fireClose();
+		expect(sent).toBe(30); // every frame was attempted
+		expect(closed).toEqual(['rejected']);
+		expect(stops).toHaveLength(1); // the talk stop still fired
+		const errors = runtime.logger.error.mock.calls.map((c: any[]) => String(c[0]));
+		expect(errors.filter((m: string) => m.includes('Failed to send a paced frame'))).toHaveLength(1);
+		expect(errors.filter((m: string) => /30 paced frame\(s\) failed to send/.test(m))).toHaveLength(1);
+	});
+
+	it('counts the frames dropped at close with a listener present, as reason close', async () => {
+		const { conn, ws } = await connect();
+		const increments: Array<Record<string, unknown>> = [];
+		(conn as any).metricBatcher = { increment: (m: Record<string, unknown>) => increments.push(m), flush: () => {} };
+		for (let i = 0; i < 400; i++) ws.fireMessage(audioDelta()); // 8 s queued beyond the lead
+		ws.fireClose();
+		const close = increments.filter((m) => m.name === 'translation_paced_frames_dropped' && m.errorType === 'close');
+		expect(close).toHaveLength(1);
+		expect(close[0].count).toBe(400 - LEAD_FRAMES - 150);
+	});
+
 	it('drops the queued tail without sending when told nobody is listening', async () => {
 		const { conn, ws, media, stops } = await connect();
 		const info = (conn as any).runtime.logger.info as ReturnType<typeof vi.fn>;

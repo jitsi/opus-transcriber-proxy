@@ -54,10 +54,18 @@ describe('parsePaceLeadMs', () => {
 		expect(parse('2000')).toEqual({ result: 2000, warnings: [] });
 	});
 
-	it('warns and takes the default for a non-integer', () => {
-		const { result, warnings } = parse('abc');
-		expect(result).toBe(DEFAULT_PACE_LEAD_MS);
-		expect(warnings).toEqual([expect.stringMatching(/TRANSLATION_PACE_LEAD_MS=abc is not an integer/)]);
+	it('warns and takes the default for anything but a whole number, trailing units and fractions included', () => {
+		for (const v of ['abc', '200ms', '1.5']) {
+			const { result, warnings } = parse(v);
+			expect(result).toBe(DEFAULT_PACE_LEAD_MS);
+			expect(warnings).toEqual([expect.stringMatching(new RegExp(`TRANSLATION_PACE_LEAD_MS=${v.replace('.', '\\.')} is not a whole number`))]);
+		}
+	});
+
+	it('names the variable it was given, for the agent lead', () => {
+		const warnings: string[] = [];
+		expect(parsePaceLeadMs('-5', (m) => warnings.push(m), 'AGENT_PACE_LEAD_MS')).toBe(DEFAULT_PACE_LEAD_MS);
+		expect(warnings).toEqual([expect.stringMatching(/^AGENT_PACE_LEAD_MS=-5 is negative/)]);
 	});
 
 	it('warns and takes the default for a negative value, so a typo cannot turn pacing off', () => {

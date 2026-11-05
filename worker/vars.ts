@@ -368,8 +368,9 @@ export const WORKER_VARS = {
 	// translations endpoint, so an override may not set it.
 	TRANSLATION_TALK_SILENCE_TIMEOUT_MS: tunable(int(101)),
 	// How far ahead of real time translated audio is released to the bridge; 0 disables the pacing
-	// (the pre-pacer behaviour), so an override can roll it back without a release. 1-19 is raised
-	// to one 20 ms frame by the runtime (parsePaceLeadMs), with a warning.
+	// (the pre-pacer behaviour), so an override can roll it back without a release. A negative override
+	// is refused here by int(0); 1-19 is raised to one 20 ms frame by the runtime (parsePaceLeadMs), with
+	// a warning.
 	TRANSLATION_PACE_LEAD_MS: tunable(int(0)),
 	TRANSLATION_USAGE_URL: {},
 	TRANSLATION_USAGE_REPORT_INTERVAL_MS: { kv: int() },

@@ -182,6 +182,29 @@ describe('TranslatorProxy (sources model)', () => {
 		void deConn;
 	});
 
+	it('skips the close-time burst where nobody can hear it, and keeps it on a graceful shutdown', () => {
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en', '523834112-a0.de']) });
+		// A direction dropped from requests: nobody listens to it any more.
+		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+		const de = MockedConnection.mock.instances.find((i: any) => i.targetLanguage === 'de') as any;
+		expect(de.close).toHaveBeenCalledWith(false);
+		// The bridge socket closing: the burst would go nowhere.
+		mockWebSocket.emit('close', {});
+		const en = MockedConnection.mock.instances.find((i: any) => i.targetLanguage === 'en') as any;
+		expect(en.close).toHaveBeenCalledWith(false);
+		void proxy;
+	});
+
+	it('a graceful shutdown of the proxy releases the queued tail to the still-open bridge socket', () => {
+		const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+		proxy.close();
+		const only = MockedConnection.mock.instances[0] as any;
+		expect(only.close).toHaveBeenCalledTimes(1);
+		expect(only.close).not.toHaveBeenCalledWith(false);
+	});
+
 	it('reconciles: an empty requests list closes everything', () => {
 		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });

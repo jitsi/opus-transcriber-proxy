@@ -129,7 +129,7 @@ export interface TranslationRuntimeConfig {
 	 * (NetEQ: 200 packets, 4 s, by default) makes the client flush and lose part of the phrase while the
 	 * transcript arrives complete. `TranslatorConnection` therefore queues the encoded voice frames in a
 	 * `MediaPacer` and releases one per 20 ms, at most this far ahead of the playout clock. Default 200.
-	 * `0` disables pacing (frames are forwarded as they arrive, the pre-pacer behaviour); a value under one
+	 * `0` disables pacing (frames are forwarded as they arrive, the pre-pacer behaviour); a value from 1 to 19
 	 * frame (20 ms) is raised to one, since no frame could fit a smaller lead. The talk boundaries are
 	 * unaffected either way, since they were already measured against the projected playout.
 	 * Resolved by each runtime from its environment (`TRANSLATION_PACE_LEAD_MS`, `parsePaceLeadMs`).

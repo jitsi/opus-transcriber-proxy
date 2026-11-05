@@ -196,6 +196,8 @@ export class TranslatorConnection {
 	private warnedPacerOverflow = false;
 	/** Frames the pacer dropped at its cap over the direction's life; reported at close. */
 	private pacerFramesDropped = 0;
+	/** Releases whose send threw; the first is logged, the total at close. */
+	private pacedSendFailures = 0;
 
 	onError?: (tag: string, error: any) => void = undefined;
 	onClosed?: (tag: string, reason: TranslatorCloseReason) => void = undefined;
@@ -294,10 +296,17 @@ export class TranslatorConnection {
 				overflowDropFrames: OVERFLOW_DROP_FRAMES,
 				onFrame: (frame) => this.sendAudioFrame(frame.data, frame.audioLevel),
 			});
-			this.pacer.onError = (error) => this.logError('Failed to send a paced frame:', error);
+			// One line for the first failure and a total at close: a deterministic throw would otherwise log
+			// once per released frame, 50 a second per direction, and 150 in a row at a close-time flush.
+			this.pacer.onError = (error) => {
+				this.pacedSendFailures++;
+				if (this.pacedSendFailures === 1) {
+					this.logError('Failed to send a paced frame (further failures are counted and reported at close):', error);
+				}
+			};
 			this.pacer.onOverflow = (dropped) => {
 				this.pacerFramesDropped += dropped;
-				this.metricBatcher.increment({ name: 'translation_paced_frames_dropped', worker: 'opus-transcriber-proxy', count: dropped });
+				this.metricBatcher.increment({ name: 'translation_paced_frames_dropped', worker: 'opus-transcriber-proxy', errorType: 'overflow', count: dropped });
 				if (!this.warnedPacerOverflow) {
 					this.warnedPacerOverflow = true;
 					this.runtime.logger.warn(
@@ -506,7 +515,7 @@ export class TranslatorConnection {
 		// speaker who finishes and mutes would otherwise have the tail of the last utterance cut off. With
 		// the talk timer disabled a talk never ends, so it cannot be allowed to hold the direction open —
 		// but audio still queued in the pacer always can: the queue is bounded (MAX_PACED_FRAMES) and drains
-		// at real time, so the deferral lasts at most that long.
+		// at real time, so once the provider stops producing the deferral lasts at most that long.
 		if (this.talkActive && this.talkSilenceTimeoutMs > 0) return;
 		if (this.pacer && this.pacer.queuedFrames > 0) return;
 		const idleFor = Date.now() - this.idleSince;
@@ -1054,8 +1063,8 @@ export class TranslatorConnection {
 
 		// Audio still queued in the pacer goes out now, at once, while onAudioFrame is still attached: releasing it
 		// at real time would take time this connection no longer has (its owner may be replacing it on the same
-		// tag), and dropping it would lose the end of the phrase the provider closed on, or the last sentence of a
-		// speaker who just left. A burst at close is the pre-pacer behaviour for this tail, capped at what a
+		// tag), and dropping it would lose the end of the phrase the provider closed on, or the tail of a reopen
+		// after a provider drop. A burst at close is the pre-pacer behaviour for this tail, capped at what a
 		// client's jitter buffer holds (FLUSH_AT_CLOSE_MAX_FRAMES; a longer burst would be partly discarded by
 		// the client anyway, so the proxy drops the rest and says so); the talk stop below then covers the
 		// phrase. The owner skips the burst when the bridge socket is gone or the source was removed.
@@ -1063,6 +1072,10 @@ export class TranslatorConnection {
 			const queued = this.pacer.queuedFrames;
 			const released = releaseQueuedAudio ? this.pacer.flush(FLUSH_AT_CLOSE_MAX_FRAMES) : 0;
 			const dropped = queued - released;
+			if (dropped > 0 && releaseQueuedAudio) {
+				// Lost with a listener present, like an overflow drop; the no-listener case is not a loss.
+				this.metricBatcher.increment({ name: 'translation_paced_frames_dropped', worker: 'opus-transcriber-proxy', errorType: 'close', count: dropped });
+			}
 			if (queued > 0) {
 				const line =
 					`[${this.connectionId}] [${this.options.targetLanguage}] tag ${this.localTag} closing (${reason}) with ` +
@@ -1071,6 +1084,9 @@ export class TranslatorConnection {
 					(!releaseQueuedAudio ? ' (no listener)' : '');
 				if (dropped > 0 && releaseQueuedAudio) this.runtime.logger.warn(line);
 				else this.runtime.logger.info(line);
+			}
+			if (this.pacedSendFailures > 0) {
+				this.logError(`[${this.connectionId}] [${this.options.targetLanguage}] tag ${this.localTag}: ${this.pacedSendFailures} paced frame(s) failed to send`);
 			}
 			if (this.pacerFramesDropped > 0) {
 				this.runtime.logger.warn(
