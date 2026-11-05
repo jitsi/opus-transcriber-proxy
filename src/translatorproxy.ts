@@ -17,7 +17,7 @@
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import type { TranslatorCloseReason } from './TranslatorConnection';
 import { defaultTranslationProvider, type TranslationProviderId } from './translate/provider';
-import { VoiceAssigner } from './translate/voices';
+import { voiceForSource } from './translate/voices';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 import { reportTranslationUsage } from './usage-reporter';
@@ -109,12 +109,12 @@ export class TranslatorProxy extends Emitter {
 	private readonly provider: TranslationProviderId;
 
 	/**
-	 * Per-source TTS voices (`runtime.config.xaiVoices`, xAI only): a speaker keeps one voice across
-	 * every direction opened for it on this connection, however often they close and reopen. Scoped
-	 * to this proxy, which is one bridge connection, so one conference; a bridge that reconnects
-	 * starts the assignment over.
+	 * Per-source TTS voices (`runtime.config.xaiVoices`, xAI only): each source speaks in the voice
+	 * its id hashes to (`voiceForSource`), the same on every direction, connection and runtime.
 	 */
-	private readonly voices?: VoiceAssigner;
+	private readonly voices?: readonly string[];
+	/** Sources this proxy has already logged a voice for. */
+	private readonly voicedSources = new Set<string>();
 
 	/**
 	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
@@ -133,7 +133,7 @@ export class TranslatorProxy extends Emitter {
 		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
 		const voices = runtime.config.xaiVoices;
 		if (this.provider === 'xai' && voices !== undefined && voices.length > 0) {
-			this.voices = new VoiceAssigner(voices);
+			this.voices = voices;
 		}
 
 		this.ws.addEventListener('close', () => {
@@ -373,14 +373,14 @@ export class TranslatorProxy extends Emitter {
 		}
 	}
 
-	/** The voice a source's directions speak in, assigned on first sight and logged then; undefined when not rotating. */
+	/** The voice a source's directions speak in, logged the first time this proxy sees the source; undefined when not configured. */
 	private voiceFor(inputSourceName: string): string | undefined {
 		if (this.voices === undefined) {
 			return undefined;
 		}
-		const known = this.voices.has(inputSourceName);
-		const voice = this.voices.voiceFor(inputSourceName);
-		if (!known) {
+		const voice = voiceForSource(this.voices, inputSourceName);
+		if (!this.voicedSources.has(inputSourceName)) {
+			this.voicedSources.add(inputSourceName);
 			this.runtime.logger.info(`translation source ${inputSourceName} speaks in voice ${voice}`);
 		}
 		return voice;

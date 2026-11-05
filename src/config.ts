@@ -394,8 +394,8 @@ export const config = {
 		xaiUrl: process.env.XAI_TRANSLATION_URL || undefined,
 		// xAI TTS voice id; unset → xAI's default voice (Ara).
 		xaiVoice: process.env.XAI_TRANSLATION_VOICE || undefined,
-		// xAI TTS voices to spread a conference's speakers over, comma separated; set, each speaker
-		// keeps one of them and XAI_TRANSLATION_VOICE is not used. See src/translate/voices.ts.
+		// xAI TTS voices to spread speakers over, comma separated; set, each speaker gets the one its
+		// id hashes to and XAI_TRANSLATION_VOICE is not used. See src/translate/voices.ts.
 		xaiVoices: parseVoiceList(process.env.XAI_TRANSLATION_VOICES),
 		// Close a direction with no media for this long (ms) and reopen it on the next frame. Unset →
 		// per provider: never for OpenAI, 120 s for xAI, which bills idle wall-clock time. 0 disables.

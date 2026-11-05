@@ -108,8 +108,8 @@ export interface TranslatorConnectionOptions {
 	provider?: TranslationProviderId;
 	/**
 	 * TTS voice for this direction, on a provider whose session takes one (xAI); undefined → the
-	 * configured voice. The proxy assigns it per source (`VoiceAssigner`) so a speaker keeps one
-	 * voice across directions.
+	 * configured voice. The proxy derives it from the source id (`voiceForSource`) so a speaker
+	 * keeps one voice across directions and connections.
 	 */
 	voice?: string;
 	/**
