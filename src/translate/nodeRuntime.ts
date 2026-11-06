@@ -29,6 +29,7 @@ import { OpusDecoder } from '../OpusDecoder/OpusDecoder';
 import { OpusEncoder } from '../OpusEncoder/OpusEncoder';
 import { provideBase64 } from './base64';
 import { parseIntOr, parsePaceLeadMs } from './env';
+import { parseVoiceList } from './voices';
 import type { IWebSocket, OutboundWebSocketOptions, TranslationRuntime } from './runtime';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from './provider';
 
@@ -48,6 +49,8 @@ provideBase64(
 
 // Warn at most once per process about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
+let warnedVoiceList = false;
+let loggedVoiceList = false;
 let warnedPaceLead = false;
 
 export function createNodeTranslationRuntime(): TranslationRuntime {
@@ -65,6 +68,16 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 		);
 	}
 	const provider = resolveConfiguredTranslationProvider(config.translation.provider, (m) => logger.error(m));
+	const xaiVoices = parseVoiceList(process.env.XAI_TRANSLATION_VOICES, (m) => {
+		if (!warnedVoiceList) {
+			warnedVoiceList = true;
+			logger.warn(m);
+		}
+	});
+	if (xaiVoices !== undefined && !loggedVoiceList) {
+		loggedVoiceList = true;
+		logger.info(`XAI_TRANSLATION_VOICES: ${xaiVoices.length} voice(s): ${xaiVoices.join(', ')}`);
+	}
 	return {
 		logger,
 		config: {
@@ -74,6 +87,7 @@ export function createNodeTranslationRuntime(): TranslationRuntime {
 			xaiApiKey: config.translation.xaiApiKey,
 			xaiTranslationUrl: config.translation.xaiUrl,
 			xaiVoice: config.translation.xaiVoice,
+			xaiVoices,
 			idleCloseMs: config.translation.idleCloseMs,
 			emitTranscripts: config.translation.transcripts,
 			debug: config.debug,

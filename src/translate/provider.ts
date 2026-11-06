@@ -34,6 +34,7 @@
 
 import type { TranslationRuntimeConfig } from './runtime';
 import { isValidTargetLanguage } from '../textTranslate/TextTranslator';
+import { isVoiceRefused } from './voices';
 
 export type TranslationProviderId = 'openai' | 'xai';
 
@@ -77,8 +78,15 @@ export interface TranslationProviderSpec {
 	readonly serverTranscriptFinals: boolean;
 	/** Idle-close default when `TranslationRuntimeConfig.idleCloseMs` is unset; 0 disables. */
 	readonly defaultIdleCloseMs: number;
-	/** The `session.update` message for a target language. */
-	buildSessionUpdate(targetLanguage: string): Record<string, unknown>;
+	/** Whether the session takes a TTS voice, so per-source voices (./voices.ts) apply. */
+	readonly takesVoice: boolean;
+	/**
+	 * The `session.update` message for a target language. `voice` is the TTS voice this direction
+	 * should speak in (see ./voices.ts); undefined → the configured voice, unless the provider has
+	 * refused it, else no voice and the provider's default. Ignored by a provider whose session
+	 * takes no voice (OpenAI).
+	 */
+	buildSessionUpdate(targetLanguage: string, voice?: string): Record<string, unknown>;
 }
 
 // Supported target languages for the gpt-realtime-translate endpoint.
@@ -205,7 +213,7 @@ export function resolveTranslationProvider(
 
 export function getTranslationProvider(id: TranslationProviderId, config: TranslationRuntimeConfig): TranslationProviderSpec {
 	if (id === 'xai') {
-		const voice = config.xaiVoice;
+		const configuredVoice = config.xaiVoice;
 		return {
 			id,
 			name: 'xAI',
@@ -218,20 +226,25 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 			handshake: 'session',
 			serverTranscriptFinals: true,
 			defaultIdleCloseMs: XAI_DEFAULT_IDLE_CLOSE_MS,
-			buildSessionUpdate: (targetLanguage) => ({
-				type: 'session.update',
-				session: {
-					audio: {
-						// Source captions are not needed: the bridge gets the source transcript from /transcribe.
-						input: { transcription: false, format: { type: 'audio/pcm', rate: 24000 } },
-						output: {
-							language: targetLanguage,
-							format: { type: 'audio/pcm', rate: 24000 },
-							...(voice ? { voice } : {}),
+			takesVoice: true,
+			buildSessionUpdate: (targetLanguage, voice) => {
+				// The direction's own voice, else the configured one unless xAI has refused it, else none.
+				const chosen = voice ?? (configuredVoice !== undefined && !isVoiceRefused(configuredVoice) ? configuredVoice : undefined);
+				return {
+					type: 'session.update',
+					session: {
+						audio: {
+							// Source captions are not needed: the bridge gets the source transcript from /transcribe.
+							input: { transcription: false, format: { type: 'audio/pcm', rate: 24000 } },
+							output: {
+								language: targetLanguage,
+								format: { type: 'audio/pcm', rate: 24000 },
+								...(chosen ? { voice: chosen } : {}),
+							},
 						},
 					},
-				},
-			}),
+				};
+			},
 		};
 	}
 	return {
@@ -246,6 +259,7 @@ export function getTranslationProvider(id: TranslationProviderId, config: Transl
 		handshake: 'open',
 		serverTranscriptFinals: false,
 		defaultIdleCloseMs: 0,
+		takesVoice: false,
 		// Canonical session schema per openai/openai-cookbook examples/voice_solutions/realtime_translation_guide/:
 		// the target language under audio.output.language as a 2-letter ISO code. The endpoint rejects
 		// session.instructions, session.type, session.output_modalities, voice, etc. — the model is

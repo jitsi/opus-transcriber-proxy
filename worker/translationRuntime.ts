@@ -27,6 +27,7 @@ import { GIT_HASH } from '../src/buildInfo';
 import { registerWorkerOpusWasm } from './opusWasmSource';
 import { WorkerOutboundWebSocket } from './outboundWebSocket';
 import { parseIntOr, parseIntOrUndefined, parsePaceLeadMs } from '../src/translate/env';
+import { parseVoiceList } from '../src/translate/voices';
 import type { AppliedConfigOverrides } from './configOverride';
 import type { TranslateProvider } from './providerOverride';
 import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from '../src/translate/provider';
@@ -34,6 +35,7 @@ import { defaultTranslationProvider, resolveConfiguredTranslationProvider } from
 // Warn at most once per isolate about these settings (the runtime is built per connection).
 let warnedTalkTimeoutDisabled = false;
 let warnedBadIdleClose = false;
+let warnedVoiceList = false;
 let warnedPaceLead = false;
 
 /**
@@ -65,6 +67,12 @@ export function createWorkerTranslationRuntime(
 		warnedBadIdleClose = true;
 		console.warn(`TRANSLATION_IDLE_CLOSE_MS=${env.TRANSLATION_IDLE_CLOSE_MS} is not a number; using the provider default`);
 	}
+	const xaiVoices = parseVoiceList(env.XAI_TRANSLATION_VOICES, (m) => {
+		if (!warnedVoiceList) {
+			warnedVoiceList = true;
+			console.warn(m);
+		}
+	});
 	const paceLeadMs = parsePaceLeadMs(env.TRANSLATION_PACE_LEAD_MS, (message) => {
 		if (warnedPaceLead) return;
 		warnedPaceLead = true;
@@ -88,6 +96,7 @@ export function createWorkerTranslationRuntime(
 			xaiApiKey: env.XAI_TRANSLATION_API_KEY || env.XAI_API_KEY || '',
 			xaiTranslationUrl: env.XAI_TRANSLATION_URL || undefined,
 			xaiVoice: env.XAI_TRANSLATION_VOICE || undefined,
+			xaiVoices,
 			idleCloseMs,
 			emitTranscripts: env.TRANSLATE_TRANSCRIPTS !== 'false',
 			debug: debugEnabled,
