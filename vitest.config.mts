@@ -24,7 +24,7 @@ export default defineConfig({
 			// a test file would otherwise resolve '@cloudflare/containers' to two different copies and a
 			// vi.mock() in the test would not reach the worker's import. Pin both to the root copy,
 			// resolved through the package's own entry so an SDK layout change cannot break the alias;
-			// the two pins are kept at the same version (see CLAUDE.md). The alias exists only so
+			// the two pins are kept at the same version (see docs/claude/cloudflare.md). The alias exists only so
 			// mocking works: tests never exercise the SDK's real code.
 			'@cloudflare/containers': createRequire(import.meta.url).resolve('@cloudflare/containers'),
 		},

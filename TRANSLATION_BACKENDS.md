@@ -88,7 +88,7 @@ wss://host/translate?sessionId=...&provider=xai
 
 Unlike `/transcribe`, there is no priority list and no fallback: every direction of a connection uses one provider, and a provider the deployment has no key for would fail every direction at connect, so the upgrade is refused early. An unknown provider is the client's error (close 1008 on the container, HTTP 400 on the Worker); a known one with no key is the deployment's (1011 / 503), which the bridge may retry.
 
-In the Cloudflare deployment an operator can move new `/translate` sessions to the other provider without a release through the KV override (`translate:provider-override`); see the provider override section of [CLAUDE.md](CLAUDE.md).
+In the Cloudflare deployment an operator can move new `/translate` sessions to the other provider without a release through the KV override (`translate:provider-override`); see "Provider overrides" in [docs/claude/cloudflare.md](docs/claude/cloudflare.md).
 
 The same KV namespace can also override the `/translate` settings (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_URL`, `XAI_TRANSLATION_VOICE`, `XAI_TRANSLATION_VOICES`, `TRANSLATION_IDLE_CLOSE_MS`, `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`, `TRANSLATE_TRANSCRIPTS`, `TRANSLATION_USAGE_REPORT_INTERVAL_MS`), under `config:<NAME>`. The Worker serves `/translate` itself, so a change applies to the next connection. See the config override section of [CLAUDE.md](CLAUDE.md). Both kinds of override need the `CONFIG_KV` binding in the wrangler config of the Worker.
 
@@ -144,7 +144,7 @@ A provider that speaks the same `session.*` protocol needs only a spec:
 2. Add its language normalisation to `normalizeTargetLanguage` and its credentials to `isTranslationProviderAvailable`
 3. Add the config fields to `TranslationRuntimeConfig` (`src/translate/runtime.ts`) and resolve them in both runtimes: `src/translate/nodeRuntime.ts` (from `src/config.ts`) and `worker/translationRuntime.ts` (from the Worker env, with the variables declared in `worker/env.d.ts` and forwarded to the container in `worker/containerEnv.ts`)
 4. Add it to the `translate` override slot in `worker/providerOverride.ts`, with its credential check
-5. Add tests next to `test/unit/translateProvider.test.ts` and `test/unit/TranslatorConnectionXAI.test.ts`, and document it here, in README.md and in CLAUDE.md
+5. Add tests next to `test/unit/translateProvider.test.ts` and `test/unit/TranslatorConnectionXAI.test.ts`, and document it here, in README.md and in `docs/claude/translate.md`
 
 A provider with a different wire protocol needs a second code path in `TranslatorConnection`, which has not been needed yet. Probe the provider live first: the questions that decided this design (does output audio flow during input silence, are transcript deltas cumulative or append-only, when does the final land relative to the audio) can only be answered against the real endpoint.
 
