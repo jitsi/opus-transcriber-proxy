@@ -136,6 +136,8 @@ A `sources` event is not "ensure every requested direction is open". It opens th
 | `rejected` | the provider closed it within 30 s of creation | next media frame, paced 1-15 s |
 | `error` | a failure (`onError` fired first) | next media frame, paced 1-15 s |
 
+The bridge socket's own close is separate from these: `TranslatorProxy` closes every direction with reason `local` and logs one info line with the bridge's close code. In the Worker that close comes with an `error` event ("Network connection lost."), before or after the close event, because the JVB cuts the TCP connection right after sending its Close frame; that error is logged at debug and, when it came first, recorded in the close line, not reported as a failure; any other bridge error stays at error (see `onBridgeClosed` in `docs/claude/translate.md`).
+
 ## Adding a New Backend
 
 A provider that speaks the same `session.*` protocol needs only a spec:

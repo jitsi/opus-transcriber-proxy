@@ -115,6 +115,118 @@ describe('TranslatorProxy (sources model)', () => {
 		};
 	});
 
+	describe('bridge socket close', () => {
+		it('logs a clean close at info with its code and tears down once', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+			expect(MockedConnection.mock.instances).toHaveLength(1);
+
+			mockWebSocket.emit('close', { code: 1001, reason: 'closing', wasClean: true });
+
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=1001 reason="closing" wasClean=true',
+			);
+			expect(mockRuntime.logger.error).not.toHaveBeenCalled();
+			// Nothing a direction still holds in its pacer can reach anyone.
+			expect(MockedConnection.mock.instances[0].close).toHaveBeenCalledWith(false);
+			expect(closed).toHaveBeenCalledTimes(1);
+
+			mockWebSocket.emit('close', { code: 1001, reason: 'closing', wasClean: true });
+			expect(closed).toHaveBeenCalledTimes(1);
+			const closeLines = mockRuntime.logger.info.mock.calls.filter((c: unknown[]) => String(c[0]).includes('bridge WebSocket closed'));
+			expect(closeLines).toHaveLength(1);
+		});
+
+		it('reports an error followed by the close in the close line, not at error level (the Worker sequence)', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+
+			mockWebSocket.emit('error', { message: 'Uncaught Error: Network connection lost.' });
+			expect(closed).not.toHaveBeenCalled();
+			expect(mockRuntime.logger.error).not.toHaveBeenCalled();
+
+			mockWebSocket.emit('close', { code: 1006, reason: 'WebSocket disconnected without sending Close frame.', wasClean: false });
+
+			expect(closed).toHaveBeenCalledTimes(1);
+			expect(mockRuntime.logger.error).not.toHaveBeenCalled();
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=1006 reason="WebSocket disconnected without sending Close frame." wasClean=false after error: Uncaught Error: Network connection lost.',
+			);
+		});
+
+		it('logs an error arriving after the close at debug and does nothing else (the other Worker order)', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+
+			mockWebSocket.emit('close', { code: 1001, reason: 'closing', wasClean: true });
+			mockWebSocket.emit('error', { message: 'Uncaught Error: Network connection lost.' });
+
+			expect(closed).toHaveBeenCalledTimes(1);
+			expect(mockRuntime.logger.error).not.toHaveBeenCalled();
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=1001 reason="closing" wasClean=true',
+			);
+			expect(mockRuntime.logger.debug).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket error: Uncaught Error: Network connection lost.',
+			);
+		});
+
+		it('keeps any other bridge error at error level (a Node connection reset)', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+
+			mockWebSocket.emit('error', { message: 'read ECONNRESET' });
+			expect(mockRuntime.logger.error).toHaveBeenCalledWith('TranslatorProxy bridge WebSocket error: read ECONNRESET');
+
+			mockWebSocket.emit('close', { code: 1006, reason: '', wasClean: false });
+			expect(closed).toHaveBeenCalledTimes(1);
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=1006 reason="" wasClean=false after error: read ECONNRESET',
+			);
+		});
+
+		it('reports the close that the proxy asked for as its own, and still emits closed', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+			mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+
+			proxy.close();
+			expect(mockWebSocket.close).toHaveBeenCalled();
+			// The socket's close event follows, as the runtime delivers it.
+			mockWebSocket.emit('close', { code: 1005, reason: '', wasClean: true });
+
+			expect(closed).toHaveBeenCalledTimes(1);
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy closed the bridge WebSocket: code=1005 reason="" wasClean=true',
+			);
+		});
+
+		it('quotes a reason the peer chose, so it cannot split the log line', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			mockWebSocket.emit('close', { code: 1000, reason: 'x\nERROR fake line', wasClean: true });
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=1000 reason="x\\nERROR fake line" wasClean=true',
+			);
+		});
+
+		it('reports a close event with no detail without throwing', () => {
+			const proxy = new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+			mockWebSocket.emit('close', undefined);
+			expect(closed).toHaveBeenCalledTimes(1);
+			expect(mockRuntime.logger.info).toHaveBeenCalledWith(
+				'TranslatorProxy bridge WebSocket closed: code=none reason="" wasClean=unknown',
+			);
+		});
+	});
+
 	it('responds to ping with pong (preserving id)', () => {
 		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
 		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'ping', id: 7 }) });
