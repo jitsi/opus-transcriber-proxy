@@ -90,7 +90,7 @@ Unlike `/transcribe`, there is no priority list and no fallback: every direction
 
 In the Cloudflare deployment an operator can move new `/translate` sessions to the other provider without a release through the KV override (`translate:provider-override`); see "Provider overrides" in [docs/claude/cloudflare.md](docs/claude/cloudflare.md).
 
-The same KV namespace can also override the `/translate` settings (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_URL`, `XAI_TRANSLATION_VOICE`, `XAI_TRANSLATION_VOICES`, `TRANSLATION_IDLE_CLOSE_MS`, `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`, `TRANSLATE_TRANSCRIPTS`, `TRANSLATION_USAGE_REPORT_INTERVAL_MS`), under `config:<NAME>`. The Worker serves `/translate` itself, so a change applies to the next connection. See the config override section of [CLAUDE.md](CLAUDE.md). Both kinds of override need the `CONFIG_KV` binding in the wrangler config of the Worker.
+The same KV namespace can also override the `/translate` settings (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_URL`, `XAI_TRANSLATION_VOICE`, `XAI_TRANSLATION_VOICES`, `TRANSLATION_IDLE_CLOSE_MS`, `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`, `TRANSLATE_TRANSCRIPTS`, `TRANSLATION_USAGE_REPORT_INTERVAL_MS`), under `config:<NAME>`. The Worker serves `/translate` itself, so a change applies to the next connection. See "Config overrides" in [docs/claude/cloudflare.md](docs/claude/cloudflare.md). Both kinds of override need the `CONFIG_KV` binding in the wrangler config of the Worker.
 
 ### Provider Spec
 
