@@ -2,7 +2,7 @@
 
 The `/translate` endpoint translates speech to speech: a participant's Opus audio goes in, translated audio in the target language comes back, with the target-language transcript alongside. opus-transcriber-proxy can run it on either of two providers, chosen per deployment or per connection. This document is the `/translate` counterpart of [BACKENDS.md](BACKENDS.md), which covers the transcription backends behind `/transcribe`.
 
-Text translation of transcripts (the `translation-result` messages on `/transcribe`, `ENABLE_TEXT_TRANSLATION`) is a different feature with its own providers; see the text translation section of [CLAUDE.md](CLAUDE.md).
+Text translation of transcripts (the `translation-result` messages on `/transcribe`, `ENABLE_TEXT_TRANSLATION`) is a different feature with its own providers; see [docs/claude/text-translation.md](docs/claude/text-translation.md).
 
 ## Available Backends
 
