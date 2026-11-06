@@ -373,7 +373,7 @@ example, an override can turn off an endpoint. KV cannot turn on the debug dumps
 transcripts, an override of `DEEPGRAM_MIP_OPT_OUT` can only set it to `true`, and an override of an
 xAI URL must name an `x.ai` host, so it cannot send the xAI key to another host. Give write access only
 to the people who may deploy the Worker. See "Config overrides" in
-[CLAUDE.md](CLAUDE.md) for the details.
+[docs/claude/cloudflare.md](docs/claude/cloudflare.md) for the details.
 
 ## Development
 
