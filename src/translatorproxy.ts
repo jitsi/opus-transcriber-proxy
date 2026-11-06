@@ -49,6 +49,12 @@ export interface TranslatorProxyOptions {
 const REOPEN_BACKOFF_BASE_MS = 1000;
 const REOPEN_BACKOFF_MAX_MS = 15000;
 
+// workerd's error for a peer whose connection went away without a Close frame it could deliver: how the
+// JVB's normal close arrives in the Worker (see TranslatorProxy.onBridgeClosed). Not a failure. This matches
+// the English text of workerd's message ("Uncaught Error: Network connection lost."), pinned by the unit tests;
+// if workerd rewords it, the symptom is every healthy Worker session logging the bridge error at error again.
+const BENIGN_BRIDGE_ERROR_RE = /Network connection lost/;
+
 /**
  * Bridges a single export WebSocket (the bridge's dedicated translation socket)
  * to one or more provider translation sessions (OpenAI or xAI, see ./translate/provider.ts).
@@ -71,12 +77,6 @@ const REOPEN_BACKOFF_MAX_MS = 15000;
  * language to every incoming source (conference-wide) and tag returned audio as
  * `{inputSource}.{language}`.
  */
-/**
- * workerd's error for a peer whose connection went away without a Close frame it could deliver: how the
- * JVB's normal close arrives in the Worker (see TranslatorProxy.onBridgeClosed). Not a failure.
- */
-const BENIGN_BRIDGE_ERROR_RE = /Network connection lost/;
-
 export class TranslatorProxy extends Emitter {
 	private readonly ws: IWebSocket;
 	private options: TranslatorProxyOptions;
