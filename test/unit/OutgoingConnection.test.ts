@@ -837,6 +837,27 @@ describe('OutgoingConnection', () => {
 		});
 	});
 
+	describe('xAI STT endpoint name', () => {
+		it('passes xaiSttEndpoint to the backend on the first connect and on a reconnect', async () => {
+			// The two places that build the backend config are separate copies, so each needs a check:
+			// a missed copy would send a reconnected stream to the default endpoint without any error.
+			const firstBackend = new MockTranscriptionBackend({ autoConnect: true, wantsRawAudio: true });
+			const secondBackend = new MockTranscriptionBackend({ autoConnect: true });
+			const firstConnect = vi.spyOn(firstBackend, 'connect');
+			const secondConnect = vi.spyOn(secondBackend, 'connect');
+			vi.mocked(createBackend).mockReturnValueOnce(firstBackend).mockReturnValueOnce(secondBackend);
+
+			const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, { ...options, xaiSttEndpoint: 'eu' });
+			await vi.runAllTimersAsync();
+			expect(firstConnect).toHaveBeenCalledWith(expect.objectContaining({ xaiSttEndpoint: 'eu' }));
+
+			conn.updateInputFormat({ encoding: 'l16', sampleRate: 24000 }); // desired format changes: reconnect
+			await vi.runAllTimersAsync();
+			expect(secondConnect).toHaveBeenCalledWith(expect.objectContaining({ xaiSttEndpoint: 'eu' }));
+			conn.close();
+		});
+	});
+
 	describe('backend reconnection on format change', () => {
 		it('should reconnect the backend when the desired audio format changes', async () => {
 			// First backend passes raw opus through; second (after reconnect) wants PCM

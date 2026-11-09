@@ -54,7 +54,11 @@ export function buildContainerEnvVars(env: Env, configOverrides?: Readonly<Recor
 	const vars: Record<string, string> = {};
 	const source = env as unknown as Readonly<Record<string, string | undefined>>;
 	for (const [name, spec] of Object.entries(WORKER_VARS) as Array<[string, VarSpec]>) {
-		const value = source[name];
+		// A wrangler `vars` entry can be a JSON object, the natural way to write OPENAI_TURN_DETECTION or
+		// XAI_STT_ENDPOINTS (KV accepts an object for both too). Forwarded as it is, it would reach the
+		// container as "[object Object]". Any other value keeps the treatment it had.
+		const raw: unknown = source[name];
+		const value = raw !== null && typeof raw === 'object' ? JSON.stringify(raw) : (raw as string | undefined);
 		if (spec.container === 'if-set') {
 			if (value) vars[name] = value;
 		} else if (spec.container) {

@@ -94,6 +94,8 @@ export interface TranscriberProxyOptions {
 	xaiGranularFinals?: boolean;
 	xaiGranularStabilityMs?: number;
 	xaiGranularGuardWords?: number;
+	/** Per-connection xAI STT endpoint name from XAI_STT_ENDPOINTS (undefined = XAI_STT_URL). */
+	xaiSttEndpoint?: string;
 	/** Per-connection text-translation provider override (undefined = the configured default). */
 	textTranslationProvider?: TextTranslationProvider;
 }

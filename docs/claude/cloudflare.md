@@ -136,7 +136,7 @@ several backends means adding a slot and applying it where its requests are rout
 
 | Slot | KV key | Parameter | Targets | Where applied |
 |---|---|---|---|---|
-| `transcribe` | `transcribe:provider-override` | `provider` | `openai`, `deepgram`, `gemini`, `xai` | `/transcribe` upgrades, before the container is selected |
+| `transcribe` | `transcribe:provider-override` | `provider` (also pinned by `xai_stt_endpoint`) | `openai`, `deepgram`, `gemini`, `xai` | `/transcribe` upgrades, before the container is selected |
 | `translate` | `translate:provider-override` | `provider` | `openai`, `xai` | `/translate` upgrades, before `handleTranslate` |
 | `text-translation` | `text-translation:provider-override` | `text_translation_provider` | `openai`, `xai`, `gemini`, `google` | `/transcribe` upgrades, only when `ENABLE_TEXT_TRANSLATION=true` (the container ignores the parameter otherwise, so the read would be wasted) |
 
@@ -180,6 +180,12 @@ Three properties are load-bearing, for every slot:
   a provider they did not choose. Production's jicofo URL templates carry no provider parameters,
   so the overrides still cover ordinary traffic. The slots are independent: a `/transcribe` request
   naming `provider` pins only the transcription slot, and its text-translation slot is still read.
+  The `transcribe` slot is also pinned by `xai_stt_endpoint` (`ProviderOverrideSlot.pinParams`): that parameter only works with the xAI
+  provider, so moving such a request to another provider would end in a 1002 on every redial for the whole override window. Production's URL
+  templates that pin an endpoint carry no `provider` parameter, so this is the case that matters. Unlike an explicit `provider`, this check needs
+  the KV read, so that an operator who armed an override is told: the skip is logged at `warn` (`request pins the provider with
+  xai_stt_endpoint, so the override to <provider> is not applied to it`), and only when an override would have applied. The pinned connection
+  stays on xAI and fails there, where the backend errors are counted.
 - **Every rejection degrades to "no override"**, never to a broken session. The container closes
   the socket with 1002 when handed an invalid or unavailable transcription provider, and the Worker
   refuses a `/translate` upgrade with 400/503 for one, so an unparseable entry, an unknown provider,
@@ -187,6 +193,9 @@ Three properties are load-bearing, for every slot:
   default. They log (`error` for operator mistakes) and change nothing. (The container does not fail
   a session over an unusable text-translation provider; it falls back and logs. The checks guard
   that slot against an override that silently does nothing.)
+  A request that pins the provider with `xai_stt_endpoint` is left alone too (rule 1), so no override can turn it into a 1002 loop. What can
+  still close such a request is a change that the Worker does not make: a `PROVIDERS_PRIORITY` change, or an xAI key that is unset. The
+  container then closes it with 1002, at `error`, and does not move the audio to another provider.
 - **`until` is mandatory and checked here at read time**, not left to KV's own expiration, which the
   edge cache can lag. Capped at `MAX_OVERRIDE_WINDOW_MS` (24h), and a longer window is *refused*
   rather than clamped — the cap exists to force a re-arm, and silently shortening it would look
@@ -206,6 +215,12 @@ in parallel (`applyProviderOverrides`).
   actually get. To probe whether the primary has recovered, pin a check explicitly with
   `?provider=<primary>` (rule 1 makes that immune to the override).
 - A standalone container deployment with no Worker in front gets no override.
+- **A connection that names an xAI STT endpoint stays on xAI.** `xai_stt_endpoint` pins the
+  `transcribe` slot (rule 1), so the override does not reach conferences whose jicofo URL template
+  names an endpoint, for example to keep audio in a region. During an xAI outage those conferences
+  do not fail over to the override provider. They fail on xAI, where the backend errors are
+  counted, and the skipped override is logged at `warn` for as long as it is armed. The other
+  conferences still move. Tell the operator who arms the override that this is the cost of pinning.
 - **Only WebSocket upgrades on `/transcribe` and `/translate` are considered.** Health and status
   probes, `/agent` upgrades and plain GETs are forwarded untouched, so they cost no provider-override
   KV read and cannot log an override decision. (The config overrides below are read on every
@@ -255,7 +270,7 @@ Entry shape: `{"value": <value>, "until": <ms since epoch | -1>, "reason": "<opt
   one makes sense; `TRANSLATION_TALK_SILENCE_TIMEOUT_MS` above the 100 ms RTP gap threshold),
   `float`, an enum (`XAI_ENCODING`, `LOG_LEVEL`, ...), a JSON object (`OPENAI_TURN_DETECTION`), a
   `wss` URL on `x.ai` or a subdomain, on the default port, with no credentials, query or fragment
-  (`XAI_STT_URL`, `XAI_TRANSLATION_URL`: both carry the xAI key as a bearer and every conference's
+  (`XAI_STT_URL`, `XAI_TRANSLATION_URL`, and each URL in `XAI_STT_ENDPOINTS`: all carry the xAI key as a bearer and every conference's
   audio, and the value is logged and reported in `info`), a duration (`SLEEP_AFTER`: the SDK's `"7m"` format,
   from 4 minutes to 24 hours, because the SDK throws on any other form, the keepalive renews every
   180 s, and an idle container is billed), or a string. `null` unsets the variable, so its default
@@ -329,7 +344,7 @@ with. The Worker reports the overrides in effect for the current request as
 `/translate` info. The two differ when an entry changed after the container started.
 
 **Write access to `CONFIG_KV` is the same trust as editing the Worker variables.** An override can
-move xAI traffic to another `x.ai` host (`XAI_STT_URL`, `XAI_TRANSLATION_URL`), enable `/agent`,
+move xAI traffic to another `x.ai` host (`XAI_STT_URL`, `XAI_STT_ENDPOINTS`, `XAI_TRANSLATION_URL`), enable `/agent`,
 narrow the agent host allowlist, and turn off an endpoint. Give write access to the
 namespace only to the people who may deploy the Worker.
 
@@ -340,9 +355,9 @@ namespace only to the people who may deploy the Worker.
 - Provider selection (`PROVIDERS_PRIORITY`, `TRANSLATION_PROVIDER`,
   `TEXT_TRANSLATION_PROVIDERS_PRIORITY`): the provider overrides do it with a credential check and
   per-connection pinning; two mechanisms would conflict.
-- Endpoints other than the two xAI URLs (`TEXT_TRANSLATION_*_URL`, `AGENT_PROVISIONING_*`,
-  `TRANSLATION_USAGE_URL`, `OTLP_ENDPOINT`): they carry credentials or customer data. The two xAI
-  URLs carry them too, which is why their override may name only an `x.ai` host: it can move xAI
+- Endpoints other than the xAI URLs (`TEXT_TRANSLATION_*_URL`, `AGENT_PROVISIONING_*`,
+  `TRANSLATION_USAGE_URL`, `OTLP_ENDPOINT`): they carry credentials or customer data. The xAI
+  URLs (`XAI_STT_URL`, `XAI_TRANSLATION_URL` and each URL in `XAI_STT_ENDPOINTS`) carry them too, which is why their override may name only an `x.ai` host: it can move xAI
   traffic to another xAI endpoint (a region, a new path) but cannot send it anywhere else.
 - The security posture of `openai_custom` and `/agent` (`ENABLE_OPENAI_CUSTOM_PROVIDER`,
   `OPENAI_CUSTOM_REQUIRE_WSS`, `AGENT_REQUIRE_WSS`, `AGENT_ALLOW_PRIVATE_ENDPOINTS`,

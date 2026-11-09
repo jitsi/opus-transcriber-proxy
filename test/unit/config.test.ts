@@ -399,6 +399,111 @@ describe('config', () => {
 		});
 	});
 
+	describe('XAI_STT_ENDPOINTS', () => {
+		const EU = 'wss://eu-west-1.api.x.ai/v1/stt';
+
+		beforeEach(() => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {});
+		});
+
+		it('is empty when unset, with nothing dropped', async () => {
+			const { config } = await import('../../src/config');
+			expect(config.xai.sttEndpoints.size).toBe(0);
+			expect(config.xai.sttEndpointsDropped).toBe(0);
+		});
+
+		it('maps names to wss URLs', async () => {
+			vi.stubEnv('XAI_STT_ENDPOINTS', JSON.stringify({ eu: EU, 'us-east': 'wss://api.x.ai/v1/stt' }));
+			const { config } = await import('../../src/config');
+			expect(config.xai.sttEndpoints.get('eu')).toBe(EU);
+			expect(config.xai.sttEndpoints.get('us-east')).toBe('wss://api.x.ai/v1/stt');
+			expect(config.xai.sttEndpointsDropped).toBe(0);
+		});
+
+		it('an empty object is valid: nothing is loaded and nothing is dropped', async () => {
+			vi.stubEnv('XAI_STT_ENDPOINTS', '{}');
+			const { config } = await import('../../src/config');
+			expect(config.xai.sttEndpoints.size).toBe(0);
+			expect(config.xai.sttEndpointsDropped).toBe(0);
+		});
+
+		it('ignores a value that is not valid JSON or not an object, with a warning, and counts it as dropped', async () => {
+			const { parseEndpointMap, configWarnings } = await import('../../src/config');
+			const bad = parseEndpointMap('XAI_STT_ENDPOINTS', '{bad');
+			expect(bad).toMatchObject({ dropped: 1 });
+			expect(bad.map.size).toBe(0);
+			expect(parseEndpointMap('XAI_STT_ENDPOINTS', '[1]')).toMatchObject({ dropped: 1 });
+			// The warning carries the SyntaxError message, so an operator can find the typo.
+			expect(configWarnings.find((w) => w.startsWith('XAI_STT_ENDPOINTS is not valid JSON ('))).toMatch(/\(.*(JSON|position|token).*\)/i);
+			expect(configWarnings).toContain('XAI_STT_ENDPOINTS must be a JSON object that maps names to wss URLs; ignoring it');
+		});
+
+		it('drops an entry whose URL has credentials, a query or a fragment, and never prints it', async () => {
+			// These pass a scheme-only check. The URL is logged when a connection opens, and a query would
+			// corrupt the stream URL that XAIBackend builds from it.
+			const { parseEndpointMap, configWarnings } = await import('../../src/config');
+			const { map, dropped } = parseEndpointMap(
+				'XAI_STT_ENDPOINTS',
+				JSON.stringify({
+					ok: EU,
+					userinfo: 'wss://user:hunter2@api.x.ai/v1/stt',
+					query: 'wss://api.x.ai/v1/stt?token=hunter2',
+					fragment: 'wss://api.x.ai/v1/stt#hunter2',
+				}),
+			);
+			expect([...map.keys()]).toEqual(['ok']);
+			expect(dropped).toBe(3);
+			const warnings = configWarnings.join('\n');
+			for (const name of ['userinfo', 'query', 'fragment']) {
+				expect(warnings).toContain(`entry "${name}" is not a wss URL without credentials, query or fragment`);
+			}
+			expect(warnings).not.toContain('hunter2');
+		});
+
+		it('removes surrounding whitespace from a URL, so it does not reach the stream URL', async () => {
+			// `new URL` ignores the whitespace, so without the trim the raw value would be stored and the
+			// stream URL would become ".../stt%20?...", which xAI answers with 404.
+			const { parseEndpointMap } = await import('../../src/config');
+			const { map, dropped } = parseEndpointMap('XAI_STT_ENDPOINTS', JSON.stringify({ eu: `  ${EU} \n` }));
+			expect(map.get('eu')).toBe(EU);
+			expect(dropped).toBe(0);
+		});
+
+		it('never loads a name that is an inherited property name or __proto__', async () => {
+			const { parseEndpointMap } = await import('../../src/config');
+			// JSON.parse makes "__proto__" an own key. The name rule drops it, and a Map never reads the prototype.
+			const { map, dropped } = parseEndpointMap('XAI_STT_ENDPOINTS', '{"__proto__":"wss://api.x.ai/v1/stt","ok":"wss://api.x.ai/v1/stt"}');
+			expect([...map.keys()]).toEqual(['ok']);
+			expect(dropped).toBe(1);
+			expect(map.get('constructor')).toBeUndefined();
+			expect(map.get('__proto__')).toBeUndefined();
+		});
+
+		it('a name must start with a letter or digit and is not lower-cased: "-eu" and "EU" are dropped, with the reason', async () => {
+			const { parseEndpointMap, configWarnings } = await import('../../src/config');
+			const { map, dropped } = parseEndpointMap('XAI_STT_ENDPOINTS', JSON.stringify({ '-eu': EU, EU: EU, eu: EU }));
+			expect([...map.keys()]).toEqual(['eu']);
+			expect(dropped).toBe(2);
+			expect(configWarnings.join('\n')).toContain('that start with a letter or digit');
+		});
+
+		it('drops one bad entry and keeps the others, and never prints a URL in the warning', async () => {
+			const { parseEndpointMap, configWarnings } = await import('../../src/config');
+			const secretUrl = 'https://user:hunter2@api.x.ai/v1/stt';
+			const { map, dropped } = parseEndpointMap(
+				'XAI_STT_ENDPOINTS',
+				JSON.stringify({ eu: EU, http: secretUrl, 'Bad Name': EU, num: 5 }),
+			);
+			expect([...map.keys()]).toEqual(['eu']);
+			expect(dropped).toBe(3);
+			const warnings = configWarnings.join('\n');
+			expect(warnings).toContain('entry "http" is not a wss URL');
+			expect(warnings).toContain('"Bad Name"');
+			expect(warnings).toContain('entry "num" is not a wss URL');
+			expect(warnings).not.toContain('hunter2');
+		});
+	});
+
 	describe('Provider Configuration', () => {
 		it('should load OpenAI configuration', async () => {
 			vi.stubEnv('OPENAI_API_KEY', 'test-openai-key');

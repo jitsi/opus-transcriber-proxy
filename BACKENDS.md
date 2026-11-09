@@ -193,6 +193,7 @@ XAI_IDLE_FLUSH=finalize           # finalize: xAI's {"type":"finalize"} message 
 XAI_TURN_SOFT_MAX_WORDS=20        # Cap word budget: release the held segments at this many words once the last one ends a sentence (0 = off)
 XAI_TURN_HARD_MAX_WORDS=35        # Cap word ceiling: release at this many words regardless; a longer single segment is cut at its longest pause (0 = off)
 XAI_STT_URL=wss://api.x.ai/v1/stt  # Override STT endpoint (optional)
+XAI_STT_ENDPOINTS=                 # Named STT endpoints, a JSON object such as {"eu":"wss://eu-west-1.api.x.ai/v1/stt"} (optional). A connection with ?xai_stt_endpoint=<name> uses that entry instead of XAI_STT_URL. The parameter names a configured entry and never carries a URL. A name that is not configured, or a connection whose provider is not xAI, closes the socket with 1002 and never falls back to XAI_STT_URL or to another provider. A resumed session that names a different endpoint than it was created with also closes with 1002. An empty or malformed name gets HTTP 400. Names: 1 to 32 characters of a-z, 0-9 and hyphen, the first a letter or digit. The URL parameter is lower-cased and the names in the map are not, so an entry named EU is dropped. Each URL has no credentials, query or fragment. In wrangler vars, the value can be a string or a JSON object
 
 # Make xAI the default provider
 PROVIDERS_PRIORITY=xai,openai,deepgram,gemini

@@ -18,6 +18,38 @@ import { describe, it, expect } from 'vitest';
 import { extractSessionParameters, redactCredentials, validateTags } from '../../src/utils';
 
 describe('extractSessionParameters', () => {
+	describe('xai_stt_endpoint parameter', () => {
+		const parse = (query: string) => extractSessionParameters(`ws://localhost:8080/transcribe${query}`);
+
+		it('reads the endpoint name, lower-cased', () => {
+			expect(parse('?xai_stt_endpoint=EU').xaiSttEndpoint).toBe('eu');
+			expect(parse('?sessionId=s1&xai_stt_endpoint=eu-west-1').xaiSttEndpoint).toBe('eu-west-1');
+		});
+
+		it('is undefined when absent', () => {
+			expect(parse('?sessionId=test').xaiSttEndpoint).toBeUndefined();
+		});
+
+		it('rejects an empty value: it would otherwise mean the default endpoint, for example from an unresolved template variable', () => {
+			expect(() => parse('?xai_stt_endpoint=')).toThrow(/Invalid xai_stt_endpoint parameter/);
+			expect(() => parse('?sessionId=s1&xai_stt_endpoint')).toThrow(/Invalid xai_stt_endpoint parameter/);
+		});
+
+		it('rejects a malformed name, and never repeats the value in the error', () => {
+			for (const bad of ['-eu', 'e_u', 'eu%0aforged', 'eu%0a', 'a'.repeat(33), 'wss://evil.example', 'eu.x.ai', '__proto__']) {
+				expect(() => parse(`?xai_stt_endpoint=${bad}`), bad).toThrow(/Invalid xai_stt_endpoint parameter/);
+			}
+			let message = '';
+			try {
+				parse('?xai_stt_endpoint=eu%0aforged');
+			} catch (error) {
+				message = (error as Error).message;
+			}
+			expect(message).toContain('Invalid xai_stt_endpoint parameter');
+			expect(message).not.toContain('forged');
+		});
+	});
+
 	describe('tag parameter', () => {
 		it('should extract a single tag parameter', () => {
 			const url = 'ws://localhost:8080/transcribe?sessionId=test&tag=production';

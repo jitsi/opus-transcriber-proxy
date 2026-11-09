@@ -201,8 +201,57 @@ function jsonObject(): KvType {
 }
 
 /**
+ * The shape of an endpoint name: 1 to 32 characters, lower case letters, digits and hyphens, the
+ * first a letter or digit. Keep it the same as ENDPOINT_NAME_RE in src/utils.ts. This file has no
+ * imports on purpose, so that the variable table stays a plain data file. src/utils.ts reads
+ * `./config` lazily, and an import of it from here would pull dotenv and the loading of
+ * `process.env` into the Worker bundle. A test in configOverride.test.ts checks that the two agree
+ * on a sample of names.
+ */
+const ENDPOINT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * A JSON object, given as an object or as a string holding one, that maps endpoint names to URLs.
+ * Each URL must pass `inner`. The container lets a connection pick an entry by name, so a caller
+ * can only choose among the URLs that KV or the deployment configured. Written back as JSON.
+ *
+ * An error never repeats a value. The container side of the variable does not print a URL either,
+ * because a rejected URL can carry credentials and the error goes to the Worker log.
+ */
+function urlMap(inner: KvType): KvType {
+	const t: KvType = {
+		describe: `a JSON object that maps endpoint names (1 to 32 characters of a-z, 0-9 and hyphen, the first a letter or digit) to URLs, each URL being ${inner.describe}`,
+		normalize(v) {
+			let obj = v;
+			if (typeof v === 'string') {
+				try {
+					obj = JSON.parse(v);
+				} catch {
+					return { error: `expected ${t.describe}, got text that is not valid JSON` };
+				}
+			}
+			if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+				return { error: `expected ${t.describe}, got ${Array.isArray(obj) ? 'an array' : obj === null ? 'null' : typeof obj}` };
+			}
+			const out: Record<string, string> = {};
+			for (const [key, value] of Object.entries(obj)) {
+				if (!ENDPOINT_NAME_RE.test(key)) {
+					return { error: `the entry name ${JSON.stringify(key.slice(0, 40))} is not 1 to 32 characters of a-z, 0-9 and hyphen, the first a letter or digit` };
+				}
+				// Surrounding whitespace is removed, so it does not reach the stream URL.
+				const normalized = inner.normalize(typeof value === 'string' ? value.trim() : value);
+				if (typeof normalized !== 'string') return { error: `entry "${key}" is not ${inner.describe}` };
+				out[key] = normalized;
+			}
+			return JSON.stringify(out);
+		},
+	};
+	return t;
+}
+
+/**
  * An absolute URL with the given scheme on `domain` or one of its subdomains, on the default port.
- * The xAI URLs are the only URLs KV may override, and both carry the xAI key as a bearer and every
+ * The xAI URLs are the only URLs KV may override, and each carries the xAI key as a bearer and every
  * conference's audio: a URL on another host would hand both to it.
  */
 function url(protocol: string, domain: string): KvType {
@@ -330,6 +379,10 @@ export const WORKER_VARS = {
 	// as unconfigured (provider disabled); the knobs only when set, so the code defaults apply.
 	XAI_API_KEY: { container: def('') },
 	XAI_STT_URL: tunable(url('wss', 'x.ai')),
+	// Named endpoints, for example {"eu":"wss://eu-west-1.api.x.ai/v1/stt"}. A connection that
+	// carries `xai_stt_endpoint=<name>` uses that entry instead of XAI_STT_URL. Each URL carries the
+	// xAI key, so each must be on x.ai, like XAI_STT_URL.
+	XAI_STT_ENDPOINTS: tunable(urlMap(url('wss', 'x.ai'))),
 	XAI_LANGUAGE: tunable(str()),
 	XAI_DIARIZE: tunable(bool()),
 	XAI_INCLUDE_LANGUAGE: tunable(bool()),
