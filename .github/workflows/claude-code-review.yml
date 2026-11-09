@@ -85,7 +85,8 @@ jobs:
             - Security concerns
             - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            Use the repository's CLAUDE.md for guidance on style and conventions; its "Which document to read"
+            table names the area document under docs/claude/ for the code a PR touches, so read that one too. Be constructive and helpful in your feedback.
             Read the files with the Read/Grep/Glob tools and see the change with `gh pr diff` or `git diff`. Post the
             finished review by updating your tracking comment (mcp__github_comment__update_claude_comment); do not post
             additional comments.

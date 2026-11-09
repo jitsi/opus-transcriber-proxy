@@ -463,7 +463,9 @@ export const config = {
 		// unset → the xai provider is unavailable.
 		xaiApiKey: process.env.XAI_TRANSLATION_API_KEY || process.env.XAI_API_KEY || '',
 		xaiUrl: process.env.XAI_TRANSLATION_URL || undefined,
-		// xAI TTS voice id; unset → xAI's default voice (Ara).
+		// xAI TTS voice id; unset → xAI's default voice (Ara). XAI_TRANSLATION_VOICES (a list spread over
+		// speakers, read with its warnings in translate/nodeRuntime.ts) takes precedence; this voice is
+		// then used only once every voice of the list has been refused by xAI.
 		xaiVoice: process.env.XAI_TRANSLATION_VOICE || undefined,
 		// Close a direction with no media for this long (ms) and reopen it on the next frame. Unset →
 		// per provider: never for OpenAI, 120 s for xAI, which bills idle wall-clock time. 0 disables.

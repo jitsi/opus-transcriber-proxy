@@ -2,7 +2,7 @@
 
 The `/translate` endpoint translates speech to speech: a participant's Opus audio goes in, translated audio in the target language comes back, with the target-language transcript alongside. opus-transcriber-proxy can run it on either of two providers, chosen per deployment or per connection. This document is the `/translate` counterpart of [BACKENDS.md](BACKENDS.md), which covers the transcription backends behind `/transcribe`.
 
-Text translation of transcripts (the `translation-result` messages on `/transcribe`, `ENABLE_TEXT_TRANSLATION`) is a different feature with its own providers; see the text translation section of [CLAUDE.md](CLAUDE.md).
+Text translation of transcripts (the `translation-result` messages on `/transcribe`, `ENABLE_TEXT_TRANSLATION`) is a different feature with its own providers; see [docs/claude/text-translation.md](docs/claude/text-translation.md).
 
 ## Available Backends
 
@@ -43,7 +43,7 @@ Uses xAI's realtime translation (`grok-realtime-translation-fast`) over `wss://a
 - Any BCP-47 language tag as the target (no allowlist; Dutch, Cebuano and region tags such as `pt-BR` work)
 - Per-segment transcript finals from the server (`session.output_transcript.updated`)
 - Output audio in one burst per source phrase, nothing during silence
-- Optional TTS voice
+- Optional TTS voice, or a list of voices spread over a conference's speakers (one per speaker)
 - Faster connect than OpenAI (0.3 s against 0.5-1.5 s, measured)
 
 **Configuration:**
@@ -51,7 +51,8 @@ Uses xAI's realtime translation (`grok-realtime-translation-fast`) over `wss://a
 XAI_API_KEY=your-key-here
 XAI_TRANSLATION_API_KEY=          # Separate key for translation (optional; falls back to XAI_API_KEY)
 XAI_TRANSLATION_URL=wss://api.x.ai/v1/realtime/translations   # Override the endpoint (optional)
-XAI_TRANSLATION_VOICE=            # TTS voice (optional; unset = xAI's default)
+XAI_TRANSLATION_VOICE=            # TTS voice (optional; unset = xAI's default, Ara)
+XAI_TRANSLATION_VOICES=           # Voices to spread speakers over, comma separated (optional; set, XAI_TRANSLATION_VOICE applies only once xAI has refused every voice of the list)
 TRANSLATION_IDLE_CLOSE_MS=120000  # Close a direction with no media for this long (default for xAI; 0 disables)
 
 # Make xAI the default provider
@@ -66,6 +67,7 @@ The team behind the key needs xAI's realtime-translation entitlement. Without it
 - The server speaks first with `session.created`; the proxy answers `session.update` and holds audio in the pending-PCM buffer until `session.updated` (`handshake: 'session'`). A handshake that does not complete within 10 s fails the direction
 - Node authenticates with the `xai-insecure-api-key.<key>` subprotocol, the Worker with an `Authorization: Bearer` header. Under header auth xAI echoes no subprotocol, and a client that requested one fails the handshake, so none is requested. Under subprotocol auth xAI echoes the key subprotocol back: never log the negotiated protocol
 - `session.update` carries `audio.input.transcription: false` (the bridge gets the source transcript from `/transcribe`), PCM 24 kHz in both directions, and the voice when configured
+- **Voices.** xAI synthesises in one TTS voice per session; it does not follow the speaker's voice. All 28 of xAI's built-in voices were accepted by the translations endpoint when probed (2026-11-05): `ara` (the default), `eve`, `leo`, `rex`, `sal`, `carina`, `zagan`, `helix`, `orion`, `luna`, `iris`, `altair`, `zenith`, `perseus`, `helios`, `lux`, `kepler`, `rigel`, `cosmo`, `celeste`, `ursa`, `sirius`, `lumen`, `castor`, `naksh`, `atlas`, `aurora`, `liora`; xAI documents them for its TTS and voice-agent APIs and says every voice speaks every supported language. An unknown voice is answered with an `error` event (`invalid_value`, "Voice 'x' not found") after `session.update`, which fails the direction; the proxy learns the refused voice from that answer (`markVoiceRefused`, once per process, logged at error) rather than checking the list against a fixed set, since xAI adds voices. `XAI_TRANSLATION_VOICES` gives speakers different voices (`voiceForSource`, `src/translate/voices.ts`): a source speaks in the list entry its id hashes to (FNV-1a), the same on every direction and connection opened for that source id, across language changes, translation turned off and on, the idle close, provider drops and bridge reconnects, and in both runtimes, with no shared state. A participant who leaves and rejoins has a new source id and may get a new voice. The bridge spreads a conference's directions over connections as jicofo's `translation.mode` says (one connection per exported source by default, a source's languages split across connects past a cap, or one connection for everything), and a Worker's connections land in different isolates, so nothing stateful could rely on seeing a whole conference. The cost is collisions: two sources may hash to one voice while others go unused, with odds set by the length of the list (three speakers over 8 voices collide about one time in three, over 28 about one in ten), so configure every acceptable voice. The sources that hash to a refused voice take the next entry of the list from their reopen on, every other source keeps its voice; with the whole list refused the single `XAI_TRANSLATION_VOICE` applies, and with that refused too no voice is sent and xAI's default speaks. The refused set is per process (per isolate in the Worker) and lasts until that process restarts: each one learns a bad id from its own first answer, which fails every direction already opened with that voice (every language of every source that hashed to it), so until then a source can briefly speak in different voices on different connections, and after the variable is corrected the old id stays refused until restart, which costs nothing since it is no longer in the list. A voice change for a source is logged ("now speaks in voice"), and the fall-through to the configured or default voice at warn. Both runtimes warn once about a list entry that looks like two ids joined by the wrong separator, a repeated id, or a list that names nothing, and the container logs the effective list at start. The Worker forwards the variable to the container and it is KV-overridable
 - `session.output_transcript.updated` carries a segment's whole translation, equal to the concatenated deltas (measured). It is emitted as the final at once and the delta buffer reset; the silence-timer finalization publishes nothing on xAI, since it would print each segment twice. It lands about 1.5 s after the source phrase ends and 0.3-6 s before the segment's audio, because TTS queues behind a continuous speaker, so the subtitle leads the translated speech
 - Segments are short phrases endpointed at about 400 ms of silence (17-21 per 46 s of speech, measured), so captions are choppier than OpenAI's sentence-level ones
 - Output audio arrives as one burst per segment at 7-900x real time (5.3 s of audio in 0.42 s, measured on a live meeting); the `RtpTimestamper` lays it onto the same monotonic timeline as OpenAI's output, and the `MediaPacer` releases it to the bridge at real time, since a burst longer than a client's jitter buffer (about 4 s) would otherwise be flushed by the client and only partly heard
@@ -86,9 +88,9 @@ wss://host/translate?sessionId=...&provider=xai
 
 Unlike `/transcribe`, there is no priority list and no fallback: every direction of a connection uses one provider, and a provider the deployment has no key for would fail every direction at connect, so the upgrade is refused early. An unknown provider is the client's error (close 1008 on the container, HTTP 400 on the Worker); a known one with no key is the deployment's (1011 / 503), which the bridge may retry.
 
-In the Cloudflare deployment an operator can move new `/translate` sessions to the other provider without a release through the KV override (`translate:provider-override`); see the provider override section of [CLAUDE.md](CLAUDE.md).
+In the Cloudflare deployment an operator can move new `/translate` sessions to the other provider without a release through the KV override (`translate:provider-override`); see "Provider overrides" in [docs/claude/cloudflare.md](docs/claude/cloudflare.md).
 
-The same KV namespace can also override the `/translate` settings (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_URL`, `XAI_TRANSLATION_VOICE`, `TRANSLATION_IDLE_CLOSE_MS`, `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`, `TRANSLATE_TRANSCRIPTS`, `TRANSLATION_USAGE_REPORT_INTERVAL_MS`), under `config:<NAME>`. The Worker serves `/translate` itself, so a change applies to the next connection. See the config override section of [CLAUDE.md](CLAUDE.md). Both kinds of override need the `CONFIG_KV` binding in the wrangler config of the Worker.
+The same KV namespace can also override the `/translate` settings (`OPENAI_TRANSLATION_MODEL`, `XAI_TRANSLATION_URL`, `XAI_TRANSLATION_VOICE`, `XAI_TRANSLATION_VOICES`, `TRANSLATION_IDLE_CLOSE_MS`, `TRANSLATION_TALK_SILENCE_TIMEOUT_MS`, `TRANSLATE_TRANSCRIPTS`, `TRANSLATION_USAGE_REPORT_INTERVAL_MS`), under `config:<NAME>`. The Worker serves `/translate` itself, so a change applies to the next connection. See "Config overrides" in [docs/claude/cloudflare.md](docs/claude/cloudflare.md). Both kinds of override need the `CONFIG_KV` binding in the wrangler config of the Worker.
 
 ### Provider Spec
 
@@ -102,7 +104,8 @@ The same KV namespace can also override the `/translate` settings (`OPENAI_TRANS
 | `handshake` | `open`: configure on socket open, audio at once | `session`: wait for `session.created`, then `session.updated` |
 | `serverTranscriptFinals` | no: finals assembled at the talk-stop silence | yes: `session.output_transcript.updated` |
 | `defaultIdleCloseMs` | 0 | 120 000 |
-| `buildSessionUpdate(lang)` | `{ audio: { output: { language } } }` | input/output PCM 24 kHz, `transcription: false`, optional `voice` |
+| `takesVoice` | false | true |
+| `buildSessionUpdate(lang, voice?)` | `{ audio: { output: { language } } }`; `voice` ignored | input/output PCM 24 kHz, `transcription: false`, and `voice`: the direction's (per-source), else `XAI_TRANSLATION_VOICE` unless refused, else none |
 
 Language normalisation is per provider too: `normalizeTargetLanguage(input, provider)`.
 
@@ -133,6 +136,8 @@ A `sources` event is not "ensure every requested direction is open". It opens th
 | `rejected` | the provider closed it within 30 s of creation | next media frame, paced 1-15 s |
 | `error` | a failure (`onError` fired first) | next media frame, paced 1-15 s |
 
+The bridge socket's own close is separate from these: `TranslatorProxy` closes every direction with reason `local` and logs one info line with the bridge's close code. In the Worker that close comes with an `error` event ("Network connection lost."), before or after the close event, because the JVB cuts the TCP connection right after sending its Close frame; that error is logged at debug and, when it came first, recorded in the close line, not reported as a failure; any other bridge error stays at error (see `onBridgeClosed` in `docs/claude/translate.md`).
+
 ## Adding a New Backend
 
 A provider that speaks the same `session.*` protocol needs only a spec:
@@ -141,7 +146,7 @@ A provider that speaks the same `session.*` protocol needs only a spec:
 2. Add its language normalisation to `normalizeTargetLanguage` and its credentials to `isTranslationProviderAvailable`
 3. Add the config fields to `TranslationRuntimeConfig` (`src/translate/runtime.ts`) and resolve them in both runtimes: `src/translate/nodeRuntime.ts` (from `src/config.ts`) and `worker/translationRuntime.ts` (from the Worker env, with the variables declared in `worker/env.d.ts` and forwarded to the container in `worker/containerEnv.ts`)
 4. Add it to the `translate` override slot in `worker/providerOverride.ts`, with its credential check
-5. Add tests next to `test/unit/translateProvider.test.ts` and `test/unit/TranslatorConnectionXAI.test.ts`, and document it here, in README.md and in CLAUDE.md
+5. Add tests next to `test/unit/translateProvider.test.ts` and `test/unit/TranslatorConnectionXAI.test.ts`, and document it here, in README.md and in `docs/claude/translate.md`
 
 A provider with a different wire protocol needs a second code path in `TranslatorConnection`, which has not been needed yet. Probe the provider live first: the questions that decided this design (does output audio flow during input silence, are transcript deltas cumulative or append-only, when does the final land relative to the audio) can only be answered against the real endpoint.
 
@@ -203,4 +208,4 @@ The key's team lacks the realtime-translation entitlement; xAI has to enable it 
 Every 120 s for a muted participant is the idle close working as intended. Every ~5 min for a participant who is talking means the audio is not reaching xAI; check the decoder and the `session.updated` gate.
 
 ### Translated audio stutters, or the transcript is complete but the audio is not
-Both providers deliver audio faster than real time in bursts; the `RtpTimestamper` lays it onto a continuous timeline and the `MediaPacer` releases it to the bridge at real time plus `TRANSLATION_PACE_LEAD_MS` (200 ms). Before the pacer, an xAI phrase of more than about 4 s arrived at the client in a fraction of a second, overflowed its jitter buffer and was partly discarded, while the segment transcript arrived complete: a complete caption over clipped audio is the signature. Check the pacer is on (`TRANSLATION_PACE_LEAD_MS` not 0) and see the talk-boundary and `RtpTimestamper` notes in CLAUDE.md. Two warnings name the other ways translated audio is dropped on purpose: "more than 15 s behind real time" (a continuous speaker outran the translation; the oldest 3 s are skipped as a block, and the direction's total is logged at close) and "closing ... still queued: released N frame(s) at once, dropped M" (a direction closed with more than 3 s queued, the tail beyond what a jitter buffer holds). Every frame dropped with a listener present also counts in the OTel counter `otp_translation_paced_frames_dropped_total{reason}` on the container (`overflow` at the cap, `close` beyond the flush cap at close); the Worker's metric sink is a no-op, so there the two warnings and the total at close are the only record. The same "closing ... still queued" line at info with "(no listener)" is a direction closed because the bridge socket or the synthetic source went away: nothing was lost to a listener, and it is not counted.
+Both providers deliver audio faster than real time in bursts; the `RtpTimestamper` lays it onto a continuous timeline and the `MediaPacer` releases it to the bridge at real time plus `TRANSLATION_PACE_LEAD_MS` (200 ms). Before the pacer, an xAI phrase of more than about 4 s arrived at the client in a fraction of a second, overflowed its jitter buffer and was partly discarded, while the segment transcript arrived complete: a complete caption over clipped audio is the signature. Check the pacer is on (`TRANSLATION_PACE_LEAD_MS` not 0) and see the talk-boundary and `RtpTimestamper` notes in `docs/claude/translate.md`. Two warnings name the other ways translated audio is dropped on purpose: "more than 15 s behind real time" (a continuous speaker outran the translation; the oldest 3 s are skipped as a block, and the direction's total is logged at close) and "closing ... still queued: released N frame(s) at once, dropped M" (a direction closed with more than 3 s queued, the tail beyond what a jitter buffer holds). Every frame dropped with a listener present also counts in the OTel counter `otp_translation_paced_frames_dropped_total{reason}` on the container (`overflow` at the cap, `close` beyond the flush cap at close); the Worker's metric sink is a no-op, so there the two warnings and the total at close are the only record. The same "closing ... still queued" line at info with "(no listener)" is a direction closed because the bridge socket or the synthetic source went away: nothing was lost to a listener, and it is not counted.

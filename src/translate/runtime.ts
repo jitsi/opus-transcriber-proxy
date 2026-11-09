@@ -84,6 +84,12 @@ export interface TranslationRuntimeConfig {
 	/** xAI TTS voice id (`XAI_TRANSLATION_VOICE`); unset → xAI's default voice. */
 	xaiVoice?: string;
 	/**
+	 * xAI TTS voices to spread speakers over (`XAI_TRANSLATION_VOICES`, comma separated; see
+	 * ./voices.ts). Set, each source speaks in the voice its id hashes to, and `xaiVoice` is used only
+	 * once every voice of the list has been refused by xAI. Unset → every direction speaks in `xaiVoice`.
+	 */
+	xaiVoices?: readonly string[];
+	/**
 	 * Close a direction that has received no media for this long (ms), to be reopened on the
 	 * participant's next frame (`TRANSLATION_IDLE_CLOSE_MS`). Unset → the provider's default (0 for
 	 * OpenAI, XAI_DEFAULT_IDLE_CLOSE_MS for xAI, which bills idle wall-clock time); 0 disables.

@@ -16,7 +16,8 @@
 
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import type { TranslatorCloseReason } from './TranslatorConnection';
-import { defaultTranslationProvider, type TranslationProviderId } from './translate/provider';
+import { defaultTranslationProvider, getTranslationProvider, type TranslationProviderId } from './translate/provider';
+import { voiceForSource } from './translate/voices';
 import { Emitter } from './translate/emitter';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
 import { reportTranslationUsage } from './usage-reporter';
@@ -42,12 +43,21 @@ export interface TranslatorProxyOptions {
 	translationToken?: string;
 }
 
+/** Marker in `loggedVoices` for a source that fell through to the configured or default voice. */
+const NO_VOICE = '';
+
 // Per-direction reopen backoff after a connection failed (ms): base, doubling, capped. A direction whose
 // connection closed with an error, or was closed by the provider before it ever took audio, is not re-dialled
 // on the very next 20 ms frame, or an outage would turn into one connect attempt (a billable session start on
 // xAI) per frame per direction. A benign close (idle, or a provider-side close after audio flowed) is not paced.
 const REOPEN_BACKOFF_BASE_MS = 1000;
 const REOPEN_BACKOFF_MAX_MS = 15000;
+
+// workerd's error for a peer whose connection went away without a Close frame it could deliver: how the
+// JVB's normal close arrives in the Worker (see TranslatorProxy.onBridgeClosed). Not a failure. This matches
+// the English text of workerd's message ("Uncaught Error: Network connection lost."), pinned by the unit tests;
+// if workerd rewords it, the symptom is every healthy Worker session logging the bridge error at error again.
+const BENIGN_BRIDGE_ERROR_RE = /Network connection lost/;
 
 /**
  * Bridges a single export WebSocket (the bridge's dedicated translation socket)
@@ -108,11 +118,30 @@ export class TranslatorProxy extends Emitter {
 	private readonly provider: TranslationProviderId;
 
 	/**
+	 * Per-source TTS voices (`runtime.config.xaiVoices`, xAI only): each source speaks in the voice
+	 * its id hashes to (`voiceForSource`), the same on every direction, connection and runtime.
+	 */
+	private readonly voices?: readonly string[];
+	/**
+	 * The voice last logged for each source (`NO_VOICE` once every list entry was refused), so a change
+	 * is logged too. Pruned with the direction bookkeeping when a source leaves, so it is bounded by
+	 * the sources this connection carries at once.
+	 */
+	private readonly loggedVoices = new Map<string, string>();
+
+	/**
 	 * Monotonic mediajson wire-envelope sequence number for outbound `media`, scoped to this proxy
 	 * (i.e. this WebSocket, which carries every synthetic source). The per-source RTP sequence number
 	 * is the separate `chunk` field produced by each connection's RtpTimestamper.
 	 */
 	private envelopeSequenceNumber = 0;
+
+	/** Set by the bridge socket's close event; the teardown runs once. */
+	private bridgeClosed = false;
+	/** Set by {@link close}, so the close event it causes is reported as the proxy's own. */
+	private closedLocally = false;
+	/** The message of the bridge socket's `error` event, if one preceded its close (see onBridgeClosed). */
+	private bridgeError?: string;
 
 	constructor(ws: IWebSocket, options: TranslatorProxyOptions, runtime: TranslationRuntime) {
 		super();
@@ -122,16 +151,21 @@ export class TranslatorProxy extends Emitter {
 		this.connections = new Map<string, Map<string, TranslatorConnection>>();
 		this.devLanguages = new Set<string>(options.initialLanguages ?? []);
 		this.provider = options.provider ?? defaultTranslationProvider(runtime.config);
+		const voices = runtime.config.xaiVoices;
+		if (voices !== undefined && voices.length > 0 && getTranslationProvider(this.provider, runtime.config).takesVoice) {
+			this.voices = voices;
+		}
 
-		this.ws.addEventListener('close', () => {
-			// The bridge is gone: nothing a direction still holds in its pacer can reach anyone.
-			this.closeAllConnections(/* releaseQueuedAudio */ false);
-			this.emit('closed');
-		});
+		this.ws.addEventListener('close', (event) => this.onBridgeClosed(event));
 
 		this.ws.addEventListener('error', (event) => {
-			const message = (event as { message?: string; }).message ?? 'WebSocket error';
-			this.runtime.logger.error(`TranslatorProxy bridge WebSocket error: ${message}`);
+			// Both runtimes follow an error with a close event, so the message is kept for the close line,
+			// which has the code to say what it meant. workerd's "Network connection lost." is how a bridge
+			// that closed normally arrives in the Worker (see onBridgeClosed), so it is not an error of the
+			// session; any other error (a reset connection, a bad frame) still is.
+			this.bridgeError = (event as { message?: string }).message ?? 'WebSocket error';
+			const level = BENIGN_BRIDGE_ERROR_RE.test(this.bridgeError) ? 'debug' : 'error';
+			this.runtime.logger[level](`TranslatorProxy bridge WebSocket error: ${this.bridgeError}`);
 		});
 
 		this.ws.addEventListener('message', (event) => {
@@ -180,9 +214,36 @@ export class TranslatorProxy extends Emitter {
 	}
 
 	/**
+	 * The bridge socket closed: tear down every direction (nothing a direction still holds in its pacer
+	 * can reach anyone) and report it. One info line carries the close code and, when an `error` event
+	 * preceded the close, its message. The JVB sends its Close frame and cuts the TCP connection at once,
+	 * without waiting for the reply (`Exporter.stop`), so in the Worker every normal bridge close comes
+	 * with workerd's error "Network connection lost.", before or after the close event (measured both
+	 * ways), and reporting that as an error made each healthy session's end look like a failure. A peer
+	 * that completes the handshake gets a clean close with its code and no error in both runtimes. A
+	 * close that {@link close} asked for is reported as the proxy's own, so a rollout does not read as
+	 * a run of bridge disconnects. The reason is the peer's string and is quoted, so it cannot break
+	 * the line. Neither runtime dispatches a second close event; the guard only keeps a stray one from
+	 * emitting `closed` twice.
+	 */
+	private onBridgeClosed(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): void {
+		if (this.bridgeClosed) {
+			return;
+		}
+		this.bridgeClosed = true;
+		const who = this.closedLocally ? 'TranslatorProxy closed the bridge WebSocket' : 'TranslatorProxy bridge WebSocket closed';
+		const afterError = this.bridgeError !== undefined ? ` after error: ${this.bridgeError}` : '';
+		this.runtime.logger.info(
+			`${who}: code=${event?.code ?? 'none'} reason=${JSON.stringify(event?.reason ?? '')} wasClean=${event?.wasClean ?? 'unknown'}${afterError}`,
+		);
+		this.closeAllConnections(/* releaseQueuedAudio */ false);
+		this.emit('closed');
+	}
+
+	/**
 	 * Close every active translation connection — each flushes its final usage delta on close — and
-	 * clear the map. Idempotent (connection close is guarded). Shared by the bridge-ws close handler
-	 * (which passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
+	 * clear the map. Idempotent (connection close is guarded). Shared by {@link onBridgeClosed} (which
+	 * passes `releaseQueuedAudio` false: the socket the audio would go to has closed) and by
 	 * {@link close}.
 	 */
 	private closeAllConnections(releaseQueuedAudio = true): void {
@@ -204,6 +265,7 @@ export class TranslatorProxy extends Emitter {
 		// caller can drain the reporter right after). ws.close() then fires the bridge 'close' handler,
 		// which calls closeAllConnections() again on the now-empty map (harmless no-op) and emits 'closed'.
 		this.closeAllConnections();
+		this.closedLocally = true;
 		try {
 			this.ws.close();
 		} catch {
@@ -364,6 +426,36 @@ export class TranslatorProxy extends Emitter {
 	}
 
 	/**
+	 * The voice a source's directions speak in, logged the first time this proxy sees the source and
+	 * whenever it changes; undefined when not configured, or when the provider has refused every
+	 * voice of the list.
+	 */
+	private voiceFor(inputSourceName: string): string | undefined {
+		if (this.voices === undefined) {
+			return undefined;
+		}
+		const voice = voiceForSource(this.voices, inputSourceName);
+		const previous = this.loggedVoices.get(inputSourceName);
+		const current = voice ?? NO_VOICE;
+		if (previous !== current) {
+			this.loggedVoices.set(inputSourceName, current);
+			if (voice === undefined) {
+				this.runtime.logger.warn(
+					`translation source ${inputSourceName} speaks in the configured or default voice: every voice of ` +
+						`XAI_TRANSLATION_VOICES has been refused${previous === undefined ? '' : ` (was ${previous})`}`,
+				);
+			} else {
+				this.runtime.logger.info(
+					previous === undefined
+						? `translation source ${inputSourceName} speaks in voice ${voice}`
+						: `translation source ${inputSourceName} now speaks in voice ${voice} (was ${previous === NO_VOICE ? 'the configured or default voice' : previous})`,
+				);
+			}
+		}
+		return voice;
+	}
+
+	/**
 	 * Ensure a translation session exists for (inputSourceName, language). Returned audio
 	 * is emitted tagged with `outputTag` — the synthetic source name verbatim (from a
 	 * `sources` request, or `{inputSource}.{language}` for the dev path).
@@ -385,11 +477,13 @@ export class TranslatorProxy extends Emitter {
 		// Without a token there is nothing to attribute, so we pass no onUsageReport at all — that also
 		// means the connection starts no periodic reporting timer on the dev/replay `?lang=` path.
 		const token = this.options.translationToken;
+		const voice = this.voiceFor(inputSourceName);
 		const conn = new TranslatorConnection(
 			inputSourceName,
 			{
 				targetLanguage: language,
 				provider: this.provider,
+				...(voice !== undefined ? { voice } : {}),
 				...(token
 					? {
 							onUsageReport: (durationSeconds: number, targetLanguage: string) =>
@@ -516,6 +610,12 @@ export class TranslatorProxy extends Emitter {
 			if (gone(key.slice(0, dot), key.slice(dot + 1))) {
 				this.reopenBackoff.delete(key);
 				this.idleClosed.delete(key);
+			}
+		}
+		// A source with no direction left, desired or open, is gone; its logged voice goes with it.
+		for (const source of this.loggedVoices.keys()) {
+			if (!this.connections.has(source) && (this.desired.get(source)?.size ?? 0) === 0) {
+				this.loggedVoices.delete(source);
 			}
 		}
 	}
