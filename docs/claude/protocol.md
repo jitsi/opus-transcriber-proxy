@@ -21,6 +21,7 @@ _Split out of `CLAUDE.md`; see the task table there for which of these documents
 ```json
 {"event": "ping", "id": 123}
 ```
+The bridge sends `ping` only when its colibri2 connect enables it: every 10 s, with a 3 s pong timeout, unless the connect sets other values. When no matching `pong` arrives in time, or the socket fails or closes with a non-terminal code, the bridge reconnects. On each new socket it sends `sources` (when it has any) and `info` again. So the proxy needs no reconnect logic of its own: the bridge restores a dropped connection, and the new socket gets the full `sources` set. Only a terminal close code (for example 4002 from `/agent`) stops the reconnect.
 
 **Sources (text-translation target languages):**
 ```json
@@ -97,3 +98,15 @@ An informational/observability message describing the running build and effectiv
 Two optional fields report the KV config overrides (see **Config overrides** in `cloudflare.md`): `configOverrides` (top level, from the container) is the record of the overrides that container was started with, and `worker.configOverrides` is the set in effect for the current request. Each is a map of variable name to value, present only when non-empty.
 
 The **Worker-hosted `/translate`** builds its own `info` in `worker/translationRuntime.ts` (`runtime: "cloudflare-worker"`, `gitHash`, the connection's speech-to-speech `provider`, and a `worker` block with version/colo and, when the KV `translate` override chose this connection's provider, `providerOverride` — see **Provider overrides** in `cloudflare.md`). It **intentionally omits** the Node message's `providersAvailable`, `config.*` (providersPriority, forceCommitTimeout, sessionResumeEnabled, useDispatcher) and `instanceId` fields — those describe transcription/container concepts that don't exist on this path. It **does** include `sourceImageTag` when `SOURCE_IMAGE_TAG` is set (the translate-Worker deploy sets it to the codec's source image tag; see above). The message is informational only; the peer logs whatever it receives.
+
+## How the bridge forwards server messages
+
+The JVB parses each message from the proxy with jicoco-mediajson's `Event.parse`, which selects the class by the top-level `event` field from a fixed set (`media`, `ping`, `pong`, `start`, `stop`, `transcription-result`, `info`). A message with any other `event` fails to parse: the bridge logs a warning, counts a parse failure and drops it, so it never reaches a client. To add a new kind of transcript message, keep `event: "transcription-result"` and add a new inner `type`, as `translation-result` and `realtime-translation-result` do. A new `event` value needs a new subtype in jicoco-mediajson and a new branch in the bridge's `Exporter`, so avoid it.
+
+The bridge sends a `transcription-result` to the clients unchanged, inside an endpoint message from `transcriber` that it broadcasts to every endpoint (`to` is empty):
+```json
+{"colibriClass": "EndpointMessage", "from": "transcriber", "to": "", "msgPayload": {"event": "transcription-result", "type": "...", ...}}
+```
+`TranscriptionResultEvent` keeps every field that it does not model, so `type`, `language`, `message_id` and any new field pass through verbatim. jitsi-meet dispatches on `msgPayload.type`, not on `event`.
+
+Translated audio (`event: "media"` from `/translate`) is not an endpoint message. The bridge looks the `tag` up among the conference's synthetic audio sources (`findSyntheticAudioSource`), builds an Opus RTP packet on that source's SSRC and injects it. So the tag must be the synthetic source name from `sources.requests` verbatim (for example `523834112-a0.en`; see `buildTranslationMediaMessage` in `src/translate/messages.ts`). The bridge drops media for a tag that it does not know.

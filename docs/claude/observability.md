@@ -30,6 +30,17 @@ DUMP_WEBSOCKET_MESSAGES=true npm run dev
 node scripts/replay-dump.cjs /tmp/session123/media.jsonl "ws://localhost:8080/transcribe?sendBack=true"
 ```
 
+To test a change to `replay-dump.cjs` itself, no provider is needed. In the test, start a small `ws` server that plays the backend, then run the script against it with `spawnSync`. This is fast and deterministic for the CLI behaviour: the `--assert-min-*` thresholds and the drain and early-close timing.
+
+```js
+const { spawnSync } = require('child_process');
+const r = spawnSync('node', ['scripts/replay-dump.cjs', dumpFile, wsUrl, '0',
+  '--ci', '--drain=3', '--assert-min-finals=1'], { encoding: 'utf8' });
+// r.status is 0 on PASS. The INTEGRATION_RESULT line is on stdout for PASS, on stderr for FAIL.
+```
+
+To test the early close, let the fake server send a final N seconds after the replay ends. Check that the script closes at N, not at the end of `--drain`. Keep a helper that does `require('ws')` inside the repository and run it from the repository root: outside it, `ws` does not resolve (`Cannot find module 'ws'`) and the relative script path is wrong.
+
 ### Mix Audio from Session
 ```bash
 npm run mix-audio -- /tmp/session123/media.jsonl output.wav
@@ -86,7 +97,7 @@ Configured entirely from the environment:
 - `MONITOR_COUNT_INTERIMS` — interim transcripts also satisfy `MONITOR_MIN_FINALS`, not just finals (default true; see above)
 - `MONITOR_SAMPLE` — path to the JSONL Opus dump to replay (default `resources/sample.jsonl`)
 - `MONITOR_REPLAY_SPEED` — sample playback speed (default 1, real time; 0 = no delay/full speed — see above)
-- `MONITOR_HEADERS` — extra request headers as a JSON object (e.g. CF Access service-token headers)
+- `MONITOR_HEADERS` — extra request headers as a JSON object (e.g. CF Access service-token headers). The monitor passes them to `replay-dump.cjs` in the `REPLAY_HEADERS` environment variable, never as arguments, so credential values do not show in the process list. Use `REPLAY_HEADERS` the same way when you run `replay-dump.cjs` by hand.
 - `MONITOR_PORT` / `PORT` — port for the metrics HTTP server (default 8080)
 
 Note: the monitor process does not self-report its own build (`gitHash`) anywhere — `monitor.ts`
@@ -94,6 +105,14 @@ doesn't import `src/buildInfo.ts`, so it emits no log line, no `/metrics` label,
 message of its own. To identify which commit a running monitor sidecar is from, check the `server.js`
 bundle shipped in the same image (same build) instead. This is separate from the *target* server's
 `info` message, which the monitor does log per attempt — see above.
+
+#### Triage a monitor FAIL
+
+- **Connected, but no transcripts.** A FAIL line such as `connected=true; expected >= 1 final transcript(s), got 0` (or `final or interim` with `MONITOR_COUNT_INTERIMS`) is not a WebSocket failure. Find the container's `Session ended: sessionId=<id> ... finals=N` line for the same `sessionId`. If `finals` is above 0 and the line is later than the client close, the backend transcribed correctly and the provider finalized after the replay closed. That is a drain-timing failure, not an outage. Make sure that the target runs a build with the early close described above: the monitor logs the target's `info` (with `gitHash`) on every attempt.
+- **More attempts do not fix a timing failure.** Every attempt replays the same sample with the same timing, so the same race can fail all `MONITOR_ATTEMPTS`. Do not raise `MONITOR_ATTEMPTS` to fix a connected-but-no-transcripts failure. Check the drain and early-close logic instead.
+- **Two log lines that look related but are not.** A Durable Object storage reset (`Internal error in Durable Object storage caused object to be reset; reference = ...`) is a real, transient Cloudflare platform fault, not the drain-timing failure; `worker/startRetry.ts` retries it on a container start (see `cloudflare.md`). The `cpuTimeMs` field of the Worker invocation logs is on every invocation, `outcome=ok` included. It is not a CPU-limit error, so ignore it when you search the logs for "cpu".
+- **`WebSocket error:` names the connect failure.** Node's `ws` often reports a connect failure as an `AggregateError` with an empty `.message`. The reason for each address that DNS returned (IPv6, then IPv4) is only in `.errors[]`. `replay-dump.cjs` (`describeError`) prints `.code`, `.errno`, `.syscall`, `.address`, `.port`, `.cause` and `.errors[]`, so the FAIL line names the cause: `ECONNREFUSED`, `ENOTFOUND` (DNS), `ETIMEDOUT`. A bare `WebSocket error: ` with nothing after it comes from a replay build older than that change.
+  When every attempt fails in well under a second and no matching request appears in the Worker or Durable Object logs, the connection failed before the request left the monitor host. Look at the monitor's network and DNS, not at the proxy. Against a closed local port the line reads `WebSocket error: AggregateError: (no message) code=ECONNREFUSED errors=[connect ECONNREFUSED ::1:PORT ...; connect ECONNREFUSED 127.0.0.1:PORT ...]`.
 
 ## Environment variables
 

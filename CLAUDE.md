@@ -51,6 +51,8 @@ npm run dev        # Builds the WASM artifacts once, then runs tsx (src/server.t
 npm run typecheck  # Type check without emitting files
 ```
 
+`npm run typecheck` needs the WASM build: `src/OpusDecoder/wasmSourceNode.ts` imports `dist/opus-*.cjs`, so the check fails with "Cannot find module" until `npm run build:wasm` has run (for example in a fresh clone or a new worktree). Without Emscripten, run `npm run typecheck:worker` and `npm run check:worker-safe` instead. They cover the Worker and the translation core, not the Node server.
+
 ### Testing
 ```bash
 npm test                    # Run all tests with vitest
@@ -248,6 +250,10 @@ test/
 ├── helpers/                   # Test utilities
 └── unit/                      # Unit tests
 ```
+
+## Formatting
+
+The existing code is not prettier-clean. Do not run `npm run format` or `prettier --write` on existing files: the diff reflows lines that the change does not touch. Match the style of the surrounding code by hand. Run prettier only on a `.ts` file that you add (`.prettierrc`: tabs, width 140). The `format` glob (`**/*.{js,ts,css,json,md}`) does not include `.cjs` or `.mjs`, and some of those files are indented with spaces by hand (for example `scripts/replay-dump.cjs`, 4 spaces). Prettier still formats a `.cjs` file that you name explicitly and converts the whole file to tabs, so edit those files by hand.
 
 ## Copyright notice
 
