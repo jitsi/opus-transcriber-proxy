@@ -27,6 +27,9 @@ import type { ISessionParameters } from '../../src/utils';
 // State that the config mock reads. vi.hoisted makes it available to the hoisted vi.mock factory.
 const providerState = vi.hoisted(() => ({ defaultProvider: 'openai' as string | null }));
 
+// The /agent proxies server.ts created, with the handlers it registered on each.
+const agentSessions = vi.hoisted(() => [] as Array<{ handlers: Record<string, (...args: any[]) => void> }>);
+
 // ── Mock all server.ts dependencies before the module loads ──────────────────
 // Note: vi.mock() factories are hoisted – no references to outer variables allowed.
 
@@ -137,12 +140,32 @@ vi.mock('../../src/TranslatorConnection', () => ({
 	normalizeTargetLanguage: (lang: string) => lang,
 }));
 
+vi.mock('../../src/agentproxy', () => ({
+	CLOSE_CODE_ENDPOINT_UNREACHABLE: 4002,
+	// Plain class (not vi.fn) so mockReset doesn't clear the implementation.
+	AgentProxy: class {
+		handlers: Record<string, (...args: any[]) => void> = {};
+		constructor() {
+			agentSessions.push(this);
+		}
+		on(event: string, handler: (...args: any[]) => void) {
+			this.handlers[event] = handler;
+		}
+	},
+}));
+
+vi.mock('../../src/translate/nodeRuntime', () => ({
+	// Plain function (not vi.fn) so mockReset doesn't clear the implementation.
+	createNodeTranslationRuntime: () => ({}),
+}));
+
 // ── Import the function under test and mocked config ─────────────────────────
 
 import { handleWebSocketConnection } from '../../src/server';
 import { config as mockedConfig } from '../../src/config';
 import { TranscriberProxy } from '../../src/transcriberproxy';
 import http from 'http';
+import { WebSocketServer } from 'ws';
 import { sessionManager } from '../../src/SessionManager';
 import logger from '../../src/logger';
 
@@ -538,9 +561,24 @@ describe('handleWebSocketConnection – text_translation_provider parameter', ()
 describe('HTTP request handler', () => {
 	// server.ts calls http.createServer(handler) at import time; grab that handler.
 	const requestHandler = (http.createServer as any).mock.calls[0][0] as (req: any, res: any) => void;
+	// Likewise the 'upgrade' handler it registered and the WebSocketServer it built.
+	const mockServer = (http.createServer as any).mock.results[0].value;
+	const upgradeHandler = mockServer.on.mock.calls.find(([event]: [string]) => event === 'upgrade')[1] as (
+		req: any,
+		socket: any,
+		head: Buffer,
+	) => void;
+	const wss = (WebSocketServer as any).mock.results[0].value;
 
 	function makeMockRes() {
 		return { writeHead: vi.fn(), end: vi.fn() };
+	}
+
+	function statusCounts() {
+		const res = makeMockRes();
+		requestHandler({ url: '/status', method: 'GET', headers: {} }, res);
+
+		return JSON.parse(res.end.mock.calls[0][0]);
 	}
 
 	it('returns live session counts as JSON on GET /status', () => {
@@ -550,7 +588,47 @@ describe('HTTP request handler', () => {
 		requestHandler({ url: '/status', method: 'GET', headers: {} }, res);
 
 		expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-		expect(res.end).toHaveBeenCalledWith(JSON.stringify({ active: 2, detached: 1 }));
+		expect(res.end).toHaveBeenCalledWith(JSON.stringify({ active: 2, detached: 1, agents: 0 }));
+	});
+
+	it('counts an open /agent session on GET /status until it closes', async () => {
+		(sessionManager.getStats as any).mockReturnValue({ active: 0, detached: 0 });
+		const original = {
+			enableAgent: (mockedConfig as any).enableAgent,
+			agent: (mockedConfig as any).agent,
+			handleUpgrade: wss.handleUpgrade,
+		};
+		(mockedConfig as any).enableAgent = true;
+		(mockedConfig as any).agent = {
+			sharedSecret: '',
+			allowUnauthenticated: true,
+			allowEndpointParam: true,
+			requireWss: true,
+			allowedHosts: [],
+			allowPrivateEndpoints: true, // skips the endpoint guard's DNS lookup
+			paceLeadMs: 0,
+		};
+		wss.handleUpgrade = (_req: unknown, _socket: unknown, _head: unknown, done: (ws: unknown) => void) => done(makeMockWs());
+		agentSessions.length = 0;
+
+		try {
+			upgradeHandler(
+				{ url: '/agent?sessionId=s1&endpoint=wss://agent.example/ws', method: 'GET', headers: { host: 'localhost' } },
+				{ write: vi.fn(), destroy: vi.fn() },
+				Buffer.alloc(0),
+			);
+			await vi.waitFor(() => expect(agentSessions).toHaveLength(1));
+			expect(statusCounts()).toEqual({ active: 0, detached: 0, agents: 1 });
+
+			agentSessions[0].handlers.closed();
+			expect(statusCounts()).toEqual({ active: 0, detached: 0, agents: 0 });
+		} finally {
+			// Idempotent: leaves no session counted for later tests if an assertion above failed.
+			agentSessions.forEach((session) => session.handlers.closed?.());
+			(mockedConfig as any).enableAgent = original.enableAgent;
+			(mockedConfig as any).agent = original.agent;
+			wss.handleUpgrade = original.handleUpgrade;
+		}
 	});
 
 	it('still returns OK on GET /health', () => {

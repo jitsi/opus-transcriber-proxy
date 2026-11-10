@@ -221,6 +221,20 @@ describe('AgentProxy', () => {
 		expect(closed).toHaveBeenCalledTimes(1);
 	});
 
+	it('the bridge leg closing on its own closes the agent leg and reports closed once', async () => {
+		const proxy = createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		const closed = vi.fn();
+		proxy.on('closed', closed);
+
+		bridgeWs.fire('close', {});
+
+		expect(endpointWs.closed).toBe(true);
+		expect(closed).toHaveBeenCalledTimes(1);
+	});
+
 	it('reports a session over once: an end after a failed dial, or a second end, changes nothing', async () => {
 		const proxy = createProxy();
 		const lifecycle: any[] = [];

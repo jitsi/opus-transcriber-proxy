@@ -72,9 +72,10 @@ const server = http.createServer((req, res) => {
 	// to decide whether to keep the container alive or let it sleep. WebSocket frames
 	// bypass the Container class so its activity timer doesn't see them; this lets the
 	// DO renew the timer only while a call is actually in progress.
+	// `agents` counts /agent sessions, which the session manager does not track.
 	if (req.url === '/status') {
 		res.writeHead(200, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify(sessionManager.getStats()));
+		res.end(JSON.stringify({ ...sessionManager.getStats(), agents: activeAgentSessions.size }));
 		return;
 	}
 	res.writeHead(426, { 'Content-Type': 'text/plain' });
@@ -89,7 +90,7 @@ const wss = new WebSocketServer({ noServer: true });
 // direction flushes its final usage delta into the reporter buffer before we drain it.
 const activeTranslateSessions = new Set<TranslatorProxy>();
 
-// Active /agent proxies, tracked for graceful shutdown like the translation proxies.
+// Active /agent proxies: closed on SIGTERM like the translation proxies, and counted by /status.
 const activeAgentSessions = new Set<AgentProxy>();
 
 /** Largest message accepted from a customer agent (ws defaults to 100 MiB); ~20 s of base64 PCM16 at 24 kHz. */

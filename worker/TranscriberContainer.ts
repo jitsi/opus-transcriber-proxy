@@ -227,9 +227,9 @@ export class TranscriberContainer extends Container<Env> {
 		try {
 			const res = await this.containerFetch('http://container/status', this.defaultPort);
 			if (res.ok) {
-				const { active = 0, detached = 0 } = (await res.json()) as { active?: number; detached?: number };
-				if (active + detached > 0) {
-					console.log(`Activity timeout but ${active} active + ${detached} detached session(s) — keeping container alive`);
+				const { active = 0, detached = 0, agents = 0 } = (await res.json()) as { active?: number; detached?: number; agents?: number };
+				if (active + detached + agents > 0) {
+					console.log(`Activity timeout but ${active} active + ${detached} detached + ${agents} agent session(s) — keeping container alive`);
 					// Renew explicitly rather than relying on containerFetch's renew-on-proxy
 					// side effect: if a future @cloudflare/containers version stops renewing on
 					// probe requests, the keep-alive would silently break. This makes the intent
