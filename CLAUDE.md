@@ -51,7 +51,9 @@ npm run dev        # Builds the WASM artifacts once, then runs tsx (src/server.t
 npm run typecheck  # Type check without emitting files
 ```
 
-`npm run typecheck` needs the WASM build: `src/OpusDecoder/wasmSourceNode.ts` imports `dist/opus-*.cjs`, so the check fails with "Cannot find module" until `npm run build:wasm` has run (for example in a fresh clone or a new worktree). Without Emscripten, run `npm run typecheck:worker` and `npm run check:worker-safe` instead. They cover the Worker and the translation core, not the Node server.
+`npm run typecheck` needs the WASM build: `src/OpusDecoder/wasmSourceNode.ts` imports `dist/opus-*.cjs`, so the check fails with "Cannot find module" until `npm run build:wasm` has run (for example in a fresh clone or a new worktree). Without Emscripten, run `npm run typecheck:worker` and `npm run check:worker-safe` instead. `typecheck:worker` type-checks the Worker and the code it imports, including the translation core. `check:worker-safe` is an import lint over the translation core files, not a type check.
+
+CI runs only `check:worker-safe` and `typecheck:worker`. Neither vitest nor esbuild type-checks, so nothing in CI type-checks Node-only code such as `server.ts`, `transcriberproxy.ts` or `src/backends/*`. Before you push a change to Node-only code, build WASM and run the full `npm run typecheck`.
 
 ### Testing
 ```bash
@@ -135,7 +137,7 @@ Load only the documents the task touches. Each one is self-contained for its are
 | Text translation of transcripts: `src/textTranslate/`, `sources` requests, prompts | `docs/claude/text-translation.md` |
 | Anything under `worker/`, `wrangler.jsonc`, deployment, KV provider or config overrides, container start failures | `docs/claude/cloudflare.md`; the operator guides `CLOUDFLARE_DEPLOYMENT.md`, `CONTAINER_ROUTING.md`, `AUTOSCALING.md` |
 | Metrics, logging, OTLP, stale markers, the monitor sidecar, message dumps, replaying a session | `docs/claude/observability.md`; the user-facing `OBSERVABILITY.md`, `WEBSOCKET_DUMP.md`, `AUDIO_MIXING.md` |
-| Wire messages on the bridge socket (`media`, `sources`, `transcription-result`, `translation-result`, `info`, pong) | `docs/claude/protocol.md` |
+| Wire messages on the bridge socket (`media`, `sources`, `transcription-result`, `translation-result`, `info`, pong), and how the JVB parses and forwards them (ping and reconnect, dropped events) | `docs/claude/protocol.md` |
 
 Environment variables are listed per area in those documents; README.md has the complete reference.
 
@@ -253,7 +255,7 @@ test/
 
 ## Formatting
 
-The existing code is not prettier-clean. Do not run `npm run format` or `prettier --write` on existing files: the diff reflows lines that the change does not touch. Match the style of the surrounding code by hand. Run prettier only on a `.ts` file that you add (`.prettierrc`: tabs, width 140). The `format` glob (`**/*.{js,ts,css,json,md}`) does not include `.cjs` or `.mjs`, and some of those files are indented with spaces by hand (for example `scripts/replay-dump.cjs`, 4 spaces). Prettier still formats a `.cjs` file that you name explicitly and converts the whole file to tabs, so edit those files by hand.
+The existing code is not prettier-clean. Do not run `npm run format` or `prettier --write` on existing files: the diff reflows lines that the change does not touch. Match the style of the surrounding code by hand. Run prettier only on a `.ts` file that you add (`.prettierrc`: tabs, `printWidth` 140). The `format` glob (`**/*.{js,ts,css,json,md}`) does not include `.cjs` or `.mjs`. `scripts/replay-dump.cjs` is indented with 4 spaces by hand. Prettier still formats a `.cjs` file that you name explicitly and converts the whole file to tabs, so edit that file by hand. For any other new file (for example a `.md`, `.json` or `.mjs` file), match the nearest sibling by hand.
 
 ## Copyright notice
 

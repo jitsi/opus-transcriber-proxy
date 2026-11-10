@@ -21,7 +21,7 @@ _Split out of `CLAUDE.md`; see the task table there for which of these documents
 ```json
 {"event": "ping", "id": 123}
 ```
-The bridge sends `ping` only when its colibri2 connect enables it: every 10 s, with a 3 s pong timeout, unless the connect sets other values. When no matching `pong` arrives in time, or the socket fails or closes with a non-terminal code, the bridge reconnects. On each new socket it sends `sources` (when it has any) and `info` again. So the proxy needs no reconnect logic of its own: the bridge restores a dropped connection, and the new socket gets the full `sources` set. Only a terminal close code (for example 4002 from `/agent`) stops the reconnect.
+The bridge sends it on a timer. See "Ping and reconnect" below.
 
 **Sources (text-translation target languages):**
 ```json
@@ -38,6 +38,7 @@ carries `<source>.<language>` synthetic source names instead.)
 **Transcription result:**
 ```json
 {
+  "event": "transcription-result",
   "type": "transcription-result",
   "is_interim": false,
   "transcript": [{"text": "hello", "confidence": 0.98}],
@@ -61,8 +62,8 @@ carries `<source>.<language>` synthetic source names instead.)
 ```
 The inner `type` is `translation-result` — jigasi's long-standing text-translation type, which
 jitsi-meet already renders in the CC panel and as on-stage subtitles. The outer `event` stays
-`transcription-result` so the JVB (which dispatches on `event`) forwards the payload verbatim, so no
-JVB or client protocol change is needed. Two shape details are load-bearing:
+`transcription-result`, so no JVB or client protocol change is needed (see "How the bridge forwards
+server messages" below). Two shape details are load-bearing:
 - `text` is a **plain string**, not the `transcript: [{text}]` array used by `transcription-result` —
   that is what the client reads for this type.
 - `message_id` is the **transcription's** id, so the CC panel pairs the two and shows the translation
@@ -101,7 +102,9 @@ The **Worker-hosted `/translate`** builds its own `info` in `worker/translationR
 
 ## How the bridge forwards server messages
 
-The JVB parses each message from the proxy with jicoco-mediajson's `Event.parse`, which selects the class by the top-level `event` field from a fixed set (`media`, `ping`, `pong`, `start`, `stop`, `transcription-result`, `info`). A message with any other `event` fails to parse: the bridge logs a warning, counts a parse failure and drops it, so it never reaches a client. To add a new kind of transcript message, keep `event: "transcription-result"` and add a new inner `type`, as `translation-result` and `realtime-translation-result` do. A new `event` value needs a new subtype in jicoco-mediajson and a new branch in the bridge's `Exporter`, so avoid it.
+This section describes the JVB `Exporter` (`org.jitsi.videobridge.export`) and jicoco-mediajson as read from their sources. The bridge pins a jicoco version, so check `MediaJson.kt` there before you rely on the details below.
+
+The JVB parses each message from the proxy with jicoco-mediajson's `Event.parse`. `Event.parse` selects the class by the top-level `event` field. The fixed set is the `@JsonSubTypes` list in `MediaJson.kt`: `media`, `ping`, `pong`, `start`, `stop`, `transcription-result` and `info`. A message with any other `event` fails to parse: the bridge logs a warning, counts a parse failure and drops it, so it never reaches a client. To add a new kind of transcript message, keep `event: "transcription-result"` and add a new inner `type`, as `translation-result` and `realtime-translation-result` do. A new `event` value needs a new subtype in jicoco-mediajson and a new branch in the bridge's `Exporter`, so avoid it.
 
 The bridge sends a `transcription-result` to the clients unchanged, inside an endpoint message from `transcriber` that it broadcasts to every endpoint (`to` is empty):
 ```json
@@ -109,4 +112,13 @@ The bridge sends a `transcription-result` to the clients unchanged, inside an en
 ```
 `TranscriptionResultEvent` keeps every field that it does not model, so `type`, `language`, `message_id` and any new field pass through verbatim. jitsi-meet dispatches on `msgPayload.type`, not on `event`.
 
-Translated audio (`event: "media"` from `/translate`) is not an endpoint message. The bridge looks the `tag` up among the conference's synthetic audio sources (`findSyntheticAudioSource`), builds an Opus RTP packet on that source's SSRC and injects it. So the tag must be the synthetic source name from `sources.requests` verbatim (for example `523834112-a0.en`; see `buildTranslationMediaMessage` in `src/translate/messages.ts`). The bridge drops media for a tag that it does not know.
+Audio from `/translate` and `/agent` (`event: "media"`) is not an endpoint message. The bridge looks the `tag` up among the conference's synthetic audio sources (`findSyntheticAudioSource`), builds an Opus RTP packet on that source's SSRC and injects it. So the tag must be the synthetic source name from `sources.requests` verbatim (for example `523834112-a0.en`; see `buildTranslationMediaMessage` in `src/translate/messages.ts`). The bridge drops media for a tag that it does not know. It also drops media when the conference has no negotiated Opus payload type. The talk-boundary `start` and `stop` events use the same tag lookup, and the bridge drops them for an unknown tag.
+
+### Ping and reconnect
+
+The bridge sends `ping` only when its colibri2 connect enables it: every 10 s, with a 3 s pong timeout, unless the connect sets other values. When no matching `pong` arrives in time, or the socket fails or closes, the bridge reconnects. On each new socket it sends `info` again. It sends `sources` again only when its exports or requests are not empty: the bridge does not re-send an empty set.
+
+The proxy never starts a reconnect. The bridge re-opens the socket, and session resume (see `transcription.md`) restores the state of the session. The reconnect stops for good in these cases:
+- The peer closes with a terminal close code (4001 or 4002; `agent.md` describes when `/agent` sends 4002).
+- The attempt cap is reached. `videobridge.exporter.max-reconnect-attempts` has no value by default. `videobridge.exporter.agent-max-reconnect-attempts` is 10 for agent connects. Both count consecutive failed attempts.
+- The connect expires, or the bridge shuts it down.
