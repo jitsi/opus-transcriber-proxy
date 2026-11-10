@@ -282,9 +282,17 @@ describe('TranscriberContainer.onActivityExpired', () => {
 		expect(baseExpired).not.toHaveBeenCalled();
 	});
 
+	it('keeps the container alive for an /agent session alone', async () => {
+		const { dobj } = fixture();
+		baseContainerFetch.mockResolvedValue(status({ active: 0, detached: 0, agents: 1 }));
+		await dobj.onActivityExpired();
+		expect(baseRenew).toHaveBeenCalledTimes(1);
+		expect(baseExpired).not.toHaveBeenCalled();
+	});
+
 	it('lets the container sleep when no sessions remain', async () => {
 		const { dobj } = fixture();
-		baseContainerFetch.mockResolvedValue(status({ active: 0, detached: 0 }));
+		baseContainerFetch.mockResolvedValue(status({ active: 0, detached: 0, agents: 0 }));
 		await dobj.onActivityExpired();
 		expect(baseRenew).not.toHaveBeenCalled();
 		expect(baseExpired).toHaveBeenCalledTimes(1);

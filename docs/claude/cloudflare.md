@@ -35,8 +35,10 @@ Five things to know about the Worker's use of the SDK:
   container crash from the bridge and from our logs; and incoming frames would be billed as DO
   requests, though at 20 messages per billable request that is a minor cost. The consequence is that
   the SDK's activity timer never sees audio, so keeping a live call's container awake is done by the
-  Worker's renewal loop and the `/status` probe in `onActivityExpired`. Do not remove those on the
-  assumption that the SDK renews on WebSocket traffic.
+  Worker's renewal loop and the `/status` probe in `onActivityExpired`. The probe counts the
+  container's transcription sessions (`active`, `detached`) and its `/agent` sessions (`agents`),
+  which the session manager does not track. Do not remove those on the assumption that the SDK
+  renews on WebSocket traffic.
 - **`ContainerProxy` is exported and `enable_ctx_exports` is on** although outbound interception is
   not used: since 0.2 the SDK's Container constructor looks up `ctx.exports.ContainerProxy` whenever
   the Durable Object is rebuilt around an already-running container, and logs an unhandled rejection
