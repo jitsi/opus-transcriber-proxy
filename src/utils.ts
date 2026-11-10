@@ -179,11 +179,11 @@ export function getTurnDetectionConfig() {
 	return config.openai.turnDetection;
 }
 
-const CREDENTIAL_KEY = /authorization|token|secret|api-?key|cookie/i;
+const CREDENTIAL_KEY = /authorization|token|secret|api-?key|cookie|assertion|jwt|password/i;
 
 /**
  * A copy of a record (request headers, session parameters) with credential values masked, for debug logging: bearer
- * tokens, shared secrets, API keys, cookies.
+ * tokens, shared secrets, API keys, cookies, signed assertions such as Cloudflare Access's JWT, passwords.
  */
 export function redactCredentials(record: Record<string, unknown>): Record<string, unknown> {
 	return Object.fromEntries(
