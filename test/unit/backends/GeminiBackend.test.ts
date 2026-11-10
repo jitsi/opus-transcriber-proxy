@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GeminiBackend } from '../../../src/backends/GeminiBackend';
+import logger from '../../../src/logger';
 import { mockGlobalWebSocket, MockWebSocket, type MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -89,6 +90,20 @@ describe('GeminiBackend', () => {
 
 			expect(mockWsManager.mockWs.url).toContain('wss://generativelanguage.googleapis.com/ws/');
 			expect(mockWsManager.mockWs.url).toContain('key=test-gemini-key');
+		});
+
+		it('should keep the API key out of the logs', async () => {
+			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
+			const connectPromise = backend.connect({ model: 'gemini-2.0-flash-exp', language: undefined, prompt: undefined });
+
+			mockWsManager.mockWs.simulateOpen();
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({ setupComplete: {} }));
+			await connectPromise;
+
+			const logged = [logger.debug, logger.info, logger.warn, logger.error].flatMap((fn) => vi.mocked(fn).mock.calls.flat().map(String));
+
+			expect(logged.some((line) => line.includes('Opening Gemini WebSocket'))).toBe(true);
+			expect(logged.join('\n')).not.toContain('test-gemini-key');
 		});
 
 		it('should send setup message on open', async () => {

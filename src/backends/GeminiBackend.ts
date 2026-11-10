@@ -60,10 +60,10 @@ export class GeminiBackend implements TranscriptionBackend {
 
 		return new Promise((resolve, reject) => {
 			try {
-				const geminiUrl = `${GEMINI_WS_BASE}?key=${config.gemini.apiKey}`;
-				const ws = new WebSocket(geminiUrl);
+				// Google's own SDK sends the key in the query string too; logs get only the endpoint.
+				const ws = new WebSocket(`${GEMINI_WS_BASE}?key=${config.gemini.apiKey}`);
 
-				logger.debug(`Opening Gemini WebSocket to ${geminiUrl} for tag: ${this.tag}`);
+				logger.debug(`Opening Gemini WebSocket to ${GEMINI_WS_BASE} for tag: ${this.tag}`);
 
 				this.ws = ws;
 
