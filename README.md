@@ -295,6 +295,7 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
 **Transcription result:**
 ```json
 {
+  "event": "transcription-result",
   "type": "transcription-result",
   "is_interim": false,
   "transcript": [{"text": "hello world", "confidence": 0.98}],
@@ -424,6 +425,12 @@ DUMP_WEBSOCKET_MESSAGES=true npm run dev
 
 ```bash
 node scripts/replay-dump.cjs media.jsonl "ws://localhost:8080/transcribe?sendBack=true"
+```
+
+To send extra request headers, set `REPLAY_HEADERS` to a JSON object. The script does not take headers as arguments, so credential values do not show in the process list:
+
+```bash
+REPLAY_HEADERS='{"X-Tenant":"foo"}' node scripts/replay-dump.cjs media.jsonl "ws://localhost:8080/transcribe?sendBack=true"
 ```
 
 ### Mix Recorded Audio

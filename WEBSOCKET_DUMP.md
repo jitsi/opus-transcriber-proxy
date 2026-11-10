@@ -101,6 +101,8 @@ node scripts/replay-dump.cjs /tmp/my-test-session/media.jsonl "ws://localhost:80
 
 **Note:** Make sure to quote the WebSocket URL if it contains special characters like `?` or `&`.
 
+To send extra request headers, set `REPLAY_HEADERS` to a JSON object, for example `REPLAY_HEADERS='{"X-Tenant":"foo"}'`. The script does not take headers as arguments, so credential values do not show in the process list.
+
 The replay script will:
 - Preserve the original timing between messages
 - Show progress as messages are sent
