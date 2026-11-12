@@ -362,7 +362,7 @@ describe('AgentProxy', () => {
 			expect(closed).toHaveBeenCalledTimes(1);
 		});
 
-		it('ignores an error of the endpoint socket that follows the close of a connected session', async () => {
+		it('only notes at debug an error of the endpoint socket that follows the close of a connected session', async () => {
 			const { lifecycle, errors } = observed();
 			await settle();
 			endpointWs.fire('open', {});
@@ -374,6 +374,7 @@ describe('AgentProxy', () => {
 			expect(lifecycle).toEqual([ { state: 'active' } ]);
 			expect(errors).toEqual([]);
 			expect(runtime.logger.error).not.toHaveBeenCalled();
+			expect(runtime.logger.debug).toHaveBeenCalledWith('agent: endpoint WebSocket error after close: read ECONNRESET');
 		});
 
 		it('still fails a dial the endpoint itself ended before the handshake completed', async () => {
