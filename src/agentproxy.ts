@@ -531,6 +531,10 @@ export class AgentProxy extends Emitter {
 			});
 			endpointWs.addEventListener('message', (event) => this.handleEndpointMessage(event.data));
 			endpointWs.addEventListener('error', (event) => {
+				// `ws` reports a handshake that our own close aborted as an error: not a failed dial, nor a loss.
+				if (this.isClosed) {
+					return;
+				}
 				const message = (event as { message?: string }).message ?? 'WebSocket error';
 				this.runtime.logger.error(`agent: endpoint WebSocket error: ${message}`);
 				if (this.endpointStatus === 'pending') {
@@ -579,7 +583,8 @@ export class AgentProxy extends Emitter {
 
 	/** The customer endpoint could not be reached: terminal for this leg, so the bridge does not redial into the same failure. */
 	private failDial(message: string): void {
-		if (this.endpointStatus === 'failed') {
+		// A session that closed itself (the bridge left, a shutdown) has no dial left to fail.
+		if (this.isClosed || this.endpointStatus === 'failed') {
 			return;
 		}
 		this.endpointStatus = 'failed';
