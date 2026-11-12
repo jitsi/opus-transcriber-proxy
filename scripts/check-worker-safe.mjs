@@ -39,6 +39,7 @@ const CORE_FILES = [
 	'src/translate/env.ts',
 	'src/translate/timers.ts',
 	'src/buildInfo.ts',
+	'src/closeEvent.ts',
 	'src/OpusDecoder/OpusDecoderWasm.ts',
 	'src/OpusDecoder/opusTypes.ts',
 	'src/OpusEncoder/OpusEncoderWasm.ts',

@@ -16,6 +16,7 @@
 
 import { MediaPacer } from './MediaPacer';
 import { closeReason } from './agent/closeReason';
+import { describeClose } from './closeEvent';
 import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
 import { computeAudioLevel } from './OpusEncoder/audioLevel';
@@ -222,7 +223,12 @@ export class AgentProxy extends Emitter {
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
 		this.pacer.onError = (error) => this.runtime.logger.error('agent: failed to send a paced frame', error as Error);
 
-		this.ws.addEventListener('close', () => this.close());
+		this.ws.addEventListener('close', (event) => {
+			if (!this.isClosed) {
+				this.runtime.logger.info(`agent: bridge WebSocket closed: ${describeClose(event)}`);
+			}
+			this.close();
+		});
 		this.ws.addEventListener('error', (event) => {
 			const message = (event as { message?: string }).message ?? 'WebSocket error';
 			this.runtime.logger.error(`AgentProxy bridge WebSocket error: ${message}`);
@@ -522,6 +528,11 @@ export class AgentProxy extends Emitter {
 			endpointWs.addEventListener('message', (event) => this.handleEndpointMessage(event.data));
 			endpointWs.addEventListener('error', (event) => {
 				const message = (event as { message?: string }).message ?? 'WebSocket error';
+				// `ws` reports a handshake that our own close aborted as an error: not a failed dial, nor a loss.
+				if (this.isClosed) {
+					this.runtime.logger.debug(`agent: endpoint WebSocket error after close: ${message}`);
+					return;
+				}
 				this.runtime.logger.error(`agent: endpoint WebSocket error: ${message}`);
 				if (this.endpointStatus === 'pending') {
 					this.failDial(message);
@@ -532,10 +543,14 @@ export class AgentProxy extends Emitter {
 				// Mid-session loss: a normal close lets the bridge redial (session retry).
 				this.close();
 			});
-			endpointWs.addEventListener('close', () => {
+			endpointWs.addEventListener('close', (event) => {
 				if (this.endpointStatus === 'pending') {
 					this.failDial('endpoint closed before the handshake completed');
 					return;
+				}
+				// The bridge leg then closes with no reason and the bridge redials: this line is the only record of why.
+				if (!this.isClosed) {
+					this.runtime.logger.warn(`agent: endpoint WebSocket closed: ${describeClose(event)}`);
 				}
 				if (this.endpointStatus !== 'failed') {
 					this.endpointStatus = 'closed';
@@ -565,7 +580,8 @@ export class AgentProxy extends Emitter {
 
 	/** The customer endpoint could not be reached: terminal for this leg, so the bridge does not redial into the same failure. */
 	private failDial(message: string): void {
-		if (this.endpointStatus === 'failed') {
+		// A session that closed itself (the bridge left, a shutdown) has no dial left to fail.
+		if (this.isClosed || this.endpointStatus === 'failed') {
 			return;
 		}
 		this.endpointStatus = 'failed';

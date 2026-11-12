@@ -235,6 +235,160 @@ describe('AgentProxy', () => {
 		expect(closed).toHaveBeenCalledTimes(1);
 	});
 
+	describe('close logging', () => {
+		const lines = (level: 'info' | 'warn') =>
+			runtime.logger[level].mock.calls.map((c: unknown[]) => String(c[0])).filter((line: string) => /WebSocket closed/.test(line));
+
+		async function connected() {
+			const proxy = createProxy();
+			proxy.on('error', () => undefined);
+			await settle();
+			endpointWs.fire('open', {});
+			await settle();
+			return proxy;
+		}
+
+		it('logs the code and reason when the endpoint closes mid-session, and closes the bridge leg', async () => {
+			await connected();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=1006 reason="" wasClean=false' ]);
+			expect(bridgeWs.closed).toBe(true);
+			expect(lines('info')).toEqual([]); // the bridge leg's close is the proxy's own
+		});
+
+		it('quotes the reason of the endpoint, so it cannot split the line', async () => {
+			await connected();
+
+			endpointWs.fire('close', { code: 1012, reason: 'replaced\nERROR fake line', wasClean: true });
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=1012 reason="replaced\\nERROR fake line" wasClean=true' ]);
+		});
+
+		it('logs a close event without a code', async () => {
+			await connected();
+
+			endpointWs.fire('close', {});
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=none reason="" wasClean=unknown' ]);
+		});
+
+		it('logs the code and reason when the bridge closes, and not the close of the endpoint that follows', async () => {
+			await connected();
+
+			bridgeWs.fire('close', { code: 1001, reason: 'closing', wasClean: true });
+
+			expect(lines('info')).toEqual([ 'agent: bridge WebSocket closed: code=1001 reason="closing" wasClean=true' ]);
+			expect(endpointWs.closed).toBe(true);
+			expect(lines('warn')).toEqual([]);
+		});
+
+		it('logs neither close after the agent sent end', async () => {
+			await connected();
+
+			endpointWs.receive({ event: 'end' });
+
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_AGENT_ENDED);
+			expect(lines('warn')).toEqual([]);
+			expect(lines('info')).toEqual([]);
+		});
+
+		it('logs no close line after an error on the endpoint socket, which is logged itself', async () => {
+			await connected();
+
+			endpointWs.fire('error', { message: 'Max payload size exceeded' });
+			endpointWs.fire('close', { code: 1009, reason: '', wasClean: false });
+
+			expect(runtime.logger.error).toHaveBeenCalledWith('agent: endpoint WebSocket error: Max payload size exceeded');
+			expect(lines('warn')).toEqual([]);
+			expect(lines('info')).toEqual([]);
+		});
+
+		it('logs no close line for an endpoint that closed before the handshake completed', async () => {
+			createProxy().on('error', () => undefined);
+			await settle();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+			expect(lines('warn')).toEqual([]);
+		});
+	});
+
+	describe('a session that closes itself', () => {
+		/** What `ws` does to a client closed during its handshake: an error, then the close. */
+		function abortedHandshake() {
+			endpointWs.fire('error', { message: 'WebSocket was closed before the connection was established' });
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+		}
+
+		function observed() {
+			const proxy = createProxy();
+			const lifecycle: any[] = [];
+			const errors: string[] = [];
+			proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+			proxy.on('error', (message: string) => errors.push(message));
+			return { proxy, lifecycle, errors };
+		}
+
+		it('reports no failed dial when the bridge leg closes while the dial is pending', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+
+			bridgeWs.fire('close', {});
+			abortedHandshake();
+
+			expect(endpointWs.closed).toBe(true);
+			expect(lifecycle).toEqual([]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+		});
+
+		it('reports no failed dial when it is closed while the dial is pending (a shutdown)', async () => {
+			const { proxy, lifecycle, errors } = observed();
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+			await settle();
+
+			proxy.close();
+			abortedHandshake();
+
+			expect(bridgeWs.closed).toBe(true);
+			expect(bridgeWs.closeCode).toBeUndefined(); // not the terminal 4002: the bridge may redial
+			expect(lifecycle).toEqual([]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+			expect(closed).toHaveBeenCalledTimes(1);
+		});
+
+		it('only notes at debug an error of the endpoint socket that follows the close of a connected session', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+			endpointWs.fire('open', {});
+			await settle();
+
+			bridgeWs.fire('close', {});
+			endpointWs.fire('error', { message: 'read ECONNRESET' });
+
+			expect(lifecycle).toEqual([ { state: 'active' } ]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+			expect(runtime.logger.debug).toHaveBeenCalledWith('agent: endpoint WebSocket error after close: read ECONNRESET');
+		});
+
+		it('still fails a dial the endpoint itself ended before the handshake completed', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: endpoint closed before the handshake completed' } ]);
+			expect(errors).toEqual([ 'endpoint closed before the handshake completed' ]);
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		});
+	});
+
 	it('reports a session over once: an end after a failed dial, or a second end, changes nothing', async () => {
 		const proxy = createProxy();
 		const lifecycle: any[] = [];

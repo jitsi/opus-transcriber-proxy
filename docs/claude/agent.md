@@ -33,8 +33,17 @@ multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-publi
 `request-filtering-agent`, which checks the address actually connected to, closing the DNS-rebinding gap of the pre-dial
 lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Logs name the customer endpoint by host only, and the debug header dumps mask credential headers, as does the session-parameters line (`redactCredentials`). Lifecycle reports for one session are chained so they post in order, a
 session reports a terminal state (`failed` or `ended`) once, and `AgentProxy` ignores customer messages once closed.
+It only notes the endpoint socket's `error` at debug then too, and fails no dial: `ws` reports a handshake that the proxy's own close
+aborted (the bridge left, or a shutdown, while the dial was pending) as an error, which used to report `failed` and so
+ended an agent the bridge would have redialled.
 Status reports retry five times with doubling backoff, with a hard deadline and a 64 KiB body cap per request, and count a
 give-up in `otp_agent_status_reports_given_up_total`; permanent dial failures count in `otp_agent_dial_failures_total`.
+
+A socket close the proxy did not start is one log line with the close code, the reason (the peer's string, quoted so it
+cannot split the line) and `wasClean`: `agent: endpoint WebSocket closed: ...` at warn, because the bridge leg then closes
+with no reason and the bridge redials, so nothing else records why; `agent: bridge WebSocket closed: ...` at info. Neither
+line is logged for a close the proxy starts: its cause (`end`, a failed dial, a contract violation, an `error` on the endpoint
+socket) is logged where it is decided.
 
 An agent invited with `mediaFormat.encoding: "audio/opus"` (dial config `mediaFormat`, `agent/mediaFormat.ts`)
 skips both codecs: participant packets go to the customer as exported (the bridge's `chunk`/`timestamp` kept), and the
