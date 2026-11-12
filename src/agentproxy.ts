@@ -16,6 +16,7 @@
 
 import { MediaPacer } from './MediaPacer';
 import { closeReason } from './agent/closeReason';
+import { describeClose } from './closeEvent';
 import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
 import { computeAudioLevel } from './OpusEncoder/audioLevel';
@@ -74,11 +75,6 @@ interface AgentReturnFrame {
 }
 /** WebSocket close code towards the agent when it broke the media contract. */
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
-
-/** A close event for a log line; the reason is the peer's string, quoted so it cannot split the line. */
-function describeClose(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): string {
-	return `code=${event?.code ?? 'none'} reason=${JSON.stringify(event?.reason ?? '')} wasClean=${event?.wasClean ?? 'unknown'}`;
-}
 
 export interface AgentProxyOptions {
 	/** The customer's WebSocket endpoint to dial out to. */

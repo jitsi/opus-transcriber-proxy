@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { describeClose, type CloseEventLike } from './closeEvent';
 import { TranslatorConnection, normalizeTargetLanguage } from './TranslatorConnection';
 import type { TranslatorCloseReason } from './TranslatorConnection';
 import { defaultTranslationProvider, getTranslationProvider, type TranslationProviderId } from './translate/provider';
@@ -226,16 +227,14 @@ export class TranslatorProxy extends Emitter {
 	 * the line. Neither runtime dispatches a second close event; the guard only keeps a stray one from
 	 * emitting `closed` twice.
 	 */
-	private onBridgeClosed(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): void {
+	private onBridgeClosed(event: CloseEventLike | undefined): void {
 		if (this.bridgeClosed) {
 			return;
 		}
 		this.bridgeClosed = true;
 		const who = this.closedLocally ? 'TranslatorProxy closed the bridge WebSocket' : 'TranslatorProxy bridge WebSocket closed';
 		const afterError = this.bridgeError !== undefined ? ` after error: ${this.bridgeError}` : '';
-		this.runtime.logger.info(
-			`${who}: code=${event?.code ?? 'none'} reason=${JSON.stringify(event?.reason ?? '')} wasClean=${event?.wasClean ?? 'unknown'}${afterError}`,
-		);
+		this.runtime.logger.info(`${who}: ${describeClose(event)}${afterError}`);
 		this.closeAllConnections(/* releaseQueuedAudio */ false);
 		this.emit('closed');
 	}
