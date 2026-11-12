@@ -517,6 +517,20 @@ describe('GeminiBackend', () => {
 	});
 
 	describe('close', () => {
+		it('should not recurse when ws.close() dispatches error synchronously', async () => {
+			// undici fails a CONNECTING socket inside close() and fires 'error' before close() returns
+			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
+			const connectPromise = backend.connect({ model: 'gemini-2.0-flash-exp', language: undefined, prompt: undefined });
+			const ws = mockWsManager.mockWs;
+			const close = vi.fn(() => ws.simulateError('Connection was closed before it was established'));
+			ws.close = close;
+			ws.simulateError('Connection was closed before it was established');
+
+			await expect(connectPromise).rejects.toThrow();
+			expect(close).toHaveBeenCalledTimes(1);
+			expect(backend.getStatus()).toBe('closed');
+		});
+
 		it('should close WebSocket connection and reset setupComplete', async () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {
