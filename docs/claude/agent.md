@@ -33,7 +33,7 @@ multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-publi
 `request-filtering-agent`, which checks the address actually connected to, closing the DNS-rebinding gap of the pre-dial
 lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Logs name the customer endpoint by host only, and the debug header dumps mask credential headers, as does the session-parameters line (`redactCredentials`). Lifecycle reports for one session are chained so they post in order, a
 session reports a terminal state (`failed` or `ended`) once, and `AgentProxy` ignores customer messages once closed.
-It ignores the endpoint socket's `error` then too, and fails no dial: `ws` reports a handshake that the proxy's own close
+It only notes the endpoint socket's `error` at debug then too, and fails no dial: `ws` reports a handshake that the proxy's own close
 aborted (the bridge left, or a shutdown, while the dial was pending) as an error, which used to report `failed` and so
 ended an agent the bridge would have redialled.
 Status reports retry five times with doubling backoff, with a hard deadline and a 64 KiB body cap per request, and count a

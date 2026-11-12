@@ -527,11 +527,12 @@ export class AgentProxy extends Emitter {
 			});
 			endpointWs.addEventListener('message', (event) => this.handleEndpointMessage(event.data));
 			endpointWs.addEventListener('error', (event) => {
+				const message = (event as { message?: string }).message ?? 'WebSocket error';
 				// `ws` reports a handshake that our own close aborted as an error: not a failed dial, nor a loss.
 				if (this.isClosed) {
+					this.runtime.logger.debug(`agent: endpoint WebSocket error after close: ${message}`);
 					return;
 				}
-				const message = (event as { message?: string }).message ?? 'WebSocket error';
 				this.runtime.logger.error(`agent: endpoint WebSocket error: ${message}`);
 				if (this.endpointStatus === 'pending') {
 					this.failDial(message);
