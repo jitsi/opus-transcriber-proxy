@@ -316,6 +316,78 @@ describe('AgentProxy', () => {
 		});
 	});
 
+	describe('a session that closes itself', () => {
+		/** What `ws` does to a client closed during its handshake: an error, then the close. */
+		function abortedHandshake() {
+			endpointWs.fire('error', { message: 'WebSocket was closed before the connection was established' });
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+		}
+
+		function observed() {
+			const proxy = createProxy();
+			const lifecycle: any[] = [];
+			const errors: string[] = [];
+			proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+			proxy.on('error', (message: string) => errors.push(message));
+			return { proxy, lifecycle, errors };
+		}
+
+		it('reports no failed dial when the bridge leg closes while the dial is pending', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+
+			bridgeWs.fire('close', {});
+			abortedHandshake();
+
+			expect(endpointWs.closed).toBe(true);
+			expect(lifecycle).toEqual([]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+		});
+
+		it('reports no failed dial when it is closed while the dial is pending (a shutdown)', async () => {
+			const { proxy, lifecycle, errors } = observed();
+			const closed = vi.fn();
+			proxy.on('closed', closed);
+			await settle();
+
+			proxy.close();
+			abortedHandshake();
+
+			expect(bridgeWs.closed).toBe(true);
+			expect(bridgeWs.closeCode).toBeUndefined(); // not the terminal 4002: the bridge may redial
+			expect(lifecycle).toEqual([]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+			expect(closed).toHaveBeenCalledTimes(1);
+		});
+
+		it('ignores an error of the endpoint socket that follows the close of a connected session', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+			endpointWs.fire('open', {});
+			await settle();
+
+			bridgeWs.fire('close', {});
+			endpointWs.fire('error', { message: 'read ECONNRESET' });
+
+			expect(lifecycle).toEqual([ { state: 'active' } ]);
+			expect(errors).toEqual([]);
+			expect(runtime.logger.error).not.toHaveBeenCalled();
+		});
+
+		it('still fails a dial the endpoint itself ended before the handshake completed', async () => {
+			const { lifecycle, errors } = observed();
+			await settle();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: endpoint closed before the handshake completed' } ]);
+			expect(errors).toEqual([ 'endpoint closed before the handshake completed' ]);
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		});
+	});
+
 	it('reports a session over once: an end after a failed dial, or a second end, changes nothing', async () => {
 		const proxy = createProxy();
 		const lifecycle: any[] = [];
