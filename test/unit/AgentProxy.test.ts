@@ -235,6 +235,87 @@ describe('AgentProxy', () => {
 		expect(closed).toHaveBeenCalledTimes(1);
 	});
 
+	describe('close logging', () => {
+		const lines = (level: 'info' | 'warn') =>
+			runtime.logger[level].mock.calls.map((c: unknown[]) => String(c[0])).filter((line: string) => /WebSocket closed/.test(line));
+
+		async function connected() {
+			const proxy = createProxy();
+			proxy.on('error', () => undefined);
+			await settle();
+			endpointWs.fire('open', {});
+			await settle();
+			return proxy;
+		}
+
+		it('logs the code and reason when the endpoint closes mid-session, and closes the bridge leg', async () => {
+			await connected();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=1006 reason="" wasClean=false' ]);
+			expect(bridgeWs.closed).toBe(true);
+			expect(lines('info')).toEqual([]); // the bridge leg's close is the proxy's own
+		});
+
+		it('quotes the reason of the endpoint, so it cannot split the line', async () => {
+			await connected();
+
+			endpointWs.fire('close', { code: 1012, reason: 'replaced\nERROR fake line', wasClean: true });
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=1012 reason="replaced\\nERROR fake line" wasClean=true' ]);
+		});
+
+		it('logs a close event without a code', async () => {
+			await connected();
+
+			endpointWs.fire('close', {});
+
+			expect(lines('warn')).toEqual([ 'agent: endpoint WebSocket closed: code=none reason="" wasClean=unknown' ]);
+		});
+
+		it('logs the code and reason when the bridge closes, and not the close of the endpoint that follows', async () => {
+			await connected();
+
+			bridgeWs.fire('close', { code: 1001, reason: 'closing', wasClean: true });
+
+			expect(lines('info')).toEqual([ 'agent: bridge WebSocket closed: code=1001 reason="closing" wasClean=true' ]);
+			expect(endpointWs.closed).toBe(true);
+			expect(lines('warn')).toEqual([]);
+		});
+
+		it('logs neither close after the agent sent end', async () => {
+			await connected();
+
+			endpointWs.receive({ event: 'end' });
+
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_AGENT_ENDED);
+			expect(lines('warn')).toEqual([]);
+			expect(lines('info')).toEqual([]);
+		});
+
+		it('logs no close line after an error on the endpoint socket, which is logged itself', async () => {
+			await connected();
+
+			endpointWs.fire('error', { message: 'Max payload size exceeded' });
+			endpointWs.fire('close', { code: 1009, reason: '', wasClean: false });
+
+			expect(runtime.logger.error).toHaveBeenCalledWith('agent: endpoint WebSocket error: Max payload size exceeded');
+			expect(lines('warn')).toEqual([]);
+			expect(lines('info')).toEqual([]);
+		});
+
+		it('logs no close line for an endpoint that closed before the handshake completed', async () => {
+			createProxy().on('error', () => undefined);
+			await settle();
+
+			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
+
+			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+			expect(lines('warn')).toEqual([]);
+		});
+	});
+
 	it('reports a session over once: an end after a failed dial, or a second end, changes nothing', async () => {
 		const proxy = createProxy();
 		const lifecycle: any[] = [];
