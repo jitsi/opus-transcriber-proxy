@@ -75,6 +75,11 @@ interface AgentReturnFrame {
 /** WebSocket close code towards the agent when it broke the media contract. */
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
 
+/** A close event for a log line; the reason is the peer's string, quoted so it cannot split the line. */
+function describeClose(event: { code?: number; reason?: string; wasClean?: boolean } | undefined): string {
+	return `code=${event?.code ?? 'none'} reason=${JSON.stringify(event?.reason ?? '')} wasClean=${event?.wasClean ?? 'unknown'}`;
+}
+
 export interface AgentProxyOptions {
 	/** The customer's WebSocket endpoint to dial out to. */
 	endpointUrl: string;
@@ -222,7 +227,12 @@ export class AgentProxy extends Emitter {
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
 		this.pacer.onError = (error) => this.runtime.logger.error('agent: failed to send a paced frame', error as Error);
 
-		this.ws.addEventListener('close', () => this.close());
+		this.ws.addEventListener('close', (event) => {
+			if (!this.isClosed) {
+				this.runtime.logger.info(`agent: bridge WebSocket closed: ${describeClose(event)}`);
+			}
+			this.close();
+		});
 		this.ws.addEventListener('error', (event) => {
 			const message = (event as { message?: string }).message ?? 'WebSocket error';
 			this.runtime.logger.error(`AgentProxy bridge WebSocket error: ${message}`);
@@ -532,10 +542,14 @@ export class AgentProxy extends Emitter {
 				// Mid-session loss: a normal close lets the bridge redial (session retry).
 				this.close();
 			});
-			endpointWs.addEventListener('close', () => {
+			endpointWs.addEventListener('close', (event) => {
 				if (this.endpointStatus === 'pending') {
 					this.failDial('endpoint closed before the handshake completed');
 					return;
+				}
+				// The bridge leg then closes with no reason and the bridge redials: this line is the only record of why.
+				if (!this.isClosed) {
+					this.runtime.logger.warn(`agent: endpoint WebSocket closed: ${describeClose(event)}`);
 				}
 				if (this.endpointStatus !== 'failed') {
 					this.endpointStatus = 'closed';
