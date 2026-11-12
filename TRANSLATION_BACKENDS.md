@@ -61,7 +61,10 @@ TRANSLATION_PROVIDER=xai
 
 The team behind the key needs xAI's realtime-translation entitlement. Without it every upgrade is answered `403 {"error":"Realtime translation is not enabled for this team."}`, however valid the key is otherwise.
 
-**Supported target languages:** any tag with the BCP-47 shape (`es`, `zh-CN`, `zh-Hant`, `ceb`). The primary subtag is lowercased, the rest is sent as given. English names are accepted too.
+**Supported target languages:** any tag with the BCP-47 shape (`es`, `zh-CN`, `zh-Hant`, `ceb`). The primary subtag is lowercased, the rest is sent as given. English names are accepted too. Accepting a tag is not the same as speaking it well: xAI's TTS documents 20 language codes (about 16 distinct languages, since Arabic, Portuguese and Spanish appear as regional variants) and says it can produce others "with varying degrees of accuracy" (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech).
+
+- The one unlisted language tried so far (2026-11-05, `grok-realtime-translation-fast`), Bulgarian on a stage deployment with a couple of voices, was translated mostly correctly but spoken with a strong Russian accent, plausibly the TTS falling back to a trained language with the same script. Other unlisted languages and other voices have not been tried.
+- Nothing in the proxy changes how a voice pronounces a language, and OpenAI's endpoint does not offer such languages at all, so expect to test each unlisted language before offering it, and raise what you find with xAI.
 
 **Technical Details:**
 - The server speaks first with `session.created`; the proxy answers `session.update` and holds audio in the pending-PCM buffer until `session.updated` (`handshake: 'session'`). A handshake that does not complete within 10 s fails the direction
@@ -174,9 +177,9 @@ List prices at the time of writing:
 ### Language Support
 
 - **OpenAI:** 13 target languages (see above)
-- **xAI:** any BCP-47 tag
+- **xAI:** any BCP-47 tag, but see the caveat under "Supported target languages" in the xAI section: only 20 language codes are documented for its TTS, and an unlisted language may be spoken with a borrowed accent
 
-The client is not told the server's list. jitsi-meet offers the 13 common languages by default and a deployment running xAI can extend the picker with `config.audioTranslation.languages`.
+The client is not told the server's list. jitsi-meet offers the 13 common languages by default and a deployment running xAI can extend the picker with `config.audioTranslation.translationLanguages`.
 
 ## Testing
 
