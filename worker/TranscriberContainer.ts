@@ -212,7 +212,9 @@ export class TranscriberContainer extends Container<Env> {
 	 * container. WebSocket audio frames bypass the SDK's activity tracking (see the `fetch`
 	 * override above), so the timer never sees an in-progress call and would sleep it
 	 * mid-session — on EVERY routing path, including the direct `container.fetch` path used by
-	 * `useDispatcher=false` (VCC) connections, which has no Worker-side renewal loop.
+	 * `useDispatcher=false` (VCC) connections and by every `/agent` session, which has no
+	 * Worker-side renewal loop. For `/agent` the `agents` count in the probe below is the only
+	 * thing that keeps its container awake.
 	 *
 	 * So before sleeping, ask the container whether any sessions are still live; if so,
 	 * keep it alive. This is path-agnostic (it's the DO's own lifecycle hook) and costs
