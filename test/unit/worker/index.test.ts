@@ -44,9 +44,9 @@ vi.mock('@cloudflare/containers', () => {
 // index.ts re-exports the ContainerCoordinator Durable Object, which extends workerd's base class.
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }));
 
-// The /translate path imports the Emscripten .wasm modules, which vite cannot load; these tests
-// never take that path.
-vi.mock('../../../worker/handleTranslate', () => ({ handleTranslate: vi.fn() }));
+// The /translate path imports the Emscripten .wasm modules, which vite cannot load, so
+// handleTranslate is a fake here.
+vi.mock('../../../worker/handleTranslate', () => ({ handleTranslate: vi.fn(() => new Response('handled-by-translate')) }));
 
 vi.mock('../../../worker/sessionProxy', () => ({
 	handleWebSocketWithDispatcher: vi.fn(async () => new Response('via-dispatcher-proxy')),
@@ -54,6 +54,7 @@ vi.mock('../../../worker/sessionProxy', () => ({
 
 import { getContainer } from '@cloudflare/containers';
 import worker from '../../../worker/index';
+import { handleTranslate } from '../../../worker/handleTranslate';
 import { handleWebSocketWithDispatcher } from '../../../worker/sessionProxy';
 
 const containerFetch = vi.fn(async (_request: Request) => new Response('passed-through-to-container'));
@@ -109,6 +110,16 @@ describe('worker fetch: dispatcher path selection', () => {
 
 		expect(handleWebSocketWithDispatcher).not.toHaveBeenCalled();
 		expect(containerFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('leaves a /translate upgrade to handleTranslate, which does its own dispatcher forwarding', async () => {
+		const response = await worker.fetch(upgrade('/translate?sessionId=s1&sendBack=true'), env(), ctx());
+
+		expect(handleTranslate).toHaveBeenCalledTimes(1);
+		expect(new URL(vi.mocked(handleTranslate).mock.calls[0][0].url).pathname).toBe('/translate');
+		expect(handleWebSocketWithDispatcher).not.toHaveBeenCalled();
+		expect(containerFetch).not.toHaveBeenCalled();
+		expect(await response.text()).toBe('handled-by-translate');
 	});
 
 	it('still sends a /transcribe upgrade through the dispatcher proxy when USE_DISPATCHER is on', async () => {
