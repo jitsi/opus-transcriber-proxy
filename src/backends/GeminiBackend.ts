@@ -158,8 +158,11 @@ export class GeminiBackend implements TranscriptionBackend {
 
 	close(): void {
 		logger.debug(`Closing Gemini backend for tag: ${this.tag}`);
-		this.ws?.close();
+		// Detach before closing: undici can dispatch 'error' synchronously inside ws.close(), and
+		// that handler calls close() again, which must find no socket or it recurses (jitsi/jitsi-meet#17742).
+		const ws = this.ws;
 		this.ws = undefined;
+		ws?.close();
 		this.status = 'closed';
 		this.setupComplete = false;
 	}
