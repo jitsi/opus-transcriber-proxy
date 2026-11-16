@@ -26,6 +26,9 @@ import { TranslatorProxy } from './translatorproxy';
 import { AgentProxy, CLOSE_CODE_ENDPOINT_UNREACHABLE } from './agentproxy';
 import { closeReason } from './agent/closeReason';
 import { DialResolution, ResolvedDial, resolveDial } from './agent/dial';
+import type { MixStats } from './agent/mix/SourceTrack';
+import { mixEventCounts } from './agent/mix/metrics';
+import { resolveMixConfig } from './agent/mixConfig';
 import { assertPublicEndpointHost } from './agent/endpointGuard';
 import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-filtering-agent';
 import { normalizeTargetLanguage } from './TranslatorConnection';
@@ -271,8 +274,19 @@ async function handleAgentUpgrade(
 	});
 }
 
+/** The variables a KV override set for this container (the keys of CONFIG_OVERRIDES), read once. */
+let kvOverriddenVariables: ReadonlySet<string> | undefined;
+function kvOverridden(): ReadonlySet<string> {
+	kvOverriddenVariables ??= new Set(Object.keys(parseConfigOverrides(process.env.CONFIG_OVERRIDES).overrides));
+	return kvOverriddenVariables;
+}
+
 function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 	logger.info(`New /agent connection, endpoint host=${new URL(endpoint.url).hostname}`);
+	if (endpoint.unknownMixOptions !== undefined) {
+		// The names come from the agent's own config: quoted, and cut, so they cannot split or flood the line.
+		logger.warn(`Agent ${endpoint.agentId ?? '?'}: ignoring unknown mix options ${JSON.stringify(endpoint.unknownMixOptions.slice(0, 16)).slice(0, 400)}`);
+	}
 
 	const agentSession = new AgentProxy(
 		ws as unknown as IWebSocket,
@@ -294,6 +308,8 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 			paceLeadMs: config.agent.paceLeadMs,
 			encoding: endpoint.encoding,
 			fanIn: endpoint.fanIn,
+			// Each option on its own: the agent's inline value, else this deployment's variable (KV included), else the default.
+			...(endpoint.fanIn === 'mix' ? { mix: resolveMixConfig(config.agent.mix, endpoint.mix, kvOverridden()) } : {}),
 		},
 		createNodeTranslationRuntime(),
 	);
@@ -303,6 +319,16 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 		activeAgentSessions.delete(agentSession);
 		if (ws.readyState === ws.OPEN) {
 			ws.close();
+		}
+	});
+
+	// The counts since the session's last report: every 30 s, and once more when it ends.
+	agentSession.on('mixStats', (delta: MixStats) => {
+		const events = getInstruments().agentMixEventsTotal;
+		for (const [event, count] of Object.entries(mixEventCounts(delta))) {
+			if (count > 0) {
+				events.add(count, { event });
+			}
 		}
 	});
 

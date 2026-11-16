@@ -16,12 +16,13 @@
 
 /**
  * How several participants' audio reaches the agent, chosen per agent at invite time (`fanIn`):
- * every exported source as its own stream, or only the dominant speaker's (as the bridge ranks them).
+ * every exported source as its own stream, only the dominant speaker's (as the bridge ranks them), or
+ * every source the bridge forwards summed into one stream (`agent/mix/`).
  */
-export type AgentFanIn = 'per-source' | 'dominant';
+export type AgentFanIn = 'per-source' | 'dominant' | 'mix';
 
 export const DEFAULT_AGENT_FAN_IN: AgentFanIn = 'per-source';
 
 export function isAgentFanIn(value: unknown): value is AgentFanIn {
-	return value === 'per-source' || value === 'dominant';
+	return value === 'per-source' || value === 'dominant' || value === 'mix';
 }

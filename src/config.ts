@@ -16,6 +16,7 @@
 
 import dotenv from 'dotenv';
 import { ENDPOINT_NAME_RE, validateTags } from './utils';
+import { mixConfigFromEnv } from './agent/mixConfig';
 import { parseIntOrUndefined, parsePaceLeadMs } from './translate/env';
 
 // Load environment variables from .env file
@@ -317,6 +318,9 @@ export const config = {
 		// lead is (the pacer refuses a negative lead, and AgentProxy builds one per session, so a bad value
 		// must be caught here, not there). 0 is raised to one frame by the pacer: the agent path has no off switch.
 		paceLeadMs: parsePaceLeadMs(process.env.AGENT_PACE_LEAD_MS, warnConfig, 'AGENT_PACE_LEAD_MS'),
+		// The `mix` fan-in's options as this deployment sets them (AGENT_MIX_*): only the ones that are set and
+		// usable, so the rest fall to their defaults. An agent's dial config overrides each one (agent/mixConfig.ts).
+		mix: mixConfigFromEnv(process.env, warnConfig),
 		// Shared secret gating the /agent WebSocket upgrade. When set, the caller (the bridge) must send a
 		// matching X-Agent-Token header, so a network peer that reaches the proxy can't trigger a dial-out.
 		// Unset disables the check (a warning is logged) — only safe when the proxy is strictly bridge-only.

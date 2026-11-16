@@ -77,26 +77,34 @@ function bool(): KvType {
 	return t;
 }
 
-/** An integer, as a JSON number or a decimal string, optionally with a lower bound. */
-function int(min?: number): KvType {
+/** `>= min`, `<= max` or `from min to max`, for a type's description; empty with neither bound. */
+function describeBounds(min?: number, max?: number): string {
+	if (min !== undefined && max !== undefined) return ` from ${min} to ${max}`;
+	if (min !== undefined) return ` >= ${min}`;
+	return max !== undefined ? ` <= ${max}` : '';
+}
+
+/** An integer, as a JSON number or a decimal string, optionally with a lower and an upper bound. */
+function int(min?: number, max?: number): KvType {
 	const t: KvType = {
-		describe: min === undefined ? 'an integer' : `an integer >= ${min}`,
+		describe: `an integer${describeBounds(min, max)}`,
 		normalize(v) {
 			const n = typeof v === 'number' ? v : typeof v === 'string' && /^\s*-?\d+\s*$/.test(v) ? Number(v) : NaN;
-			if (!Number.isSafeInteger(n) || (min !== undefined && n < min)) return fail(t, v);
+			if (!Number.isSafeInteger(n) || (min !== undefined && n < min) || (max !== undefined && n > max)) return fail(t, v);
 			return String(n);
 		},
 	};
 	return t;
 }
 
-/** A finite number, as a JSON number or a numeric string. */
-function float(): KvType {
+/** A finite number, as a JSON number or a numeric string, optionally with a lower and an upper bound. */
+function float(min?: number, max?: number): KvType {
 	const t: KvType = {
-		describe: 'a number',
+		describe: `a number${describeBounds(min, max)}`,
 		normalize(v) {
 			const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
-			return Number.isFinite(n) ? String(n) : fail(t, v);
+			if (!Number.isFinite(n) || (min !== undefined && n < min) || (max !== undefined && n > max)) return fail(t, v);
+			return String(n);
 		},
 	};
 	return t;
@@ -175,6 +183,18 @@ function oneOf(...values: string[]): KvType {
 		normalize(v) {
 			const match = typeof v === 'string' ? values.find((x) => x.toLowerCase() === v.trim().toLowerCase()) : undefined;
 			return match ?? fail(t, v);
+		},
+	};
+	return t;
+}
+
+/** One of a fixed set of integers, as a JSON number or a decimal string. */
+function intOneOf(...values: number[]): KvType {
+	const t: KvType = {
+		describe: `one of ${values.join('|')}`,
+		normalize(v) {
+			const n = typeof v === 'number' ? v : typeof v === 'string' && /^\s*-?\d+\s*$/.test(v) ? Number(v) : NaN;
+			return values.includes(n) ? String(n) : fail(t, v);
 		},
 	};
 	return t;
@@ -468,6 +488,20 @@ export const WORKER_VARS = {
 	AGENT_SHARED_SECRET: { container: IF_SET },
 	AGENT_ALLOW_UNAUTHENTICATED: { container: IF_SET },
 	AGENT_PACE_LEAD_MS: tunable(int(0)),
+	// The `mix` fan-in's options (src/agent/mixConfig.ts holds the same names and ranges; a test checks that
+	// the two agree). Each is the deployment's value for one option, which an agent's dial config overrides.
+	// The container reads them at start, so an override reaches the containers started after it.
+	AGENT_MIX_BUFFER_MS: tunable(int(0, 500)),
+	AGENT_MIX_MAX_BUFFER_MS: tunable(int(40, 2000)),
+	AGENT_MIX_FRAME_MS: tunable(intOneOf(10, 20, 40, 60)),
+	AGENT_MIX_CONTINUOUS: tunable(bool()),
+	AGENT_MIX_MAX_SPEAKERS: tunable(int(0, 16)),
+	AGENT_MIX_GAIN: tunable(oneOf('unity', 'sqrt', 'average')),
+	AGENT_MIX_LIMITER: tunable(oneOf('soft', 'clamp')),
+	AGENT_MIX_LIMITER_KNEE_DB: tunable(float(-12, 0)),
+	AGENT_MIX_CONCEAL_MS: tunable(int(0, 120)),
+	AGENT_MIX_TALK_GAP_MS: tunable(int(60, 2000)),
+	AGENT_MIX_LATE_RESYNC_PACKETS: tunable(int(1, 50)),
 	AGENT_PROVISIONING_URL: { container: IF_SET },
 	AGENT_PROVISIONING_TOKEN: { container: IF_SET },
 	AGENT_PROVISIONING_HOST: { container: IF_SET },
