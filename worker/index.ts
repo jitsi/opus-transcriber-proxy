@@ -100,20 +100,21 @@ export default {
 		// Apply the operator provider overrides, if any is armed in KV and this request did not name
 		// that provider itself: the transcription provider, and, when text translation is on, the
 		// text-translation provider. Done before the container is selected so it covers BOTH
-		// forwarding paths below (dispatcher and direct) — each of them forwards this request object
+		// /transcribe forwarding paths below (dispatcher and direct) — each of them forwards this request object
 		// as-is, and the container reads the parameters from the URL already, so nothing
 		// container-side changes.
 		//
 		// Every failure mode inside applyProviderOverrides degrades to "not applied", so a bad or
 		// unreachable override can only leave the configured default in place.
 		// Gated to transcribe upgrades: every other request reaching this point (/health and /status
-		// probes, /agent upgrades, plain GETs) is forwarded to the container unchanged. Without the
+		// probes, /agent upgrades, plain GETs) is forwarded to the container with its URL unchanged. Without the
 		// gate each of them pays a KV read, a malformed entry logs once per probe instead of once per
 		// session, and an /agent upgrade is forwarded with a `provider` parameter it has no use for.
 		// The text-translation slot is read only when the feature is on, since the container ignores
 		// the parameter otherwise and the read would be wasted.
 		let overrides: AppliedOverrides = {};
-		if (isWebSocketUpgrade && url.pathname.endsWith('/transcribe')) {
+		const isTranscribe = url.pathname.endsWith('/transcribe');
+		if (isWebSocketUpgrade && isTranscribe) {
 			const slots = env.ENABLE_TEXT_TRANSLATION === 'true'
 				? [TRANSCRIBE_PROVIDER_SLOT, TEXT_TRANSLATION_PROVIDER_SLOT]
 				: [TRANSCRIBE_PROVIDER_SLOT];
@@ -125,11 +126,18 @@ export default {
 			url = new URL(request.url);
 		}
 
-		// Check query param first, fall back to env var
+		// The dispatcher path (sessionProxy.ts) makes the Worker terminate both sockets and run a
+		// handler on every frame in both directions, to find the final transcripts it forwards. Only
+		// /transcribe produces transcripts, so only /transcribe may take it: any other upgrade (/agent)
+		// stays a plain pass-through with no per-message code here, whatever USE_DISPATCHER or the
+		// `useDispatcher` parameter say. Otherwise a long /agent session burns Worker CPU on every frame
+		// until it reaches the CPU limit and is killed.
+		//
+		// For /transcribe, the query param wins and the env var is the fallback.
 		const useDispatcherParam = url.searchParams.get('useDispatcher');
-		const useDispatcher = useDispatcherParam !== null
+		const useDispatcher = isTranscribe && (useDispatcherParam !== null
 			? useDispatcherParam === 'true'
-			: env.USE_DISPATCHER === 'true';
+			: env.USE_DISPATCHER === 'true');
 		const sessionId = url.searchParams.get('sessionId') || crypto.randomUUID();
 
 		// Select which container instance to use based on routing strategy

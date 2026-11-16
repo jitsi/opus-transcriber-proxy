@@ -217,7 +217,7 @@ native/                        # Native Opus addon (compiled by node-gyp)
 binding.gyp                    # node-gyp build: libopus + per-ISA SIMD + addon
 
 worker/
-├── index.ts                   # Cloudflare Worker entry: the fetch router + DO class re-exports (untested, like server.ts)
+├── index.ts                   # Cloudflare Worker entry: the fetch router + DO class re-exports
 ├── TranscriberContainer.ts    # The container Durable Object (passthrough fetch override, /status idle probe)
 ├── containerEnv.ts            # Container env vars, instance name, `worker` info block (pure functions)
 ├── routing.ts                 # selectContainerInstance (session / pool / shared / autoscale)
@@ -248,7 +248,7 @@ AGENT_PROTOCOL.md              # The frozen customer-leg wire contract (/agent)
 
 test/
 ├── setup.ts                   # Vitest setup
-├── unit/worker/               # Worker module tests (containerEnv, routing, TranscriberContainer, sessionProxy, dispatcherForwarder, startRetry, metrics)
+├── unit/worker/               # Worker module tests (index, containerEnv, routing, TranscriberContainer, sessionProxy, dispatcherForwarder, startRetry, metrics)
 ├── helpers/                   # Test utilities
 └── unit/                      # Unit tests
 ```
