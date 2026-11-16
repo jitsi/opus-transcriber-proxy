@@ -18,11 +18,14 @@ import { MediaPacer } from './MediaPacer';
 import { closeReason } from './agent/closeReason';
 import { describeClose } from './closeEvent';
 import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
+import { AgentMixer } from './agent/mix/Mixer';
+import { describeMixConfig, ResolvedMixConfig, resolveMixConfig } from './agent/mixConfig';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
 import { computeAudioLevel } from './OpusEncoder/audioLevel';
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { Emitter } from './translate/emitter';
+import { wireInteger } from './translate/wireInteger';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, TranslationRuntime } from './translate/runtime';
@@ -47,7 +50,11 @@ const OPUS_SILENCE_LEVEL = 95;
 
 // Wire-protocol identity in `info`; bump major only on a breaking change (see AGENT_PROTOCOL.md).
 export const AGENT_PROTOCOL = 'jitsi-agent-media';
-export const AGENT_PROTOCOL_VERSION = '1.1';
+export const AGENT_PROTOCOL_VERSION = '1.2';
+/** The one tag the `mix` fan-in's audio arrives on. A participant source is `<endpointId>-a<n>`, so it cannot collide. */
+export const AGENT_MIX_TAG = 'mix';
+/** A change of the mixed set is logged at most this often; the changes in between are counted. */
+const MIX_LOG_INTERVAL_MS = 2000;
 
 /** Application close code on the bridge leg after the agent's `end`: the session is over, not to be redialed. */
 export const CLOSE_CODE_AGENT_ENDED = 4001;
@@ -97,6 +104,8 @@ export interface AgentProxyOptions {
 	encoding?: AgentEncoding;
 	/** Which participants' audio the agent hears (see [AgentFanIn]). Default `per-source`. */
 	fanIn?: AgentFanIn;
+	/** The `mix` fan-in's options in effect (see `agent/mixConfig.ts`). Default: every option at its default. */
+	mix?: ResolvedMixConfig;
 }
 
 /** Per-participant-source state: decodes the bridge's Opus into PCM for the customer leg. */
@@ -146,7 +155,8 @@ interface PendingEndpointMessage {
  *    for the audio level the bridge's speaker detection needs.
  *  - The bridge's `speakers` events (exported sources in recent-speaker order, the dominant speaker first)
  *    are passed on to the customer. With the `dominant` fan-in only the first listed source's audio is
- *    forwarded, so the agent hears one speaker at a time without measuring levels itself.
+ *    forwarded, so the agent hears one speaker at a time without measuring levels itself. With the `mix` fan-in
+ *    every source the bridge forwards is decoded and summed into one stream on the tag `mix` (see [AgentMixer]).
  *
  * A failure on the customer leg closes the bridge socket: the bridge's Exporter reconnects with
  * backoff, which re-dials the customer endpoint (session-level retry for free).
@@ -166,7 +176,17 @@ export class AgentProxy extends Emitter {
 	private readonly fanIn: AgentFanIn;
 	/** Exported sources in recent-speaker order as the bridge last reported them; undefined until it has. */
 	private speakers?: string[];
+	private speakersSilence = false;
 	private warnedNoSpeakers = false;
+	/** The `mix` fan-in: sums the sources into one stream. Unset in every other fan-in. */
+	private mixer?: AgentMixer;
+	private readonly mixConfig?: ResolvedMixConfig;
+	private mixStartSent = false;
+	private mixChunk = 0;
+	/** The tags in a talk in the mix, as last reported to the customer. */
+	private mixed: string[] = [];
+	private mixLoggedAt = -Infinity;
+	private mixChangesSkipped = 0;
 	private readonly mediaFormat: Record<string, unknown>;
 	/** Opus mode: decodes the agent's packets for their audio level only. */
 	private levelDecoder?: IOpusDecoder<typeof AGENT_PCM_SAMPLE_RATE>;
@@ -214,7 +234,10 @@ export class AgentProxy extends Emitter {
 		this.runtime = runtime;
 		this.talkSilenceTimeoutMs = runtime.config.talkSilenceTimeoutMs ?? 350;
 		this.opus = options.encoding === 'audio/opus';
-		this.fanIn = options.fanIn ?? DEFAULT_AGENT_FAN_IN;
+		// A mix is decoded audio. The dial resolution refuses `mix` with Opus, so this pair is a caller's mistake;
+		// per-source is then what is delivered, and so what `info` announces.
+		const mixWithOpus = options.fanIn === 'mix' && this.opus;
+		this.fanIn = mixWithOpus ? 'per-source' : (options.fanIn ?? DEFAULT_AGENT_FAN_IN);
 		this.mediaFormat = this.opus ? AGENT_OPUS_MEDIA_FORMAT : AGENT_MEDIA_FORMAT;
 		this.pacer = new MediaPacer<AgentReturnFrame>({
 			leadMs: options.paceLeadMs,
@@ -222,6 +245,30 @@ export class AgentProxy extends Emitter {
 		});
 		this.pacer.onMark = (name) => this.sendToEndpoint({ event: 'mark', mark: { name } });
 		this.pacer.onError = (error) => this.runtime.logger.error('agent: failed to send a paced frame', error as Error);
+
+		if (mixWithOpus) {
+			this.runtime.logger.error('agent: the mix fan-in needs PCM on the customer leg; using the per-source fan-in instead');
+		} else if (this.fanIn === 'mix') {
+			this.mixConfig = options.mix ?? resolveMixConfig();
+			this.runtime.logger.info(`agent: mix ${describeMixConfig(this.mixConfig)}`);
+			// With `continuous` the mixer's clock starts here, before the customer socket is open: the frames
+			// until then wait in the endpoint queue like any other media.
+			this.mixer = new AgentMixer({
+				config: this.mixConfig.config,
+				createDecoder: () => this.runtime.createOpusDecoder({ sampleRate: AGENT_PCM_SAMPLE_RATE, channels: 1 }),
+				logger: this.runtime.logger,
+				onFrame: (pcm, rtpTimestamp) => this.sendMixFrame(pcm, rtpTimestamp),
+				onMixedChange: (tags) => this.handleMixedChange(tags),
+				onStats: (delta) => this.emit('mixStats', delta),
+				onMetric: (name, errorType) =>
+					this.runtime.writeMetric({ name, worker: 'opus-transcriber-proxy', ...(errorType !== undefined ? { errorType } : {}) }),
+				onFatal: (reason) => {
+					// As when the return path's encoder fails: closing lets the bridge redial, and the failure shows.
+					this.emit('error', `mix: ${reason}`);
+					this.close();
+				},
+			});
+		}
 
 		this.ws.addEventListener('close', (event) => {
 			if (!this.isClosed) {
@@ -262,6 +309,13 @@ export class AgentProxy extends Emitter {
 		this.isClosed = true;
 		this.endTalk();
 		this.pacer.close();
+		if (this.mixer) {
+			this.mixer.close();
+			const stats = this.mixer.stats;
+			this.runtime.logger.info(`agent: mix ended: ${Object.entries(stats).map(([name, value]) => `${name}=${value}`).join(' ')}`);
+			// What was counted since the last periodic report (see AgentMixerOptions.onStats).
+			this.emit('mixStats', this.mixer.takeStatsDelta());
+		}
 		if (this.talkTimeout !== undefined) {
 			clearTimeout(this.talkTimeout);
 			this.talkTimeout = undefined;
@@ -317,6 +371,10 @@ export class AgentProxy extends Emitter {
 				// Per-source stream announcement from the bridge. The exported audio is always Opus 48k;
 				// the customer-leg start is sent when the source's first media arrives (ensureSource).
 				this.runtime.logger.info(`agent: bridge start for tag ${message.start?.tag}`);
+				// For a source already in the mix this is a new stream under the same name: its numbering starts over.
+				if (typeof message.start?.tag === 'string') {
+					this.mixer?.restart(message.start.tag);
+				}
 				break;
 			case 'media':
 				this.handleBridgeMedia(message);
@@ -359,11 +417,60 @@ export class AgentProxy extends Emitter {
 			this.runtime.logger.info(`agent: dominant speaker is now ${speakers[0] ?? 'nobody'}`);
 		}
 		this.speakers = speakers;
-		this.sendToEndpoint({ event: 'speakers', speakers, silence });
+		this.speakersSilence = silence;
+		this.sendSpeakers();
+	}
+
+	/** The speaker order as last heard from the bridge, with the tags in the mix when mixing. */
+	private sendSpeakers(): void {
+		this.sendToEndpoint({
+			event: 'speakers',
+			speakers: this.speakers ?? [],
+			silence: this.speakersSilence,
+			...(this.mixer ? { mixed: this.mixed } : {}),
+		});
+	}
+
+	/** The sources in a talk in the mix changed: tell the customer, and the log (at most every [MIX_LOG_INTERVAL_MS]). */
+	private handleMixedChange(tags: string[]): void {
+		this.mixed = tags;
+		this.sendSpeakers();
+		const now = Date.now();
+		if (now - this.mixLoggedAt < MIX_LOG_INTERVAL_MS) {
+			this.mixChangesSkipped++;
+			return;
+		}
+		const skipped = this.mixChangesSkipped > 0 ? ` (${this.mixChangesSkipped} changes not logged)` : '';
+		this.runtime.logger.info(`agent: mix holds ${tags.length > 0 ? tags.join(', ') : 'nobody'}${skipped}`);
+		this.mixLoggedAt = now;
+		this.mixChangesSkipped = 0;
+	}
+
+	/** One mixed frame from the mixer: announce the stream before its first frame, then send it on the mix tag. */
+	private sendMixFrame(pcm: Uint8Array, timestamp: number): void {
+		if (this.isClosed) {
+			return;
+		}
+		if (!this.mixStartSent) {
+			this.mixStartSent = true;
+			this.sendToEndpoint({
+				event: 'start',
+				start: {
+					tag: AGENT_MIX_TAG,
+					mediaFormat: { ...this.mediaFormat },
+					...(this.options.customParameters !== undefined ? { customParameters: this.options.customParameters } : {}),
+				},
+			});
+		}
+		this.sendToEndpoint({
+			event: 'media',
+			media: { tag: AGENT_MIX_TAG, chunk: this.mixChunk++, timestamp, payload: bytesToBase64(pcm) },
+		});
 	}
 
 	/** Whether this source's audio goes to the agent under the fan-in policy. */
 	private fansIn(tag: string): boolean {
+		// `mix` passes here like `per-source`; handleBridgeMedia then hands the packet to the mixer.
 		if (this.fanIn !== 'dominant') {
 			return true;
 		}
@@ -398,6 +505,17 @@ export class AgentProxy extends Emitter {
 		try {
 			opusFrame = base64ToBytes(payload);
 		} catch {
+			return;
+		}
+		if (this.mixer) {
+			// The mix decodes and places the packet itself; nothing goes out on the source's own tag.
+			const { chunk, timestamp, audioLevel } = message.media;
+			this.mixer.push(tag, {
+				frame: opusFrame,
+				chunk: wireInteger(chunk),
+				timestamp: wireInteger(timestamp),
+				audioLevel: wireInteger(audioLevel),
+			});
 			return;
 		}
 
@@ -565,6 +683,7 @@ export class AgentProxy extends Emitter {
 				application: 'opus-transcriber-proxy',
 				mediaFormat: { ...this.mediaFormat },
 				fanIn: this.fanIn,
+				...(this.mixConfig ? { mix: { ...this.mixConfig.config } } : {}),
 				sessionId: this.sessionId,
 				...(this.options.agentId !== undefined ? { agentId: this.options.agentId } : {}),
 				...(this.options.conference !== undefined ? { conference: this.options.conference } : {}),

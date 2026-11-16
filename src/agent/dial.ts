@@ -16,6 +16,7 @@
 
 import { AgentFanIn, isAgentFanIn } from './fanIn';
 import { AgentEncoding, isAgentEncoding } from './mediaFormat';
+import { MixConfig, parseInlineMix } from './mixConfig';
 import type { AgentDialConfig, DialConfigResult } from './ProvisioningClient';
 
 /** What an /agent connection dials, as resolved from the dial config. */
@@ -27,6 +28,10 @@ export interface ResolvedDial {
 	publicConference?: string;
 	encoding?: AgentEncoding;
 	fanIn?: AgentFanIn;
+	/** The inline options of the `mix` fan-in: the ones the dial config set, checked. */
+	mix?: Partial<MixConfig>;
+	/** Fields of the dial config's `mix` this relay does not know; ignored, and said once by the caller. */
+	unknownMixOptions?: string[];
 }
 
 /**
@@ -65,6 +70,21 @@ export function resolveDialConfig(dial: AgentDialConfig, requireWss: boolean): D
 	if (fanIn !== undefined && !isAgentFanIn(fanIn)) {
 		return permanent(`unsupported fan-in ${fanIn}`);
 	}
+	// Read only for the fan-in it belongs to: a `mix` left on an agent that asks for another fan-in is not an error.
+	let mix: Partial<MixConfig> | undefined;
+	let unknownMixOptions: string[] | undefined;
+	if (fanIn === 'mix') {
+		if (encoding === 'audio/opus') {
+			// A mix is decoded audio; encoding it again is not offered.
+			return permanent('the mix fan-in needs audio/l16, not audio/opus');
+		}
+		const inline = parseInlineMix(dial.mix);
+		if (!inline.ok) {
+			return permanent(`invalid ${inline.error}`);
+		}
+		mix = inline.values;
+		unknownMixOptions = inline.unknownOptions;
+	}
 	let parsed: URL;
 	try {
 		parsed = new URL(dial.endpoint.url);
@@ -83,6 +103,8 @@ export function resolveDialConfig(dial: AgentDialConfig, requireWss: boolean): D
 			...(dial.conference !== undefined ? { publicConference: dial.conference } : {}),
 			...(encoding !== undefined ? { encoding } : {}),
 			...(fanIn !== undefined ? { fanIn } : {}),
+			...(mix !== undefined && Object.keys(mix).length > 0 ? { mix } : {}),
+			...(unknownMixOptions !== undefined && unknownMixOptions.length > 0 ? { unknownMixOptions } : {}),
 		},
 	};
 }

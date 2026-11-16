@@ -28,10 +28,12 @@
  * - endpoint failure closes the bridge socket (session retry via the bridge's reconnect)
  * - audio/opus: no transcoding in either direction; the agent's 20 ms packets carry a decoded audio level
  * - speakers: the bridge's speaker order is passed on; the dominant fan-in forwards only the first source's audio
+ * - mix: every source is decoded and summed into one stream on the tag `mix`; `info.mix` and `speakers.mixed`
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentProxy, CLOSE_CODE_AGENT_ENDED, CLOSE_CODE_ENDPOINT_UNREACHABLE } from '../../src/agentproxy';
+import { DEFAULT_MIX_CONFIG, resolveMixConfig } from '../../src/agent/mixConfig';
 
 class MockWebSocket {
 	sent: string[] = [];
@@ -765,7 +767,9 @@ describe('AgentProxy', () => {
 
 			const messages = endpointWs.sentJson();
 			expect(messages.find((m) => m.event === 'info').fanIn).toBe('per-source');
-			expect(messages.find((m) => m.event === 'info').version).toBe('1.1');
+			expect(messages.find((m) => m.event === 'info').version).toBe('1.2');
+			expect(messages.find((m) => m.event === 'info').mix).toBeUndefined();
+			expect(messages.find((m) => m.event === 'speakers').mixed).toBeUndefined();
 			const speakers = messages.find((m) => m.event === 'speakers');
 			expect(speakers.speakers).toEqual(['u2-a0', 'u1-a0']);
 			expect(speakers.silence).toBe(false);
@@ -822,6 +826,191 @@ describe('AgentProxy', () => {
 
 			expect(started()).toEqual(['u2-a0']);
 			expect(forwarded()).toEqual(['u2-a0#7']);
+		});
+
+		describe('mix', () => {
+			// The mock decoder turns every packet into the two samples 513 and 1027 (bytes 1,2,3,4).
+			const samples = (m: any) => Array.from(new Int16Array(Uint8Array.from(Buffer.from(m.media.payload, 'base64')).buffer).slice(0, 3));
+			const mixMedia = () => endpointWs.sentJson().filter((m) => m.event === 'media');
+
+			async function openMix(inline: Record<string, unknown> = { bufferMs: 0 }, extra: Record<string, unknown> = {}) {
+				vi.useFakeTimers();
+				return openProxy({ fanIn: 'mix', mix: resolveMixConfig({}, inline), ...extra });
+			}
+
+			it('sums the sources into one stream on the mix tag, announced once', async () => {
+				await openMix();
+				bridgeWs.receive(media('u1-a0', 0));
+				bridgeWs.receive(media('u2-a0', 0));
+				await settle();
+				vi.advanceTimersByTime(20);
+				bridgeWs.receive(media('u1-a0', 1));
+				vi.advanceTimersByTime(40);
+
+				expect(started()).toEqual(['mix']);
+				expect(endpointWs.sentJson().find((m) => m.event === 'start').start).toEqual({
+					tag: 'mix',
+					mediaFormat: { encoding: 'audio/l16', sampleRate: 24000, channels: 1 },
+					customParameters: { session: 's1' },
+				});
+				expect(forwarded()).toEqual(['mix#0', 'mix#1']);
+				// Both sources in the first frame, one in the second; the rest of each frame is silence.
+				expect(mixMedia().map(samples)).toEqual([[1026, 2054, 0], [513, 1027, 0]]);
+				expect(mixMedia().map((m) => m.media.timestamp)).toEqual([0, 960]);
+				expect(Buffer.from(mixMedia()[0].media.payload, 'base64')).toHaveLength(960);
+			});
+
+			it('reads chunk and timestamp as the bridge writes them, as decimal strings', async () => {
+				await openMix();
+				// Two packets at once, 20 ms apart on the sender's clock: they belong in two frames, not one.
+				bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: '7', timestamp: '8000001060', payload: OPUS_B64, audioLevel: 30 } });
+				bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: '8', timestamp: '8000002020', payload: OPUS_B64, audioLevel: 30 } });
+				// A repeat of an old chunk is recognised as one.
+				bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: '7', timestamp: '8000001060', payload: OPUS_B64 } });
+				await settle();
+				vi.advanceTimersByTime(60);
+
+				expect(mixMedia().map(samples)).toEqual([[513, 1027, 0], [513, 1027, 0]]);
+				expect(decoder.decodeFrame).toHaveBeenCalledTimes(2);
+			});
+
+			it('follows a source whose numbering the bridge starts again with a new start event', async () => {
+				await openMix();
+				bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: '30000', timestamp: '9600', payload: OPUS_B64 } });
+				await settle();
+				vi.advanceTimersByTime(20);
+				bridgeWs.receive({ event: 'start', start: { tag: 'u1-a0' } });
+				bridgeWs.receive({ event: 'media', media: { tag: 'u1-a0', chunk: '29500', timestamp: '10560', payload: OPUS_B64 } });
+				vi.advanceTimersByTime(40);
+
+				expect(mixMedia().map(samples)).toEqual([[513, 1027, 0], [513, 1027, 0]]);
+			});
+
+			it('announces the fan-in and every option in effect in info', async () => {
+				await openMix({ bufferMs: 80, gain: 'sqrt' });
+				const info = endpointWs.sentJson().find((m) => m.event === 'info');
+				expect(info.fanIn).toBe('mix');
+				expect(info.mix).toEqual({ ...DEFAULT_MIX_CONFIG, bufferMs: 80, gain: 'sqrt' });
+				const line = runtime.logger.info.mock.calls.map((c: string[]) => c[0]).find((m: string) => m.startsWith('agent: mix '));
+				expect(line).toContain('bufferMs=80 (inline)');
+				expect(line).toContain('frameMs=20 (default)');
+				expect(line).toContain('gain=sqrt (inline)');
+			});
+
+			it('uses the defaults when given no options', async () => {
+				vi.useFakeTimers();
+				await openProxy({ fanIn: 'mix' });
+				expect(endpointWs.sentJson().find((m) => m.event === 'info').mix).toEqual(DEFAULT_MIX_CONFIG);
+			});
+
+			it('tells the customer who is in the mix, with the bridge order', async () => {
+				await openMix();
+				bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
+				bridgeWs.receive(media('u1-a0', 0));
+				await settle();
+				vi.advanceTimersByTime(20);
+				vi.advanceTimersByTime(400);
+
+				const hints = endpointWs.sentJson().filter((m) => m.event === 'speakers');
+				expect(hints.map((m) => m.mixed)).toEqual([[], ['u1-a0'], []]);
+				expect(hints.map((m) => m.speakers)).toEqual([['u2-a0', 'u1-a0'], ['u2-a0', 'u1-a0'], ['u2-a0', 'u1-a0']]);
+				expect(runtime.logger.info).toHaveBeenCalledWith(expect.stringContaining('agent: mix holds u1-a0'));
+			});
+
+			it('never mixes the agent itself, and sends nothing on a source tag', async () => {
+				await openMix();
+				bridgeWs.receive(media('agent1-a0', 0));
+				await settle();
+				vi.advanceTimersByTime(60);
+				expect(mixMedia()).toEqual([]);
+				expect(decoder.decodeFrame).not.toHaveBeenCalled();
+			});
+
+			it('continuous: sends silence from the start', async () => {
+				await openMix({ bufferMs: 0, continuous: true });
+				vi.advanceTimersByTime(60);
+				expect(forwarded()).toEqual(['mix#0', 'mix#1', 'mix#2']);
+				expect(mixMedia().map(samples)).toEqual([[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+			});
+
+			it('stops the mixer on close and reports what it did', async () => {
+				const proxy = await openMix();
+				const stats = vi.fn();
+				proxy.on('mixStats', stats);
+				bridgeWs.receive(media('u1-a0', 0));
+				await settle();
+				vi.advanceTimersByTime(20);
+				proxy.close();
+				const sent = mixMedia().length;
+				vi.advanceTimersByTime(200);
+				bridgeWs.receive(media('u1-a0', 1));
+
+				expect(mixMedia()).toHaveLength(sent);
+				expect(stats).toHaveBeenCalledWith(expect.objectContaining({ packets: 1, framesSent: 1 }));
+				const ended = runtime.logger.info.mock.calls.map((c: string[]) => c[0]).find((m: string) => m.startsWith('agent: mix ended:'));
+				expect(ended).toMatch(/\bpackets=1\b/);
+				expect(ended).toMatch(/\bframesSent=1\b/);
+				expect(decoder.free).toHaveBeenCalled();
+			});
+
+			it('is the per-source fan-in, loudly and by name, if it is ever asked to mix Opus', async () => {
+				await openProxy({ fanIn: 'mix', encoding: 'audio/opus' });
+				bridgeWs.receive(media('u1-a0', 3));
+				await settle();
+				expect(forwarded()).toEqual(['u1-a0#3']);
+				expect(runtime.logger.error).toHaveBeenCalledWith(expect.stringContaining('needs PCM'));
+				// What it announces is what it delivers.
+				const info = endpointWs.sentJson().find((m) => m.event === 'info');
+				expect(info.fanIn).toBe('per-source');
+				expect(info.mix).toBeUndefined();
+			});
+
+			it('keeps the bridge\'s silence flag when it reports a change of the mix', async () => {
+				await openMix();
+				bridgeWs.receive({ event: 'speakers', speakers: ['u1-a0'], silence: true });
+				bridgeWs.receive(media('u1-a0', 0));
+				await settle();
+				vi.advanceTimersByTime(20);
+				const hints = endpointWs.sentJson().filter((m) => m.event === 'speakers');
+				expect(hints.map((m) => [m.silence, m.mixed])).toEqual([
+					[true, []],
+					[true, ['u1-a0']],
+				]);
+			});
+
+			it('continuous: announces the stream before its first frame, also for frames queued until the agent socket opens', async () => {
+				vi.useFakeTimers();
+				createProxy({ fanIn: 'mix', mix: resolveMixConfig({}, { continuous: true }) });
+				await settle();
+				vi.advanceTimersByTime(60); // three frames before the socket is open
+				endpointWs.fire('open', {});
+				const events = endpointWs.sentJson().map((m) => (m.event === 'media' ? `media#${m.media.chunk}` : m.event));
+				expect(events).toEqual(['info', 'start', 'media#0', 'media#1', 'media#2']);
+			});
+
+			it('counts a failed decoder and dropped media as the per-source path does', async () => {
+				decoder.ready = Promise.reject(new Error('no wasm'));
+				await openMix();
+				bridgeWs.receive(media('u1-a0', 0));
+				await settle();
+				bridgeWs.receive(media('u1-a0', 1));
+				expect(runtime.writeMetric).toHaveBeenCalledWith({ name: 'agent_decoder_failure', worker: 'opus-transcriber-proxy' });
+				expect(runtime.writeMetric).toHaveBeenCalledWith({ name: 'agent_media_dropped', worker: 'opus-transcriber-proxy', errorType: 'decoder_failed' });
+			});
+
+			it('ends the session when the mix cannot work, so the bridge redials and the failure shows', async () => {
+				decoder.ready = Promise.reject(new Error('no wasm'));
+				const proxy = await openMix();
+				const errors = vi.fn();
+				proxy.on('error', errors);
+				for (const tag of ['u1-a0', 'u2-a0', 'u3-a0']) {
+					bridgeWs.receive(media(tag, 0));
+					await settle();
+				}
+				expect(errors).toHaveBeenCalledWith('mix: no Opus decoder initialises');
+				expect(bridgeWs.closed).toBe(true);
+				expect(endpointWs.closed).toBe(true);
+			});
 		});
 	});
 

@@ -96,14 +96,15 @@ Request:
 | `customParameters` | object(string→string) | no | Opaque; bounded, control chars rejected; echoed to the agent in the media `info`/`start` (`customParameters`). |
 | `callbackUrl` | string | no | HTTPS webhook for this agent's lifecycle events (see **Webhooks**). |
 | `mediaFormat.encoding` | string | no | Audio on the agent's media socket: `audio/l16` (PCM16 24 kHz, default) or `audio/opus` (relayed without transcoding; see the media contract's **Opus** section). Other `mediaFormat` fields are rejected in v1. |
-| `fanIn` | string | no | Which participants' audio the agent hears: `per-source` (every participant as its own stream, default) or `dominant` (only the dominant speaker's, as the bridge ranks them; see the media contract's **Multi-speaker** section). |
+| `fanIn` | string | no | Which participants' audio the agent hears: `per-source` (every participant as its own stream, default), `dominant` (only the dominant speaker's, as the bridge ranks them) or `mix` (one stream, the sum of the participants; needs `audio/l16`). See the media contract's **Multi-speaker** section. |
+| `mix` | object | no | Options of the `mix` fan-in, each optional: `{ "bufferMs": 60, "continuous": false, ... }` (the media contract's **Mix options** lists them). The control plane checks only the shape (a flat object of numbers, booleans and strings); the media relay checks the values when it dials, and reports the agent `failed` with the field's name if one is not usable. What is left out takes the deployment's value. With any other `fanIn` the shape is still checked (a `400` if it is wrong) and the options are then not kept. |
 
 Response `200`:
 ```json
 { "agentId": "agent-support", "sourceName": "agent-support-a0" }
 ```
 
-Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / fanIn / missing or non-`wss` endpoint),
+Errors: `400` (invalid displayName / agentId / customParameters / mediaFormat / fanIn / mix, `fanIn: "mix"` with `audio/opus`, missing or non-`wss` endpoint),
 `401`/`403`, `404` (room not found), `409` (per-room agent cap reached, `agentId` conflict, or end-to-end
 encryption is on in the meeting: `{ "error": "End-to-end encryption is on in this meeting" }`; the agent's media goes
 through the bridge, which cannot decrypt it).
@@ -158,7 +159,7 @@ which reporters take as done.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
-**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a non-`wss` or private endpoint) is reported as `failed` once, with the reason, and the bridge stops redialing; an answer that is not a dial config at all
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn, mix }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a `mix` option it cannot use, a non-`wss` or private endpoint) is reported as `failed` once, with the reason, and the bridge stops redialing; an answer that is not a dial config at all
 (not JSON, no `endpoint.url`) counts as the API being unavailable, and the bridge retries (`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
 passes to the agent in the media `info`; the internal identifiers on the dial URL never reach the agent. On JaaS the
 gateway serves it from its own store.
