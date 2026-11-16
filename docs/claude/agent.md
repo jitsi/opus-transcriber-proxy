@@ -45,8 +45,13 @@ with no reason and the bridge redials, so nothing else records why; `agent: brid
 line is logged for a close the proxy starts: its cause (`end`, a failed dial, a contract violation, an `error` on the endpoint
 socket) is logged where it is decided.
 
+In PCM mode each `media` to the customer has the relay's own per-source `chunk` counter and the `timestamp` of the
+latest bridge packet of that source (`state.lastTimestamp`). The bridge writes `timestamp` as a decimal string, so it
+is read with `wireInteger` (`src/translate/wireInteger.ts`); a packet whose timestamp is not an integer keeps the
+last one.
+
 An agent invited with `mediaFormat.encoding: "audio/opus"` (dial config `mediaFormat`, `agent/mediaFormat.ts`)
-skips both codecs: participant packets go to the customer as exported (the bridge's `chunk`/`timestamp` kept), and the
+skips both codecs: participant packets go to the customer as exported, and the
 customer's packets, which must be one 20 ms Opus packet of ≤ 1275 bytes per `media` (TOC-checked), go straight to the
 pacer. Only the agent's single stream is decoded: to reject packets that don't decode, to drop silence (≤ 2-byte DTX
 packets and anything quieter than level 95) and for the RFC 6464 level the bridge's speaker detection reads. A
@@ -59,6 +64,14 @@ non-ASCII error text. A participant decoder that fails to initialise sends the c
 every control message (`start`, `speakers`, ...) and evict the oldest media when the queue is full, and a new `speakers`
 replaces a queued one, since only the latest matters and it fires on every speaker change; media dropped there or
 by the per-source and return-path buffers counts `agent_media_dropped` and warns once.
+
+In Opus mode `forwardOpus` reads the bridge's `chunk` and `timestamp` with `wireInteger` (the bridge writes decimal
+strings) and sends numbers; a packet without both is not forwarded. The customer gets the bridge's `chunk`, so a gap
+is a lost packet and a late packet has a lower number. One case is renumbered: the bridge's numbering starts again
+with a `start` event for a source that already sends, and can then begin below the old numbers (see `protocol.md`).
+`AGENT_PROTOCOL.md` tells the customer that `chunk` only grows, so the `start` sets `chunkRestarted` on the source,
+and the next packet fixes `chunkOffset` so that it gets the number after the highest chunk sent (`lastSentChunk`). A
+loss across the restart is thus not visible to the customer. No second customer-leg `start` is sent.
 
 The bridge sends agent connects a `speakers` event (the exported sources in its recent-speaker order, the dominant
 speaker first, plus `silence`) whenever the order changes and once on connect; the relay passes it on to the customer

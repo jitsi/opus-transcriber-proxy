@@ -246,3 +246,87 @@ describe('TranslatorConnection incremental usage reporting', () => {
 		expect(runtime.logger.error).toHaveBeenCalled();
 	});
 });
+
+// The bridge writes chunk and timestamp as decimal strings ("chunk":"31456"), see docs/claude/protocol.md.
+describe('TranslatorConnection chunk and timestamp as decimal strings', () => {
+	const media = (chunk: string | number, timestamp: string | number) => ({ event: 'media', media: { tag: 'spk-1', chunk, timestamp, payload: 'AAAA' } });
+	let conn: TranslatorConnection | undefined;
+
+	afterEach(() => {
+		conn?.close();
+		conn = undefined;
+	});
+
+	async function openConnection() {
+		const { runtime, sockets } = makeHarness(0);
+		const writeMetric = vi.fn();
+		runtime.writeMetric = writeMetric;
+		const conceal = vi.fn(() => ({ audioData: new Uint8Array(0), samplesDecoded: 0, sampleRate: SAMPLE_RATE, channels: 1, errors: [] }));
+		runtime.createOpusDecoder = () => ({ ...makeFakeDecoder(), conceal }) as any;
+		conn = new TranslatorConnection('spk-1', { targetLanguage: 'en' }, runtime);
+		await flushMicrotasks();
+		sockets[0].fireOpen();
+		const metricCount = (name: string) => writeMetric.mock.calls.filter(([metric]) => metric.name === name).length;
+		const appended = () => sockets[0].send.mock.calls.length;
+		return { conn, metricCount, appended, conceal };
+	}
+
+	it('conceals a lost packet, limited to the timestamp gap', async () => {
+		const { conn, metricCount, conceal } = await openConnection();
+
+		conn.handleMediaEvent(media('31456', '268460'));
+		// Chunk 31457 never arrives. The timestamp moved by two 20 ms frames (1920 ticks at 48 kHz).
+		conn.handleMediaEvent(media('31458', '270380'));
+
+		expect(metricCount('audio_loss_concealment')).toBe(1);
+		// The fake decoder gives 1 s frames, so the timestamp gap decides: 40 ms at 24 kHz is 960 samples.
+		expect(conceal).toHaveBeenCalledTimes(1);
+		expect(conceal.mock.calls[0][1]).toBe(960);
+	});
+
+	it('conceals nothing when the chunks are consecutive', async () => {
+		const { conn, metricCount, conceal } = await openConnection();
+
+		// "9" to "10": the values are compared as numbers, not as text.
+		conn.handleMediaEvent(media('9', '8640'));
+		conn.handleMediaEvent(media('10', '9600'));
+
+		expect(conceal).not.toHaveBeenCalled();
+		expect(metricCount('audio_packet_discarded')).toBe(0);
+	});
+
+	it('compares a number with a string in one stream', async () => {
+		const { conn, metricCount, conceal } = await openConnection();
+
+		conn.handleMediaEvent(media(0, 0));
+		conn.handleMediaEvent(media('2', '1920'));
+
+		expect(conceal).toHaveBeenCalledTimes(1);
+		expect(metricCount('audio_packet_discarded')).toBe(0);
+	});
+
+	it('discards a packet that arrives after a later one', async () => {
+		const { conn, metricCount, appended } = await openConnection();
+
+		conn.handleMediaEvent(media('31457', '269420'));
+		const appendedBefore = appended();
+		conn.handleMediaEvent(media('31456', '268460'));
+
+		expect(metricCount('audio_packet_discarded')).toBe(1);
+		expect(appended()).toBe(appendedBefore);
+	});
+
+	it('starts the chunk tracking again on resetChunkTracking', async () => {
+		const { conn, metricCount, appended, conceal } = await openConnection();
+
+		conn.handleMediaEvent(media('70000', '268460'));
+		conn.resetChunkTracking();
+		// The bridge numbers a restarted stream from a lower chunk.
+		const appendedBefore = appended();
+		conn.handleMediaEvent(media('4464', '269420'));
+
+		expect(metricCount('audio_packet_discarded')).toBe(0);
+		expect(conceal).not.toHaveBeenCalled();
+		expect(appended()).toBeGreaterThan(appendedBefore);
+	});
+});

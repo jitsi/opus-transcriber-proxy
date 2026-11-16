@@ -284,6 +284,10 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
   }
 }
 ```
+`chunk` and `timestamp` can each be a JSON number or a decimal string (`"chunk": "31456"`). Jitsi Videobridge sends
+strings. `chunk` is the packet's sequence number in its stream: a gap is concealed as a lost packet when the audio
+is decoded, and a packet whose `chunk` is not above the last one is dropped. A `start` event for the tag starts the
+numbering again.
 
 **Ping:**
 ```json

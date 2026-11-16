@@ -19,6 +19,7 @@ import { DEFAULT_PACE_LEAD_MS } from './translate/env';
 import { MediaPacer } from './MediaPacer';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
+import { wireInteger } from './translate/wireInteger';
 import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
@@ -561,9 +562,11 @@ export class TranslatorConnection {
 			worker: 'opus-transcriber-proxy',
 		});
 
-		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
-			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
-				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
+		const chunkNo = wireInteger(mediaEvent.media?.chunk);
+		const timestamp = wireInteger(mediaEvent.media?.timestamp);
+		if (chunkNo !== undefined && timestamp !== undefined) {
+			if (this.lastChunkNo != -1 && chunkNo != this.lastChunkNo + 1) {
+				const chunkDelta = chunkNo - this.lastChunkNo;
 				if (chunkDelta <= 0) {
 					this.runtime.writeMetric({
 						name: 'audio_packet_discarded',
@@ -573,12 +576,12 @@ export class TranslatorConnection {
 				}
 
 				if (this.decoderStatus == 'ready') {
-					const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
+					const timestampDelta = timestamp - this.lastTimestamp;
 					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
 				}
 			}
-			this.lastChunkNo = mediaEvent.media.chunk;
-			this.lastTimestamp = mediaEvent.media.timestamp;
+			this.lastChunkNo = chunkNo;
+			this.lastTimestamp = timestamp;
 		}
 
 		if (this.decoderStatus === 'ready' && this.opusDecoder) {
@@ -596,6 +599,15 @@ export class TranslatorConnection {
 		} else {
 			this.log(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}`);
 		}
+	}
+
+	/**
+	 * Forget the last chunk and timestamp, so the next packet is taken as the first of its stream. Called
+	 * on the source's `start` event, where the bridge's numbering starts again (docs/claude/protocol.md).
+	 */
+	resetChunkTracking(): void {
+		this.lastChunkNo = -1;
+		this.lastTimestamp = -1;
 	}
 
 	private doConcealment(opusFrame: Uint8Array, chunkDelta: number, timestampDelta: number) {

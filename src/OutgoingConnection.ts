@@ -26,6 +26,7 @@ import { createBackend, getBackendConfig, type OpenAICustomOptions } from './bac
 import type { BackendConfig, TranscriptionBackend } from './backends/TranscriptionBackend';
 import { validateAudioFormat, type AudioFormat } from './AudioFormat';
 import { getInstruments } from './telemetry/instruments';
+import { wireInteger } from './translate/wireInteger';
 
 const tagMatcher = /^([0-9a-fA-F]+)-/;
 
@@ -71,7 +72,8 @@ export class OutgoingConnection {
 	private consecutiveRecoveries = 0;
 	private isClosed = false;
 	private backend?: TranscriptionBackend;
-	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number }> = [];
+	/** Frames waiting for the decoder. A `'reset'` entry marks where the chunk numbering started again (resetChunkTracking). */
+	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number } | 'reset'> = [];
 	private pendingAudioFrames: string[] = [];
 	/** The audio format the current backend instance was initialized for (set synchronously in reinitializeDecoder). */
 	private activeDesiredFormat: AudioFormat | undefined;
@@ -548,8 +550,8 @@ export class OutgoingConnection {
 		instruments.clientAudioChunksTotal.add(1);
 		instruments.clientAudioBytesTotal.add(audioFrame.length);
 
-		const chunkNo = Number.isInteger(mediaEvent.media?.chunk) ? (mediaEvent.media.chunk as number) : NO_CHUNK_INFO;
-		const timestamp = Number.isInteger(mediaEvent.media?.timestamp) ? (mediaEvent.media.timestamp as number) : NO_CHUNK_INFO;
+		const chunkNo = wireInteger(mediaEvent.media?.chunk) ?? NO_CHUNK_INFO;
+		const timestamp = wireInteger(mediaEvent.media?.timestamp) ?? NO_CHUNK_INFO;
 
 		const backendStatus = this.backend?.getStatus();
 
@@ -642,8 +644,12 @@ export class OutgoingConnection {
 		const queuedPayloads = [...this.pendingInputFrames];
 		this.pendingInputFrames = [];
 
-		for (const { frame, chunkNo, timestamp } of queuedPayloads) {
-			this.decodeAndSend(frame, chunkNo, timestamp);
+		for (const queued of queuedPayloads) {
+			if (queued === 'reset') {
+				this.decoder?.reset();
+			} else {
+				this.decodeAndSend(queued.frame, queued.chunkNo, queued.timestamp);
+			}
 		}
 	}
 
@@ -798,12 +804,17 @@ export class OutgoingConnection {
 	}
 
 	/**
-	 * Reset chunk tracking state. Call this when the session is reattached to a new WebSocket
-	 * to prevent frames from being discarded as "reordered" when chunk numbers restart from 0.
+	 * Reset chunk tracking state. Call this when the chunk numbering of the stream starts again, so
+	 * that frames are not discarded as "reordered": when the session is reattached to a new WebSocket,
+	 * and on a repeated `start` event (docs/claude/protocol.md says why the new numbers can be lower).
+	 * Frames that wait for the decoder have the old numbering, so the reset is also queued behind them.
 	 */
 	resetChunkTracking(): void {
 		logger.info(`Resetting chunk tracking for tag ${this.localTag}`);
 		this.decoder?.reset();
+		if (this.pendingInputFrames.length > 0) {
+			this.pendingInputFrames.push('reset');
+		}
 	}
 
 	close(): void {

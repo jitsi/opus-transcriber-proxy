@@ -30,6 +30,7 @@ native deployment never loads the WASM files and a WASM deployment never require
 **AudioDecoder** (`src/AudioDecoder.ts`)
 - Interface for format-agnostic audio decoding with chunk-sequence tracking
 - `decodeChunk()` returns `DecodedAudio[]` (with `audioData: Uint8Array`) or `null` for out-of-order packets
+- `chunkNo` and `timestamp` are `media.chunk` and `media.timestamp`, which `OutgoingConnection` reads with `wireInteger` (a number or a decimal string; the bridge sends strings, see `protocol.md`). `NO_CHUNK_INFO` (-1) replaces a field that is absent or is not an integer. The two fields are read separately: without `chunk` the decoder checks nothing for that packet, and without `timestamp` it only loses the timestamp limit on concealment
 - `DecodedAudio.kind` distinguishes `'normal'` from `'concealment'` frames (for metrics)
 - `DecodedAudio.samplesDecoded` is 0 for non-PCM pass-through (`PassThroughDecoder`)
 - Implementations: `OpusAudioDecoder`, `L16Decoder`, `PassThroughDecoder`
@@ -43,6 +44,7 @@ native deployment never loads the WASM files and a WASM deployment never require
 **OpusAudioDecoder** (`src/OpusDecoder/OpusAudioDecoder.ts`)
 - Implements `AudioDecoder` with packet-loss concealment logic
 - Wraps the low-level `OpusDecoder`; handles gap detection and concealment frames
+- A chunk gap gives one concealment frame before the packet: lost frames x the size of the last decoded frame, but not more than the timestamp gap and not more than 120 ms. A gap of any length thus adds at most 120 ms of audio. Silence (DTX) is not a gap (the chunks stay consecutive), so nothing is added for it
 - Decodes Opus frames to mono PCM at a configurable output rate (default 24kHz; 16kHz when requested by the xAI backend). Supported rates: 8/12/16/24/48kHz
 
 **L16Decoder** (`src/L16Decoder.ts`)
@@ -93,6 +95,9 @@ native deployment never loads the WASM files and a WASM deployment never require
 - When adding a new backend, implement `getDesiredAudioFormat(inputFormat): AudioFormat`. Return `{ encoding: 'l16', sampleRate: 24000 }` for PCM or `{ ...inputFormat }` (shallow copy) for raw pass-through. Do not return the `inputFormat` reference directly. This method is called on every `reinitializeDecoder` call (not just once at construction), so it must be a pure function of `inputFormat` for a given backend configuration. If the method has connect-time side effects (like `DeepgramBackend` storing `negotiatedFormat`), it will also be called on any new backend instance before `connect()`, so those side effects will be applied correctly.
 - `AudioFormat.encoding` is a lowercase union type: `'opus' | 'ogg' | 'l16'`. The client-facing `'ogg-opus'` value is normalised to `'ogg'` by `validateAudioFormat()`, and all incoming encodings are lowercased before validation so case-insensitive client values are accepted.
 - `OggOpusDecapsulator` only requires an `OpusHead` packet when its first page is a beginning-of-stream page (Ogg `header_type & 0x02`). If the first page seen is a non-BOS page — which happens when a client reconnects and resumes an existing Ogg stream mid-way after a server/container restart, without replaying the headers — it logs a warning and decodes from that point instead of throwing. This matters for any backend that requests `l16` from `ogg` input (e.g. xAI always, Deepgram with `DEEPGRAM_ENCODING=linear16`), which routes audio through `CascadedDecoder(OggOpusDecapsulator → OpusAudioDecoder)`. Backends on the pass-through path (`PassThroughDecoder`) never hit this validation.
+
+- **Gap detection runs on bridge traffic** (since the readers use `wireInteger`; with the earlier `Number.isInteger` test every bridge packet reached the decoders as `NO_CHUNK_INFO`). For a lost packet, a PCM backend (OpenAI, Gemini, Mistral, xAI `l16`, Deepgram `linear16`) receives concealment audio (metric `audio_loss_concealment`), so slightly more audio goes to the provider than the packets carry. Every decoder, pass-through included, drops a packet whose chunk is not above the last one (metric `audio_packet_discarded`). So for a packet that arrives late, a PCM backend gets the concealment for its gap and then the packet is dropped; a pass-through backend only has the packet dropped. `resources/sample.jsonl` has no gap and no late packet, so a replay of it exercises neither.
+- **Reset the chunk tracking when the numbering starts again** (`AudioDecoder.reset()`, through `OutgoingConnection.resetChunkTracking()`): on a session reattach and on a `start` event for a tag that has a connection. `protocol.md` says why the numbers after either can be below the last chunk. Frames that wait for a decoder that is not ready have the old numbering, so `resetChunkTracking` also queues a `'reset'` entry behind them in `pendingInputFrames`, and the decoder is reset at that place when the queue is processed.
 
 ## Environment variables
 

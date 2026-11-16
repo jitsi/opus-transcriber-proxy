@@ -48,6 +48,7 @@ vi.mock('../../src/TranslatorConnection', () => ({
 		this.inputSourceName = inputSourceName;
 		this.targetLanguage = options.targetLanguage;
 		this.handleMediaEvent = vi.fn();
+		this.resetChunkTracking = vi.fn();
 		this.close = vi.fn();
 		this.onClosed = undefined;
 		this.onError = undefined;
@@ -263,6 +264,34 @@ describe('TranslatorProxy (sources model)', () => {
 		MockedConnection.mock.instances.forEach((inst) => {
 			expect((inst as any).handleMediaEvent).toHaveBeenCalledTimes(1);
 		});
+	});
+
+	it('resets the chunk tracking of every direction of a source on its start event', () => {
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+		mockWebSocket.emit('message', {
+			data: sourcesMessage(['523834112-a0', 'other-a0'], ['523834112-a0.en', '523834112-a0.de', 'other-a0.en']),
+		});
+		// The bridge numbers the chunks of a stream from its start event.
+		mockWebSocket.emit('message', {
+			data: JSON.stringify({ event: 'start', start: { tag: '523834112-a0', mediaFormat: { encoding: 'opus', sampleRate: 48000, channels: 2 } } }),
+		});
+
+		const resets = MockedConnection.mock.instances.map((inst: any) => [inst.inputSourceName, inst.targetLanguage, inst.resetChunkTracking.mock.calls.length]);
+		expect(resets.sort()).toEqual([
+			['523834112-a0', 'de', 1],
+			['523834112-a0', 'en', 1],
+			['other-a0', 'en', 0],
+		]);
+	});
+
+	it('ignores a start event with no tag, or for a source with no direction', () => {
+		new TranslatorProxy(mockWebSocket, {}, mockRuntime);
+		mockWebSocket.emit('message', { data: sourcesMessage(['523834112-a0'], ['523834112-a0.en']) });
+		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'start' }) });
+		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'start', start: { tag: 7 } }) });
+		mockWebSocket.emit('message', { data: JSON.stringify({ event: 'start', start: { tag: 'other-a0' } }) });
+
+		expect((MockedConnection.mock.instances[0] as any).resetChunkTracking).not.toHaveBeenCalled();
 	});
 
 	it('ignores media for a source with no requested translations', () => {
