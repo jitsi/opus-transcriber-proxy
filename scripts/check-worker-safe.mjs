@@ -38,6 +38,7 @@ const CORE_FILES = [
 	'src/translate/messages.ts',
 	'src/translate/env.ts',
 	'src/translate/wireInteger.ts',
+	'src/translate/chunkOrder.ts',
 	'src/translate/timers.ts',
 	'src/buildInfo.ts',
 	'src/closeEvent.ts',

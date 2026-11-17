@@ -103,8 +103,9 @@ async function flushMicrotasks(): Promise<void> {
 	for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
+/** A media event as the bridge sends it: `chunk` and `timestamp` are decimal strings. */
 function mediaEvent(tag: string, chunk: number) {
-	return { event: 'media', media: { tag, chunk, timestamp: chunk * 960, payload: 'AAAA' } };
+	return { event: 'media', media: { tag, chunk: String(chunk), timestamp: String(chunk * 960), payload: 'AAAA' } };
 }
 
 describe('TranslatorConnection incremental usage reporting', () => {
@@ -268,7 +269,7 @@ describe('TranslatorConnection chunk and timestamp as decimal strings', () => {
 		sockets[0].fireOpen();
 		const metricCount = (name: string) => writeMetric.mock.calls.filter(([metric]) => metric.name === name).length;
 		const appended = () => sockets[0].send.mock.calls.length;
-		return { conn, metricCount, appended, conceal };
+		return { conn, metricCount, appended, conceal, runtime };
 	}
 
 	it('conceals a lost packet, limited to the timestamp gap', async () => {
@@ -314,6 +315,25 @@ describe('TranslatorConnection chunk and timestamp as decimal strings', () => {
 
 		expect(metricCount('audio_packet_discarded')).toBe(1);
 		expect(appended()).toBe(appendedBefore);
+	});
+
+	// A start event that never arrived must not cost the audio until the numbers catch up.
+	it('takes a chunk far below the last one as a new numbering, and says so once', async () => {
+		const { conn, metricCount, appended, conceal, runtime } = await openConnection();
+
+		conn.handleMediaEvent(media('70000', '268460'));
+		const appendedBefore = appended();
+		// Far below the last chunk: a new numbering. Nothing is concealed across the two numberings.
+		conn.handleMediaEvent(media('4464', '269420'));
+		conn.handleMediaEvent(media('4465', '270380'));
+		// And once more.
+		conn.handleMediaEvent(media('100', '271340'));
+
+		expect(metricCount('audio_packet_discarded')).toBe(0);
+		expect(conceal).not.toHaveBeenCalled();
+		expect(appended()).toBeGreaterThan(appendedBefore);
+		const warnings = vi.mocked(runtime.logger.warn).mock.calls.filter(([message]) => String(message).includes('numbering started again'));
+		expect(warnings.length).toBe(1);
 	});
 
 	it('starts the chunk tracking again on resetChunkTracking', async () => {

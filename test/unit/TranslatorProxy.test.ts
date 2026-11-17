@@ -80,7 +80,8 @@ const mockRuntime: any = {
 function mediaMessage(tag: string) {
 	return JSON.stringify({
 		event: 'media',
-		media: { tag, chunk: 1, timestamp: 1000, payload: 'AAAA' },
+		// As the bridge sends them: decimal strings.
+		media: { tag, chunk: '1', timestamp: '1000', payload: 'AAAA' },
 	});
 }
 

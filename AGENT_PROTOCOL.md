@@ -134,8 +134,8 @@ cannot be one. A serializer that demultiplexes by `tag` needs no change.
 - The mix is later than the audio it is made of by `bufferMs` (60 ms by default) plus up to one
   frame. That delay is what lets the gateway place each speaker's audio by the sender's clock rather
   than by when the packets arrive.
-- A short gap in a speaker's packets is filled by the decoder (up to `concealMs`). The gateway
-  cannot tell a packet lost on the way to the bridge from one the bridge chose not to forward.
+- A short gap in a speaker's packets (packets lost on the way to the bridge) is filled by the
+  decoder, up to `concealMs`.
 - It needs PCM: an agent invited with `mix` and `mediaFormat.encoding: "audio/opus"` is refused
   (reported `failed`).
 - Who is mixed is the meeting's choice, as above: on a deployment whose bridge routes only the
@@ -190,6 +190,9 @@ transcodes nothing:
   sent it (RFC 6716; usually 20 ms, mono-coded, and any Opus decoder opened at the channel count it
   wants accepts it). `chunk` is the bridge's per-source packet index, so a gap in it is a lost packet
   the agent's decoder can conceal; `timestamp` places the packet on the meeting's 48 kHz timeline.
+  A packet that arrives late keeps its own, lower `chunk`. The numbering of a source does not start
+  again during a session: when the participant's stream restarts, it continues after the highest
+  `chunk` sent.
 - **From the agent**, each `media.payload` must be **one 20 ms Opus packet** at 48 kHz, at most 1275
   bytes, one packet per message. The gateway paces and returns it unchanged.
 - **Silence.** Packets of at most 2 bytes (DTX) and packets that decode quieter than −95 dBov

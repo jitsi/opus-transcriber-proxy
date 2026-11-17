@@ -326,6 +326,20 @@ AudioDecoderFactory.createAudioDecoder(inputFormat, desiredFormat)
 sendAudio() called with base64-encoded bytes in the negotiated format
 ```
 
+**Lost and late packets.** The decoder orders the packets of a participant by `media.chunk`. Jitsi Videobridge
+sends `chunk` as a decimal string; the proxy reads a string or a number. What a backend receives then depends on
+the decoder:
+
+| Input → backend format | Lost packet (gap in `chunk`) | Late packet (`chunk` not above the last one) |
+|---|---|---|
+| Opus → `l16` (`OpusAudioDecoder`) | Concealment audio before the next packet, at most 120 ms for each gap | Dropped |
+| Opus → `opus` (pass-through) | Nothing: the backend gets the packets on both sides of the gap | Dropped |
+| Ogg → `l16` or `ogg` | Nothing | Dropped |
+| `l16` → `l16` | Nothing | Dropped |
+
+A backend that gets `l16` from Opus input therefore receives slightly more audio than the packets carry when
+packets are lost. A `start` event for the participant starts the numbering again.
+
 If the desired format changes between calls (e.g. input switches from `opus` to `l16` and
 Deepgram now wants `linear16` instead of `opus`), `OutgoingConnection` closes the old backend
 connection and opens a fresh one before creating the new decoder. This means `getDesiredAudioFormat`

@@ -278,16 +278,30 @@ ws://host:port/transcribe?sessionId=xxx&sendBack=true
   "event": "media",
   "media": {
     "tag": "participant-id",
-    "chunk": 0,
-    "timestamp": 1768341932,
+    "chunk": "31456",
+    "timestamp": "268460",
     "payload": "base64-encoded-audio"
   }
 }
 ```
-`chunk` and `timestamp` can each be a JSON number or a decimal string (`"chunk": "31456"`). Jitsi Videobridge sends
-strings. `chunk` is the packet's sequence number in its stream: a gap is concealed as a lost packet when the audio
-is decoded, and a packet whose `chunk` is not above the last one is dropped. A `start` event for the tag starts the
-numbering again.
+`chunk` and `timestamp` can each be a decimal string, as shown and as Jitsi Videobridge sends them, or a JSON
+number. `chunk` is the packet's sequence number in its stream, and `timestamp` is its time on the 48 kHz RTP clock.
+A packet whose `chunk` is not above the last one is dropped as late. A gap in `chunk` is a lost packet: it is
+concealed only when the input is bare Opus and the provider gets decoded PCM. Ogg input and Opus that is passed
+through to the provider get no concealment.
+
+**Stream start** (optional, before the first `media` of a tag, and again when the stream starts again):
+```json
+{
+  "event": "start",
+  "start": {
+    "tag": "participant-id",
+    "mediaFormat": { "encoding": "opus", "sampleRate": 48000, "channels": 2 }
+  }
+}
+```
+It gives the audio format of the tag. It also starts the `chunk` numbering of the tag again, so the first packet
+after it can have any `chunk`.
 
 **Ping:**
 ```json

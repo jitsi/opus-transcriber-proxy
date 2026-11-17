@@ -16,6 +16,7 @@
 
 import type { AudioDecoder, DecodedAudio } from '../AudioDecoder';
 import { NO_CHUNK_INFO } from '../AudioDecoder';
+import { ChunkOrder } from '../translate/chunkOrder';
 import { OpusDecoder, type OpusDecoderSampleRate } from './OpusDecoder';
 
 /** Opus always uses a 48 kHz clock for RTP timestamps, regardless of output sample rate */
@@ -29,7 +30,8 @@ const SUPPORTED_SAMPLE_RATES: ReadonlySet<number> = new Set([8000, 12000, 16000,
  */
 export class OpusAudioDecoder implements AudioDecoder {
 	private _decoder: OpusDecoder<OpusDecoderSampleRate>;
-	private _lastChunkNo = NO_CHUNK_INFO;
+	onChunkRestart?: () => void;
+	private _order = new ChunkOrder();
 	private _lastTimestamp = NO_CHUNK_INFO;
 	private _lastFrameSamples = -1;
 	private _sampleRate: OpusDecoderSampleRate;
@@ -54,16 +56,17 @@ export class OpusAudioDecoder implements AudioDecoder {
 	decodeChunk(frame: Uint8Array, chunkNo: number, timestamp: number): DecodedAudio[] | null {
 		const results: DecodedAudio[] = [];
 
-		if (chunkNo !== NO_CHUNK_INFO && this._lastChunkNo !== NO_CHUNK_INFO) {
-			const chunkDelta = chunkNo - this._lastChunkNo;
-
-			if (chunkDelta <= 0) {
+		if (chunkNo !== NO_CHUNK_INFO) {
+			const step = this._order.next(chunkNo);
+			if (step === 'old') {
 				return null; // out-of-order or replayed packet — discard
 			}
 
-			const lostFrames = chunkDelta - 1;
-			if (lostFrames > 0 && this._lastFrameSamples > 0) {
-				const lostFramesInSamples = lostFrames * this._lastFrameSamples;
+			if (step.restarted) {
+				// The old and the new numbers do not compare, so there is no gap to conceal.
+				this.onChunkRestart?.();
+			} else if (step.lost > 0 && this._lastFrameSamples > 0) {
+				const lostFramesInSamples = step.lost * this._lastFrameSamples;
 				const timestampDelta = timestamp !== NO_CHUNK_INFO ? timestamp - this._lastTimestamp : 0;
 				const timestampDeltaInSamples = timestampDelta > 0 ? (timestampDelta / OPUS_CLOCK_RATE) * this._sampleRate : Infinity;
 				const samplesToConceal = Math.min(lostFramesInSamples, timestampDeltaInSamples, this._maxConcealmentSamples);
@@ -71,10 +74,7 @@ export class OpusAudioDecoder implements AudioDecoder {
 				const concealed = this._decoder.conceal(frame, samplesToConceal);
 				results.push({ ...concealed, kind: 'concealment' });
 			}
-		}
 
-		if (chunkNo !== NO_CHUNK_INFO) {
-			this._lastChunkNo = chunkNo;
 			if (timestamp !== NO_CHUNK_INFO) {
 				this._lastTimestamp = timestamp;
 			}
@@ -90,7 +90,7 @@ export class OpusAudioDecoder implements AudioDecoder {
 	}
 
 	reset(): void {
-		this._lastChunkNo = NO_CHUNK_INFO;
+		this._order.reset();
 		this._lastTimestamp = NO_CHUNK_INFO;
 		this._lastFrameSamples = -1;
 	}

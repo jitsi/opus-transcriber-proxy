@@ -19,6 +19,7 @@ import { DEFAULT_PACE_LEAD_MS } from './translate/env';
 import { MediaPacer } from './MediaPacer';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
+import { ChunkOrder } from './translate/chunkOrder';
 import { wireInteger } from './translate/wireInteger';
 import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
@@ -178,8 +179,10 @@ export class TranslatorConnection {
 		return this._lastMediaTime;
 	}
 
-	private lastChunkNo: number = -1;
+	/** The order of the source's packets by `chunk`; it also recognises a numbering that started again. */
+	private chunkOrder = new ChunkOrder();
 	private lastTimestamp: number = -1;
+	private warnedChunkRestart = false;
 	private lastOpusFrameSize: number = -1;
 
 	private totalSamplesSent: number = 0;
@@ -565,22 +568,25 @@ export class TranslatorConnection {
 		const chunkNo = wireInteger(mediaEvent.media?.chunk);
 		const timestamp = wireInteger(mediaEvent.media?.timestamp);
 		if (chunkNo !== undefined && timestamp !== undefined) {
-			if (this.lastChunkNo != -1 && chunkNo != this.lastChunkNo + 1) {
-				const chunkDelta = chunkNo - this.lastChunkNo;
-				if (chunkDelta <= 0) {
-					this.runtime.writeMetric({
-						name: 'audio_packet_discarded',
-						worker: 'opus-transcriber-proxy',
-					});
-					return;
-				}
-
-				if (this.decoderStatus == 'ready') {
-					const timestampDelta = timestamp - this.lastTimestamp;
-					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
-				}
+			const step = this.chunkOrder.next(chunkNo);
+			if (step === 'old') {
+				this.runtime.writeMetric({
+					name: 'audio_packet_discarded',
+					worker: 'opus-transcriber-proxy',
+				});
+				return;
 			}
-			this.lastChunkNo = chunkNo;
+
+			if (step.restarted) {
+				// The old and the new numbers do not compare, so there is no gap to conceal.
+				if (!this.warnedChunkRestart) {
+					this.warnedChunkRestart = true;
+					this.runtime.logger.warn(`[${this.connectionId}] The chunk numbering started again for tag ${this.localTag} without a start event`);
+				}
+			} else if (step.lost > 0 && this.decoderStatus == 'ready') {
+				const timestampDelta = timestamp - this.lastTimestamp;
+				this.doConcealment(opusFrame, step.lost + 1, timestampDelta);
+			}
 			this.lastTimestamp = timestamp;
 		}
 
@@ -606,7 +612,7 @@ export class TranslatorConnection {
 	 * on the source's `start` event, where the bridge's numbering starts again (docs/claude/protocol.md).
 	 */
 	resetChunkTracking(): void {
-		this.lastChunkNo = -1;
+		this.chunkOrder.reset();
 		this.lastTimestamp = -1;
 	}
 

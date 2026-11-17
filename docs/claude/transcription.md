@@ -41,7 +41,7 @@ OutgoingConnection (OutgoingConnection.ts) - One per participant (audio stream)
 
 **OutgoingConnection** (`src/OutgoingConnection.ts`)
 - Manages one participant's audio stream
-- Buffers audio frames until decoder is ready
+- Buffers audio frames until the decoder is ready, and decodes them the moment it is, also while the backend still connects (the decoded audio then waits in `pendingAudioFrames`). A frame that arrives later must never be decoded before a queued one (see `audio-codec.md`)
 - Creates an `AudioDecoder` via `AudioDecoderFactory` based on input/output format negotiation
 - Sends decoded (or raw) audio to transcription backend
 - Implements idle commit timeout (forces transcription when audio stops)

@@ -176,6 +176,7 @@ src/
 │   ├── base64.ts              # Runtime-neutral base64 (native/injected fast paths)
 │   ├── env.ts                 # Worker-safe env-var parsing (parseIntOr) shared by both runtimes
 │   ├── wireInteger.ts         # Reads a bridge numeric field sent as a number or a decimal string (worker-safe)
+│   ├── chunkOrder.ts          # Order of a stream's packets by `chunk`: late packets, gaps, a numbering that starts again (worker-safe)
 │   ├── timers.ts              # unrefTimer: the one timer-unref shim (core + XAIBackend)
 │   └── emitter.ts             # Minimal event emitter (no node:events)
 ├── OutgoingConnection.ts      # Per-participant handler

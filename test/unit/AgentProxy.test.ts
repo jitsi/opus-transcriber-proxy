@@ -762,6 +762,45 @@ describe('AgentProxy', () => {
 				expect(endpointWs.sentJson().filter((m) => m.event === 'start').length).toBe(1);
 			});
 
+			it('continues across more than one start', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeMedia('70000', '268460'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('10', '270380'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70001, 70002]);
+			});
+
+			it('continues after the highest chunk, not after a late packet', async () => {
+				await openOpusProxy();
+				for (const chunk of ['70000', '70002', '70001']) bridgeWs.receive(bridgeMedia(chunk, '268460'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70002, 70001, 70003]);
+			});
+
+			// A start event that never arrived must not send the customer's numbering back.
+			it('continues when the numbering starts again with no start event, and says so once', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeMedia('70000', '268460'));
+				// Far below the last chunk: a new numbering.
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				bridgeWs.receive(bridgeMedia('4466', '270380'));
+				// And once more.
+				bridgeWs.receive(bridgeMedia('20', '271340'));
+				await settle();
+
+				// The gap in the second numbering (4465) stays a gap.
+				expect(sentChunks()).toEqual([70000, 70001, 70003, 70004]);
+				const warnings = runtime.logger.warn.mock.calls.filter(([message]: [string]) => String(message).includes('numbering started again'));
+				expect(warnings.length).toBe(1);
+			});
+
 			it('also continues when the new numbering starts above the old one', async () => {
 				await openOpusProxy();
 				bridgeWs.receive(bridgeMedia('100', '268460'));

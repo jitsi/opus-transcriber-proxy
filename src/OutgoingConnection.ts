@@ -72,8 +72,15 @@ export class OutgoingConnection {
 	private consecutiveRecoveries = 0;
 	private isClosed = false;
 	private backend?: TranscriptionBackend;
-	/** Frames waiting for the decoder. A `'reset'` entry marks where the chunk numbering started again (resetChunkTracking). */
-	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number } | 'reset'> = [];
+	/**
+	 * Frames that arrived while the decoder was not ready. They are decoded as soon as it is ready, whatever the
+	 * backend's status (decoded audio waits for the backend in pendingAudioFrames), so that no later frame is
+	 * decoded before them. `resetBefore` marks a frame before which the chunk numbering started again.
+	 */
+	private pendingInputFrames: Array<{ frame: Uint8Array; chunkNo: number; timestamp: number; resetBefore?: true }> = [];
+	/** resetChunkTracking() ran with frames queued: the next queued frame, or the end of the queue, gets the reset. */
+	private resetAfterQueuedFrames = false;
+	private warnedChunkRestart = false;
 	private pendingAudioFrames: string[] = [];
 	/** The audio format the current backend instance was initialized for (set synchronously in reinitializeDecoder). */
 	private activeDesiredFormat: AudioFormat | undefined;
@@ -355,6 +362,7 @@ export class OutgoingConnection {
 		// Already-decoded audio (pendingAudioFrames) was produced by the old decoder
 		// and must be discarded too.
 		this.pendingInputFrames = [];
+		this.resetAfterQueuedFrames = false;
 		this.pendingAudioFrames = [];
 		this.decoder?.free();
 		this.decoder = undefined;
@@ -388,12 +396,16 @@ export class OutgoingConnection {
 			return;
 		}
 
+		newDecoder.onChunkRestart = () => this.onChunkRestart();
 		this.decoder = newDecoder;
 		this.decoderStatus = 'ready';
 		logger.info(`Audio decoder ready for tag: ${this.localTag} (output: ${desiredFormat.encoding})`);
 
+		// Decode the queued frames now, also while the backend still connects (xAI can take seconds): a frame
+		// that arrives from here on is decoded at once, and it must not get ahead of the queued ones. The decoder
+		// would drop those as out of order afterwards. Their audio waits for the backend in pendingAudioFrames.
+		this.processPendingInputFrames();
 		if (this.backend?.getStatus() === 'connected') {
-			this.processPendingInputFrames();
 			this.processPendingAudioData();
 		}
 	}
@@ -559,7 +571,12 @@ export class OutgoingConnection {
 			this.decodeAndSend(audioFrame, chunkNo, timestamp);
 		} else if (this.decoderStatus === 'pending') {
 			// Queue with chunk info so the decoder can perform gap detection when flushed
-			this.pendingInputFrames.push({ frame: audioFrame, chunkNo, timestamp });
+			if (this.resetAfterQueuedFrames) {
+				this.resetAfterQueuedFrames = false;
+				this.pendingInputFrames.push({ frame: audioFrame, chunkNo, timestamp, resetBefore: true });
+			} else {
+				this.pendingInputFrames.push({ frame: audioFrame, chunkNo, timestamp });
+			}
 			this.metricCache.increment({
 				name: 'audio_packet_queued',
 				worker: 'opus-transcriber-proxy',
@@ -644,12 +661,16 @@ export class OutgoingConnection {
 		const queuedPayloads = [...this.pendingInputFrames];
 		this.pendingInputFrames = [];
 
-		for (const queued of queuedPayloads) {
-			if (queued === 'reset') {
+		for (const { frame, chunkNo, timestamp, resetBefore } of queuedPayloads) {
+			if (resetBefore) {
 				this.decoder?.reset();
-			} else {
-				this.decodeAndSend(queued.frame, queued.chunkNo, queued.timestamp);
 			}
+			this.decodeAndSend(frame, chunkNo, timestamp);
+		}
+		if (this.resetAfterQueuedFrames) {
+			// The reset came after the last queued frame.
+			this.resetAfterQueuedFrames = false;
+			this.decoder?.reset();
 		}
 	}
 
@@ -807,13 +828,22 @@ export class OutgoingConnection {
 	 * Reset chunk tracking state. Call this when the chunk numbering of the stream starts again, so
 	 * that frames are not discarded as "reordered": when the session is reattached to a new WebSocket,
 	 * and on a repeated `start` event (docs/claude/protocol.md says why the new numbers can be lower).
-	 * Frames that wait for the decoder have the old numbering, so the reset is also queued behind them.
+	 * Frames are queued only while the decoder is not ready, and they have the old numbering, so the reset
+	 * then takes its place behind them: before the next frame that is queued, or at the end of the queue.
 	 */
 	resetChunkTracking(): void {
 		logger.info(`Resetting chunk tracking for tag ${this.localTag}`);
 		this.decoder?.reset();
 		if (this.pendingInputFrames.length > 0) {
-			this.pendingInputFrames.push('reset');
+			this.resetAfterQueuedFrames = true;
+		}
+	}
+
+	/** The decoder found that the chunk numbering started again with no reset before it (see ChunkOrder). */
+	private onChunkRestart(): void {
+		if (!this.warnedChunkRestart) {
+			this.warnedChunkRestart = true;
+			logger.warn(`The chunk numbering started again for tag ${this.localTag} without a start event`);
 		}
 	}
 

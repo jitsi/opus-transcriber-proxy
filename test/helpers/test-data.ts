@@ -56,15 +56,15 @@ export const TEST_DECODED_AUDIO: OpusDecodedAudio<24000> = {
 	channels: 1,
 };
 
-// WebSocket media events
+// WebSocket media events. `chunk` and `timestamp` are decimal strings, as the bridge sends them.
 export const TEST_MEDIA_EVENTS = {
 	valid_media_event: {
 		event: 'media',
 		media: {
 			tag: 'test-tag-123',
 			payload: TEST_OPUS_FRAMES.valid_frame_20ms,
-			chunk: 0,
-			timestamp: 0,
+			chunk: '0',
+			timestamp: '0',
 		},
 	},
 	media_event_with_sequence: {
@@ -72,16 +72,16 @@ export const TEST_MEDIA_EVENTS = {
 		media: {
 			tag: 'test-tag-456',
 			payload: TEST_OPUS_FRAMES.valid_frame_20ms,
-			chunk: 5,
-			timestamp: 100,
+			chunk: '5',
+			timestamp: '100',
 		},
 	},
 	media_event_missing_payload: {
 		event: 'media',
 		media: {
 			tag: 'test-tag-789',
-			chunk: 0,
-			timestamp: 0,
+			chunk: '0',
+			timestamp: '0',
 		},
 	},
 	ping_event: {

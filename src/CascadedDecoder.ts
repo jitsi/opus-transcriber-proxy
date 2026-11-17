@@ -64,6 +64,15 @@ export class CascadedDecoder implements AudioDecoder {
 		return results;
 	}
 
+	/** The outer decoder tracks the chunks, so the report of a numbering that started again comes from it. */
+	get onChunkRestart(): (() => void) | undefined {
+		return this._outer.onChunkRestart;
+	}
+
+	set onChunkRestart(callback: (() => void) | undefined) {
+		this._outer.onChunkRestart = callback;
+	}
+
 	reset(): void {
 		this._outer.reset();
 		this._inner.reset();

@@ -25,6 +25,7 @@ import { computeAudioLevel } from './OpusEncoder/audioLevel';
 import { RtpTimestamper, RTP_CLOCK_RATE, FRAME_DURATION_MS } from './RtpTimestamper';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { Emitter } from './translate/emitter';
+import { ChunkOrder } from './translate/chunkOrder';
 import { wireInteger } from './translate/wireInteger';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder } from './OpusEncoder/opusEncoderTypes';
@@ -123,6 +124,9 @@ interface SourceState {
 	lastSentChunk?: number;
 	/** Opus mode: the bridge sent `start` for the source again, so its numbering starts again with the next packet. */
 	chunkRestarted?: boolean;
+	/** Opus mode: the order of the bridge's chunks, to see a numbering that started again with no `start`. */
+	chunkOrder: ChunkOrder;
+	warnedChunkRestart?: boolean;
 	/** Once-only warnings for this source. */
 	warnedDroppingFailed?: boolean;
 	warnedPendingFull?: boolean;
@@ -380,8 +384,9 @@ export class AgentProxy extends Emitter {
 				if (typeof message.start?.tag === 'string') {
 					// For a source already in the mix this is a new stream under the same name: its numbering starts over.
 					this.mixer?.restart(message.start.tag);
-					// The same for a source that already sends in Opus mode: the bridge's chunk numbering starts again (forwardOpus).
-					const restarted = this.sources.get(message.start.tag);
+					// The same for a source that already sends in Opus mode: the bridge's chunk numbering starts again
+					// (forwardOpus). PCM mode sends the relay's own counter, which no `start` touches.
+					const restarted = this.opus ? this.sources.get(message.start.tag) : undefined;
 					if (restarted !== undefined) {
 						restarted.chunkRestarted = true;
 					}
@@ -559,7 +564,7 @@ export class AgentProxy extends Emitter {
 		if (state !== undefined) {
 			return state;
 		}
-		state = { decoderStatus: 'pending', pendingFrames: [], chunk: 0, lastTimestamp: 0, chunkOffset: 0 };
+		state = { decoderStatus: 'pending', pendingFrames: [], chunk: 0, lastTimestamp: 0, chunkOffset: 0, chunkOrder: new ChunkOrder() };
 		this.sources.set(tag, state);
 
 		// Announce the stream to the customer before its first media.
@@ -605,10 +610,12 @@ export class AgentProxy extends Emitter {
 	}
 
 	/**
-	 * Opus mode: the participant's packet goes out as exported, keeping the bridge's numbering so gaps show loss.
-	 * The bridge's numbering starts again with a `start` event for the source and can then begin below the old
-	 * numbers (docs/claude/protocol.md). The customer is told that `chunk` only grows, so from such a `start` on
-	 * an offset continues the customer's numbering right after the highest chunk it got.
+	 * Opus mode: the participant's packet goes out as exported, keeping the bridge's numbering: a gap shows a lost
+	 * packet, and a packet that arrives late has a chunk below the highest one sent. The bridge's numbering starts
+	 * again with a `start` event for the source and can then begin far below the old numbers
+	 * (docs/claude/protocol.md). The customer is told that the numbering does not start again, so from there on an
+	 * offset continues it right after the highest chunk sent. The same is done when the numbering starts again with
+	 * no `start` before it (see ChunkOrder), so that a missed event does not reach the customer either.
 	 */
 	private forwardOpus(tag: string, media: { chunk?: unknown; timestamp?: unknown; payload: string }): void {
 		// The bridge writes both as decimal strings; the customer gets numbers (AGENT_PROTOCOL.md).
@@ -618,11 +625,22 @@ export class AgentProxy extends Emitter {
 			return;
 		}
 		const state = this.ensureSource(tag);
+		let restarted = false;
 		if (state.chunkRestarted) {
 			state.chunkRestarted = false;
-			if (state.lastSentChunk !== undefined) {
-				state.chunkOffset = state.lastSentChunk + 1 - bridgeChunk;
+			state.chunkOrder.reset();
+			restarted = true;
+		}
+		const step = state.chunkOrder.next(bridgeChunk);
+		if (step !== 'old' && step.restarted) {
+			restarted = true;
+			if (!state.warnedChunkRestart) {
+				state.warnedChunkRestart = true;
+				this.runtime.logger.warn(`agent: the chunk numbering started again for tag ${tag} without a start event`);
 			}
+		}
+		if (restarted && state.lastSentChunk !== undefined) {
+			state.chunkOffset = state.lastSentChunk + 1 - bridgeChunk;
 		}
 		const chunk = bridgeChunk + state.chunkOffset;
 		state.lastSentChunk = Math.max(state.lastSentChunk ?? chunk, chunk);
