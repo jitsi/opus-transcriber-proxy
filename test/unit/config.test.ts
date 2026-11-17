@@ -117,6 +117,25 @@ describe('config', () => {
 			}
 		});
 
+		it('reads the mix options this deployment sets, and only those', async () => {
+			vi.stubEnv('AGENT_MIX_BUFFER_MS', '80');
+			vi.stubEnv('AGENT_MIX_GAIN', 'average');
+			const { config } = await import('../../src/config');
+			expect(config.agent.mix).toEqual({ bufferMs: 80, gain: 'average' });
+		});
+
+		it('leaves out a mix option it cannot use, and says so', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				vi.stubEnv('AGENT_MIX_FRAME_MS', '25');
+				const { config } = await import('../../src/config');
+				expect(config.agent.mix).toEqual({});
+				expect(warn.mock.calls.flat().join('\n')).toMatch(/AGENT_MIX_FRAME_MS=25 is not usable/);
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
 		it('keeps a zero AGENT_PACE_LEAD_MS, which the pacer raises to one frame', async () => {
 			vi.stubEnv('AGENT_PACE_LEAD_MS', '0');
 			const { config } = await import('../../src/config');

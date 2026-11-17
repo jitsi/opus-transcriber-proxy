@@ -28,8 +28,9 @@ concealment, no out-of-order check, and timestamp 0 or no audio at all on the `/
   that the bridge forwards. A gap is a packet that the bridge did not receive. A packet that arrives late has a
   `chunk` below the last one.
 - Silence makes no gap, only a jump of `timestamp`. A sender in DTX sends no packet and uses no sequence number.
-  The bridge also discards silence and muted audio itself, and renumbers the stream past the packets that it
-  discards (`DiscardableDiscarder`, before the exporter). In `resources/sample.jsonl` one source jumps 32 s with
+  The bridge also discards some audio itself (silence, a muted sender, a source that its loudest filter
+  rejects), and renumbers the stream past the packets that it discards (`DiscardableDiscarder`, before the
+  exporter). In `resources/sample.jsonl` one source jumps 32 s with
   consecutive chunks.
 - `timestamp` is on the 48 kHz RTP clock, offset so that the streams of one bridge socket share a timeline.
 - **A `start` event starts the numbering again.** The bridge sends `start` when it creates the state of a stream:

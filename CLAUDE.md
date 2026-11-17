@@ -156,6 +156,16 @@ src/
 ├── TranslatorConnection.ts    # One per (source, language) OpenAI realtime session
 ├── RtpTimestamper.ts          # Per-source RTP chunk/timestamp bookkeeping
 ├── MediaPacer.ts              # Releases synthetic audio at real time + a lead (translate return path and /agent)
+├── agentproxy.ts              # /agent: relays a conference's audio to a customer voice agent and back
+├── agent/
+│   ├── ProvisioningClient.ts  # Fetches an agent's dial config and reports its lifecycle to the provisioning API
+│   ├── dial.ts                # Dial config -> what to dial, or why not (transient / permanent)
+│   ├── endpointGuard.ts       # Refuses customer endpoints on private or internal addresses
+│   ├── closeReason.ts         # Cuts a WebSocket close reason to its 123 bytes
+│   ├── mediaFormat.ts         # audio/l16 | audio/opus, and the duration of an Opus packet
+│   ├── fanIn.ts               # per-source | dominant | mix
+│   ├── mixConfig.ts           # The mix fan-in's options and their four layers (default, variable, KV, inline)
+│   └── mix/                   # The mix fan-in: SourceTrack (decode + placement), Mixer (clock + sum), limiter, metrics
 ├── serverInfo.ts              # Server `info` message builder (Node)
 ├── buildInfo.ts               # GIT_HASH baked in at bundle time
 ├── translate/

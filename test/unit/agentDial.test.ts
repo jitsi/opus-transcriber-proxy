@@ -47,6 +47,52 @@ describe('agent dial resolution', () => {
 		expect(resolveDialConfig({ endpoint: { url: 'ws://bot.example.com/ws' } }, true)).toMatchObject({ kind: 'permanent', report: true });
 	});
 
+	describe('the mix fan-in', () => {
+		it('carries the inline options the dial config sets, checked', () => {
+			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mix: { bufferMs: 80, continuous: true } }, true)).toMatchObject({
+				kind: 'dial',
+				dial: { fanIn: 'mix', mix: { bufferMs: 80, continuous: true } },
+			});
+		});
+
+		it('carries no options when the dial config sets none, so every one falls to the deployment or the default', () => {
+			const resolution = resolveDialConfig({ ...ok, fanIn: 'mix' }, true);
+			expect(resolution).toMatchObject({ kind: 'dial', dial: { fanIn: 'mix' } });
+			expect((resolution as any).dial).not.toHaveProperty('mix');
+			expect((resolution as any).dial).not.toHaveProperty('unknownMixOptions');
+		});
+
+		it('is permanent with a report for an option it cannot use, naming it', () => {
+			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mix: { bufferMs: 9000 } }, true)).toEqual({
+				kind: 'permanent',
+				reason: expect.stringMatching(/^invalid mix\.bufferMs: /),
+				report: true,
+			});
+			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mix: 'loud' }, true)).toMatchObject({ kind: 'permanent', reason: 'invalid mix: must be an object' });
+		});
+
+		it('names the options it does not know and dials all the same', () => {
+			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mix: { bufferMs: 40, reverb: 1 } }, true)).toMatchObject({
+				kind: 'dial',
+				dial: { mix: { bufferMs: 40 }, unknownMixOptions: ['reverb'] },
+			});
+		});
+
+		it('is permanent with Opus on the customer leg: a mix is decoded audio', () => {
+			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mediaFormat: { encoding: 'audio/opus' } }, true)).toEqual({
+				kind: 'permanent',
+				reason: 'the mix fan-in needs audio/l16, not audio/opus',
+				report: true,
+			});
+		});
+
+		it('does not read mix for another fan-in, not even a bad one', () => {
+			const resolution = resolveDialConfig({ ...ok, fanIn: 'dominant', mix: { bufferMs: 9000 } }, true);
+			expect(resolution).toMatchObject({ kind: 'dial', dial: { fanIn: 'dominant' } });
+			expect((resolution as any).dial).not.toHaveProperty('mix');
+		});
+	});
+
 	it('allows ws:// only when wss is not required', () => {
 		expect(resolveDialConfig({ endpoint: { url: 'ws://127.0.0.1:9091/ws' } }, false)).toMatchObject({ kind: 'dial', dial: { url: 'ws://127.0.0.1:9091/ws' } });
 	});

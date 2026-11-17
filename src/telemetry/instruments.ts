@@ -46,6 +46,7 @@ interface Instruments {
 	translationPacedFramesDroppedTotal: Counter;
 	agentDialFailuresTotal: Counter;
 	agentStatusReportsGivenUpTotal: Counter;
+	agentMixEventsTotal: Counter;
 	transcriptionsReceivedTotal: Counter;
 	transcriptionsDeliveredTotal: Counter;
 	dispatcherMessagesSentTotal: Counter;
@@ -152,6 +153,14 @@ function createInstruments(): Instruments {
 		agentStatusReportsGivenUpTotal: meter.createCounter('otp_agent_status_reports_given_up_total', {
 			description: 'Agent lifecycle reports to the provisioning API that gave up after all retries',
 			unit: '{reports}',
+		}),
+
+		// Labels: event (see mixEventCounts in agent/mix/metrics.ts). Added to every 30 s and when a session ends,
+		// from the mixer's own counts.
+		agentMixEventsTotal: meter.createCounter('otp_agent_mix_events_total', {
+			description:
+				'What the mix fan-in of /agent did: packets in and frames out, and what went wrong with them (late, out of order, dropped, not decoded, concealed, limited, capped, failed, skipped)',
+			unit: '{events}',
 		}),
 
 		transcriptionsReceivedTotal: meter.createCounter('otp_transcriptions_received_total', {

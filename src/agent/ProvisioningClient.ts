@@ -31,6 +31,8 @@ export interface AgentDialConfig {
 	mediaFormat?: { encoding: string };
 	/** The fan-in the invite asked for, unchecked likewise. */
 	fanIn?: string;
+	/** The `mix` fan-in's inline options, unchecked likewise (see `agent/mixConfig.ts`). */
+	mix?: unknown;
 }
 
 /** The outcome of fetching a dial config, so the caller can tell a retryable failure from a permanent one. */
@@ -194,6 +196,7 @@ export class ProvisioningClient {
 			conference?: unknown;
 			mediaFormat?: { encoding?: unknown };
 			fanIn?: unknown;
+			mix?: unknown;
 		};
 		try {
 			parsed = JSON.parse(response.body);
@@ -219,6 +222,7 @@ export class ProvisioningClient {
 				: {}),
 			...(typeof encoding === 'string' ? { mediaFormat: { encoding } } : {}),
 			...(typeof fanIn === 'string' ? { fanIn } : {}),
+			...(parsed.mix !== undefined && parsed.mix !== null ? { mix: parsed.mix } : {}),
 			...(customParameters !== null && typeof customParameters === 'object' && !Array.isArray(customParameters)
 				? { customParameters: customParameters as Record<string, unknown> }
 				: {}),
