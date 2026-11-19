@@ -6,8 +6,9 @@ third-party voice-agent framework) targets, so it must not change in a breaking 
 see **Versioning** below.
 
 `protocol` identifier: `jitsi-agent-media`. Current `version`: `1.2`. v1.1 added `info.fanIn` and the
-`speakers` event; a v1.0 consumer ignores both. v1.2 adds the `mix` fan-in, `info.mix` and `speakers.mixed`;
-an agent gets none of them unless its invite asks for `fanIn: "mix"`.
+`speakers` event; a v1.0 consumer ignores both. v1.2 adds the `mix` fan-in, `info.mix` and `speakers.mixed`.
+An invite that names no fan-in gets the mix (it got `per-source` before that became the default): an agent
+that depends on separate streams names `per-source` in its invite.
 
 ## Roles and transport
 
@@ -31,6 +32,9 @@ an agent gets none of them unless its invite asks for `fanIn: "mix"`.
   field that an agent chooses at invite (`fanIn`, `mediaFormat.encoding`) are minor.
   **Both sides MUST ignore unknown `event` types and unknown object fields.** This rule is what
   lets the protocol evolve without breaking a shipped serializer.
+- The default fan-in is not part of this contract: the provisioning API sets it at invite, and
+  `info.fanIn` says which one is in effect. It was `per-source` and is now `mix` (`per-source` for an
+  Opus agent); a provisioning API from before that change still gives `per-source`.
 - A **breaking change bumps MAJOR** (e.g. renaming a field, changing `payload` encoding, changing
   the meaning of `tag`). A serializer may then branch on MAJOR or refuse an unknown MAJOR.
 - Anything marked *reserved* here is defined but not yet emitted; using it later is additive, not
@@ -55,7 +59,7 @@ an agent gets none of them unless its invite asks for `fanIn: "mix"`.
 | `version` | string | yes | `MAJOR.MINOR` of this contract. |
 | `application` | string | yes | Gateway build identifier (informational). |
 | `mediaFormat` | object | yes | Default audio format for the connection (per-stream `start` may restate it). |
-| `fanIn` | string | no (v1.1) | Which participants' audio arrives: `per-source` (every exported source, the default), `dominant` (only the dominant speaker's) or `mix` (v1.2: one stream, the sum of the sources); see **Multi-speaker**. Absent from a v1.0 gateway, meaning `per-source`. |
+| `fanIn` | string | no (v1.1) | Which participants' audio arrives: `mix` (v1.2: one stream, the sum of the sources), `per-source` (every exported source) or `dominant` (only the dominant speaker's); see **Multi-speaker**. An invite that names none gets `mix`, or `per-source` with `audio/opus`. Absent from a v1.0 gateway, meaning `per-source`. |
 | `mix` | object | no (v1.2) | Only with `fanIn: "mix"`: every option of the mix in effect for this session (see **Mix options**). |
 | `sessionId` | string | yes | Unique per dial, so a redial after a bridge reconnect is distinguishable from a new session. |
 | `agentId` | string | no | The agent being dialed, as provisioned. Lets one server host many bots. Absent only on the dev `?endpoint=` path. |
@@ -91,7 +95,9 @@ an agent gets none of them unless its invite asks for `fanIn: "mix"`.
 
 ### Multi-speaker
 
-Unless the agent asks for the `mix` fan-in (below), the gateway does not mix. Each participant source the agent may hear arrives as its own stream: a
+An agent whose invite names no fan-in gets the `mix` (below): one stream of everyone. An Opus agent
+cannot get a mix, and gets `per-source`. With the `per-source` and `dominant` fan-ins the gateway does
+not mix. Each participant source the agent may hear arrives as its own stream: a
 `start` with a `tag`, then `media` frames carrying that `tag`. Frames of different tags are
 interleaved on the one socket in arrival order, 20 ms of audio each, so several people talking at
 once produce several concurrent streams.
@@ -111,8 +117,8 @@ forwards only the audio of the first `tag` in the bridge's speaker order (below)
 the order changes. The frames still carry each speaker's own `tag`, so a serializer that demultiplexes
 by `tag` needs no change; it simply never sees two tags active at once. Selection is the bridge's
 dominant-speaker ranking, the one the meeting UI highlights, so the first few hundred milliseconds of
-a new speaker are not forwarded until the bridge promotes them. The default, `per-source`, forwards
-every exported tag.
+a new speaker are not forwarded until the bridge promotes them. `per-source` forwards every exported
+tag.
 
 **Mix** (v1.2). An agent invited with `fanIn: "mix"` gets one stream: the sum of every source the
 bridge forwards, on the single tag `mix`. There is one `start` for that tag, before its first frame,
@@ -266,12 +272,11 @@ the agent socket opens, `failed` with the reason above when the dial fails or th
 
 ## Locked design decisions (forward-compatible)
 
-1. **Audio is always keyed by `tag`; the agent demultiplexes.** By default inbound audio is
-   per-source (see **Multi-speaker**). An agent that wants a single stream mixes or selects in its
-   own code or serializer, asks for the `dominant` fan-in (v1.1), which selects rather than mixes and
-   still delivers per-`tag` `media`, one tag at a time, or asks for the `mix` fan-in (v1.2), whose
-   audio arrives as one more `tag` (`mix`) in the same envelope. In every case a serializer that
-   handles per-`tag` `media` needs no change.
+1. **Audio is always keyed by `tag`; the agent demultiplexes.** With the `per-source` fan-in every
+   source arrives on its own tag (see **Multi-speaker**). The `dominant` fan-in (v1.1) selects rather
+   than mixes and still delivers per-`tag` `media`, one tag at a time. The `mix` fan-in (v1.2), which
+   an invite gets when it names none and its audio is PCM, arrives as one more `tag` (`mix`) in the
+   same envelope. In every case a serializer that handles per-`tag` `media` needs no change.
 
 2. **Teardown is the `end` event** (above), reserved/defined now so the contract never has to grow
    a breaking teardown path later.

@@ -21,7 +21,10 @@
  */
 export type AgentFanIn = 'per-source' | 'dominant' | 'mix';
 
-export const DEFAULT_AGENT_FAN_IN: AgentFanIn = 'per-source';
+/** The fan-in when none is named: the mix, which most speech models take; Opus cannot be mixed, so per-source. */
+export function defaultAgentFanIn(encoding?: string): AgentFanIn {
+	return encoding === 'audio/opus' ? 'per-source' : 'mix';
+}
 
 export function isAgentFanIn(value: unknown): value is AgentFanIn {
 	return value === 'per-source' || value === 'dominant' || value === 'mix';

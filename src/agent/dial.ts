@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { AgentFanIn, isAgentFanIn } from './fanIn';
+import { AgentFanIn, defaultAgentFanIn, isAgentFanIn } from './fanIn';
 import { AgentEncoding, isAgentEncoding } from './mediaFormat';
 import { MixConfig, parseInlineMix } from './mixConfig';
 import type { AgentDialConfig, DialConfigResult } from './ProvisioningClient';
@@ -27,7 +27,8 @@ export interface ResolvedDial {
 	/** The room as the customer names it; the only form the agent ever sees. */
 	publicConference?: string;
 	encoding?: AgentEncoding;
-	fanIn?: AgentFanIn;
+	/** The dial config's, or the default when it names none. */
+	fanIn: AgentFanIn;
 	/** The inline options of the `mix` fan-in: the ones the dial config set, checked. */
 	mix?: Partial<MixConfig>;
 	/** Fields of the dial config's `mix` this relay does not know; ignored, and said once by the caller. */
@@ -66,10 +67,11 @@ export function resolveDialConfig(dial: AgentDialConfig, requireWss: boolean): D
 		// Speaking another format than the agent asked for would play noise to the meeting.
 		return permanent(`unsupported media format ${encoding}`);
 	}
-	const fanIn = dial.fanIn;
-	if (fanIn !== undefined && !isAgentFanIn(fanIn)) {
-		return permanent(`unsupported fan-in ${fanIn}`);
+	const named = dial.fanIn;
+	if (named !== undefined && !isAgentFanIn(named)) {
+		return permanent(`unsupported fan-in ${named}`);
 	}
+	const fanIn = named ?? defaultAgentFanIn(encoding);
 	// Read only for the fan-in it belongs to: a `mix` left on an agent that asks for another fan-in is not an error.
 	let mix: Partial<MixConfig> | undefined;
 	let unknownMixOptions: string[] | undefined;
@@ -102,7 +104,7 @@ export function resolveDialConfig(dial: AgentDialConfig, requireWss: boolean): D
 			...(dial.customParameters !== undefined ? { customParameters: dial.customParameters } : {}),
 			...(dial.conference !== undefined ? { publicConference: dial.conference } : {}),
 			...(encoding !== undefined ? { encoding } : {}),
-			...(fanIn !== undefined ? { fanIn } : {}),
+			fanIn,
 			...(mix !== undefined && Object.keys(mix).length > 0 ? { mix } : {}),
 			...(unknownMixOptions !== undefined && unknownMixOptions.length > 0 ? { unknownMixOptions } : {}),
 		},
