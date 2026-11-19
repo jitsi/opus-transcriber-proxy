@@ -93,6 +93,50 @@ describe('BackendFactory', () => {
 		delete process.env.GEMINI_MODEL;
 		delete process.env.GEMINI_TRANSCRIPTION_PROMPT;
 		delete process.env.DEEPGRAM_MODEL;
+		delete process.env.OPENAI_CUSTOM_PARTICIPANT_PARAM;
+	});
+
+	describe('openai_custom participant parameter', () => {
+		const customOptions = { openaiCustomUrl: 'wss://stt.example/v1/realtime?intent=transcription', openaiCustomApiKey: 'key' };
+
+		it('passes the custom URL as given when OPENAI_CUSTOM_PARTICIPANT_PARAM is unset', async () => {
+			const { createBackend } = await import('../../../src/backends/BackendFactory');
+			const { OpenAIBackend } = await import('../../../src/backends/OpenAIBackend');
+
+			createBackend('endpoint1-1234', { id: 'endpoint1', tag: 'endpoint1-1234' }, 'openai_custom', customOptions);
+
+			expect(OpenAIBackend).toHaveBeenCalledWith(
+				'endpoint1-1234',
+				{ id: 'endpoint1', tag: 'endpoint1-1234' },
+				'wss://stt.example/v1/realtime?intent=transcription',
+				'key',
+			);
+		});
+
+		it("adds the participant's id to the custom URL when OPENAI_CUSTOM_PARTICIPANT_PARAM is set", async () => {
+			process.env.OPENAI_CUSTOM_PARTICIPANT_PARAM = 'participant';
+			const { createBackend } = await import('../../../src/backends/BackendFactory');
+			const { OpenAIBackend } = await import('../../../src/backends/OpenAIBackend');
+
+			createBackend('endpoint1-1234', { id: 'endpoint1', tag: 'endpoint1-1234' }, 'openai_custom', customOptions);
+
+			expect(OpenAIBackend).toHaveBeenCalledWith(
+				'endpoint1-1234',
+				{ id: 'endpoint1', tag: 'endpoint1-1234' },
+				'wss://stt.example/v1/realtime?intent=transcription&participant=endpoint1',
+				'key',
+			);
+		});
+
+		it('leaves the other backends untouched when OPENAI_CUSTOM_PARTICIPANT_PARAM is set', async () => {
+			process.env.OPENAI_CUSTOM_PARTICIPANT_PARAM = 'participant';
+			const { createBackend } = await import('../../../src/backends/BackendFactory');
+			const { OpenAIBackend } = await import('../../../src/backends/OpenAIBackend');
+
+			createBackend('endpoint1-1234', { id: 'endpoint1' }, 'openai');
+
+			expect(OpenAIBackend).toHaveBeenCalledWith('endpoint1-1234', { id: 'endpoint1' });
+		});
 	});
 
 	describe('createBackend', () => {

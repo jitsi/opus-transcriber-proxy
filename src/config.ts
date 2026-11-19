@@ -171,6 +171,10 @@ export const config = {
 	// Require wss:// for openai_custom provider URL (default true; set to false to allow ws://)
 	openaiCustomRequireWss: process.env.OPENAI_CUSTOM_REQUIRE_WSS !== 'false',
 
+	// Add each participant's id to the openai_custom URL as this query parameter (unset: the URL is
+	// used as given), so the service at that URL knows whose audio each connection carries
+	openaiCustomParticipantParam: process.env.OPENAI_CUSTOM_PARTICIPANT_PARAM || undefined,
+
 	// Opus codec backend: 'wasm' (Emscripten, default; required when running in a Worker) or
 	// 'native' (libopus N-API addon, container-only — faster, needs the compiled .node addon).
 	opus: {
