@@ -15,11 +15,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_AGENT_FAN_IN, isAgentFanIn } from '../../src/agent/fanIn';
+import { defaultAgentFanIn, isAgentFanIn } from '../../src/agent/fanIn';
 
 describe('agent fanIn', () => {
-	it('knows the three fan-in policies, per-source being the default', () => {
-		expect(DEFAULT_AGENT_FAN_IN).toBe('per-source');
+	it('defaults to the mix, and to per-source for Opus, which cannot be mixed', () => {
+		expect(defaultAgentFanIn()).toBe('mix');
+		expect(defaultAgentFanIn('audio/l16')).toBe('mix');
+		expect(defaultAgentFanIn('audio/opus')).toBe('per-source');
+	});
+
+	it('knows the three fan-in policies', () => {
 		expect(isAgentFanIn('per-source')).toBe(true);
 		expect(isAgentFanIn('dominant')).toBe(true);
 		expect(isAgentFanIn('mix')).toBe(true);
