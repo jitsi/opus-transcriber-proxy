@@ -34,6 +34,10 @@ ENABLE_OPENAI_CUSTOM_PROVIDER=true
 # Set to false to allow unencrypted ws:// connections (not recommended in production)
 OPENAI_CUSTOM_REQUIRE_WSS=false
 
+# Add each participant's id to openaiCustomUrl as this query parameter (default: unset, the URL is
+# used as given), so the service at that URL knows whose audio each connection carries
+OPENAI_CUSTOM_PARTICIPANT_PARAM=participant
+
 # Optionally set openai_custom as the default provider
 PROVIDERS_PRIORITY=openai_custom,openai,deepgram,gemini
 ```

@@ -33,6 +33,19 @@ export interface OpenAICustomOptions {
 	openaiCustomApiKey?: string;
 }
 
+/**
+ * The openai_custom URL for one participant's connection: with OPENAI_CUSTOM_PARTICIPANT_PARAM set,
+ * the participant's id is added as that query parameter; otherwise the URL is used as given.
+ */
+export function openaiCustomUrlFor(url: string | undefined, participantInfo: any): string | undefined {
+	const param = config.openaiCustomParticipantParam;
+	const id = participantInfo?.id;
+	if (!url || !param || !id) return url;
+	const named = new URL(url);
+	named.searchParams.set(param, String(id));
+	return named.toString();
+}
+
 export function createBackend(tag: string, participantInfo: any, provider?: Provider, customOptions?: OpenAICustomOptions): TranscriptionBackend {
 	const backendType = provider || getDefaultProvider();
 
@@ -42,7 +55,12 @@ export function createBackend(tag: string, participantInfo: any, provider?: Prov
 		case 'openai':
 			return new OpenAIBackend(tag, participantInfo);
 		case 'openai_custom':
-			return new OpenAIBackend(tag, participantInfo, customOptions?.openaiCustomUrl, customOptions?.openaiCustomApiKey);
+			return new OpenAIBackend(
+				tag,
+				participantInfo,
+				openaiCustomUrlFor(customOptions?.openaiCustomUrl, participantInfo),
+				customOptions?.openaiCustomApiKey,
+			);
 		case 'gemini':
 			return new GeminiBackend(tag, participantInfo);
 		case 'deepgram':
