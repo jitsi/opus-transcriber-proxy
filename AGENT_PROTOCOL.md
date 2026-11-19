@@ -34,7 +34,8 @@ that depends on separate streams names `per-source` in its invite.
   lets the protocol evolve without breaking a shipped serializer.
 - The default fan-in is not part of this contract: the provisioning API sets it at invite, and
   `info.fanIn` says which one is in effect. It was `per-source` and is now `mix` (`per-source` for an
-  Opus agent); a provisioning API from before that change still gives `per-source`.
+  Opus agent). A provisioning API that still has the old default gives `per-source`. One from before
+  fan-ins names none, and the gateway then applies the new default itself.
 - A **breaking change bumps MAJOR** (e.g. renaming a field, changing `payload` encoding, changing
   the meaning of `tag`). A serializer may then branch on MAJOR or refuse an unknown MAJOR.
 - Anything marked *reserved* here is defined but not yet emitted; using it later is additive, not
