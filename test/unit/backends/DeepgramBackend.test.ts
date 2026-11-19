@@ -681,6 +681,23 @@ describe('DeepgramBackend', () => {
 	});
 
 	describe('close', () => {
+		it('closes a connecting socket once when closing it fires an error', async () => {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			const connecting = backend.connect({ model: 'nova-2-general', language: undefined, prompt: undefined });
+			connecting.catch(() => {});
+			// Node's WebSocket fails a socket that is still connecting inside close(), firing 'error'
+			// before close() returns; the error handler then calls the backend's close() again.
+			const ws = mockWsManager.mockWs;
+			const socketClose = vi.fn(() => ws.simulateError('Connection was closed before it was established'));
+			ws.close = socketClose;
+
+			backend.close();
+
+			expect(socketClose).toHaveBeenCalledTimes(1);
+			expect(backend.getStatus()).toBe('closed');
+			await expect(connecting).rejects.toThrow();
+		});
+
 		it('should send CloseStream and stop KeepAlive timer', async () => {
 			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
 			const config: BackendConfig = {

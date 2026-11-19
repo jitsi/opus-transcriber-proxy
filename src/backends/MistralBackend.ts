@@ -165,8 +165,11 @@ export class MistralBackend implements TranscriptionBackend {
 
 	close(): void {
 		logger.debug(`Closing Mistral backend for tag: ${this.tag}`);
-		this.ws?.close();
+		// Forget the socket before closing it: closing a socket that is still connecting can fire
+		// 'error' inside close(), and that handler calls close() again, which must then do nothing.
+		const ws = this.ws;
 		this.ws = undefined;
+		ws?.close();
 		this.status = 'closed';
 	}
 
