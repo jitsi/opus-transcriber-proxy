@@ -172,6 +172,23 @@ describe('MistralBackend', () => {
 			expect(onError).toHaveBeenCalledWith('websocket_error', 'WebSocket connection error');
 			expect(backend.getStatus()).toBe('closed');
 		});
+
+		it('closes a connecting socket once when closing it fires an error', async () => {
+			const backend = new MistralBackend('tag-1', participantInfo);
+			const connecting = backend.connect(backendConfig);
+			connecting.catch(() => {});
+			// ws fails a socket that is still connecting inside close(), firing 'error' before close()
+			// returns; the error handler then calls the backend's close() again.
+			const ws = lastWsInstance;
+			const socketClose = vi.fn(() => ws.simulateError('WebSocket was closed before the connection was established'));
+			ws.close = socketClose;
+
+			backend.close();
+
+			expect(socketClose).toHaveBeenCalledTimes(1);
+			expect(backend.getStatus()).toBe('closed');
+			await expect(connecting).rejects.toThrow();
+		});
 	});
 
 	describe('audio', () => {

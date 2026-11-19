@@ -59,3 +59,5 @@ Caption-shaping helpers already exist and are provider-neutral: `endsSentence` l
 4. Add tests in `test/unit/backends/YourBackend.test.ts`
 
 See `src/backends/DummyBackend.ts` for a minimal example.
+
+A backend's `close()` forgets its socket before closing it (`const ws = this.ws; this.ws = undefined; ws?.close();`). Closing a socket that is still connecting fires `error` inside `close()`, and every backend's `error` listener calls `close()` again; if the socket were still set, that second call would close it again and recurse until `RangeError: Maximum call stack size exceeded` ends the process, with every session on it (jitsi/jitsi-meet#17742). OpenAI, Deepgram, Gemini and Mistral do this; xAI's `close()`, which handles a failed connect its own way, is unchanged.
