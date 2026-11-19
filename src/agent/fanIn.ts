@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import type { AgentEncoding } from './mediaFormat';
+
 /**
  * How several participants' audio reaches the agent, chosen per agent at invite time (`fanIn`):
  * every exported source as its own stream, only the dominant speaker's (as the bridge ranks them), or
@@ -21,7 +23,10 @@
  */
 export type AgentFanIn = 'per-source' | 'dominant' | 'mix';
 
-export const DEFAULT_AGENT_FAN_IN: AgentFanIn = 'per-source';
+/** The fan-in when none is named: the mix, which most speech models take; Opus cannot be mixed, so per-source. */
+export function defaultAgentFanIn(encoding?: AgentEncoding): AgentFanIn {
+	return encoding === 'audio/opus' ? 'per-source' : 'mix';
+}
 
 export function isAgentFanIn(value: unknown): value is AgentFanIn {
 	return value === 'per-source' || value === 'dominant' || value === 'mix';

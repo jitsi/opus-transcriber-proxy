@@ -27,6 +27,23 @@ describe('agent dial resolution', () => {
 		});
 	});
 
+	it('gives a dial config that names no fan-in the default: the mix, or per-source for Opus', () => {
+		expect(resolveDialConfig(ok, true)).toMatchObject({ kind: 'dial', dial: { fanIn: 'mix' } });
+		expect(resolveDialConfig({ ...ok, mediaFormat: { encoding: 'audio/l16' }, mix: { bufferMs: 80 } }, true)).toMatchObject({
+			kind: 'dial',
+			dial: { fanIn: 'mix', mix: { bufferMs: 80 } },
+		});
+		expect(resolveDialConfig({ ...ok, mediaFormat: { encoding: 'audio/opus' } }, true)).toMatchObject({ kind: 'dial', dial: { fanIn: 'per-source' } });
+		expect(resolveDialConfig({ ...ok, fanIn: 'per-source' }, true)).toMatchObject({ kind: 'dial', dial: { fanIn: 'per-source' } });
+	});
+
+	it('reads the mix options of a dial config that names no fan-in as those of the mix, and not at all with Opus', () => {
+		expect(resolveDialConfig({ ...ok, mix: 'loud' }, true)).toMatchObject({ kind: 'permanent', reason: 'invalid mix: must be an object' });
+		const opus = resolveDialConfig({ ...ok, mediaFormat: { encoding: 'audio/opus' }, mix: 'loud' }, true);
+		expect(opus).toMatchObject({ kind: 'dial', dial: { fanIn: 'per-source' } });
+		expect(opus.kind === 'dial' && opus.dial.mix).toBeUndefined();
+	});
+
 	it('is transient when the provisioning API is unavailable or answers garbage, so the bridge retries', () => {
 		expect(resolveDial({ status: 'unavailable', reason: 'provisioning API answered 503' }, true)).toEqual({ kind: 'transient', reason: 'provisioning API answered 503' });
 		expect(resolveDial({ status: 'unavailable', reason: 'provisioning API answered without JSON' }, true)).toMatchObject({ kind: 'transient' });

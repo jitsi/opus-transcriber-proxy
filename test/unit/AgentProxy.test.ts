@@ -136,6 +136,7 @@ describe('AgentProxy', () => {
 				createEndpointWebSocket: () => endpointWs as any,
 				customParameters: { session: 's1' },
 				paceLeadMs: 10_000, // effectively no pacing delay in tests unless stated otherwise
+				fanIn: 'per-source', // what most tests here are about; the default has its own tests
 				...extra,
 			},
 			runtime,
@@ -892,7 +893,19 @@ describe('AgentProxy', () => {
 			return proxy;
 		}
 
-		it('announces the per-source fan-in by default and passes the speaker order on without gating', async () => {
+		it('defaults to the mix, and to per-source for an Opus agent', async () => {
+			vi.useFakeTimers();
+			await openProxy({ fanIn: undefined });
+			const info = endpointWs.sentJson().find((m) => m.event === 'info');
+			expect(info.fanIn).toBe('mix');
+			expect(info.mix).toEqual(DEFAULT_MIX_CONFIG);
+
+			endpointWs = new MockWebSocket();
+			await openProxy({ fanIn: undefined, encoding: 'audio/opus' });
+			expect(endpointWs.sentJson().find((m) => m.event === 'info').fanIn).toBe('per-source');
+		});
+
+		it('per-source: announces the fan-in and passes the speaker order on without gating', async () => {
 			await openProxy();
 			bridgeWs.receive({ event: 'speakers', speakers: ['u2-a0', 'u1-a0'], silence: false });
 			bridgeWs.receive(media('u1-a0', 0));
@@ -1156,6 +1169,7 @@ describe('AgentProxy', () => {
 				endpointUrl: 'wss://agents.example.com/session',
 				createEndpointWebSocket: () => endpointWs as any,
 				paceLeadMs: 20,
+				fanIn: 'per-source',
 			},
 			runtime,
 		);

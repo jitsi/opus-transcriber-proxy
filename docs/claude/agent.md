@@ -83,13 +83,17 @@ Opus mode only: PCM mode sends the relay's own counter.
 
 The bridge sends agent connects a `speakers` event (the exported sources in its recent-speaker order, the dominant
 speaker first, plus `silence`) whenever the order changes and once on connect; the relay passes it on to the customer
-as a hint in every fan-in. An agent invited with `fanIn: "dominant"` (dial config `fanIn`, `agent/fanIn.ts`; default
-`per-source`) hears only the first listed source: `AgentProxy.fansIn` drops the other sources' media (PCM and Opus
+as a hint in every fan-in. An agent invited with `fanIn: "dominant"` (dial config `fanIn`, `agent/fanIn.ts`) hears
+only the first listed source: `AgentProxy.fansIn` drops the other sources' media (PCM and Opus
 alike), the frames keep their own tags, and the selection is the bridge's, so the relay measures no levels itself. An
 empty order (nobody has spoken) forwards nothing; no order at all (an older bridge) forwards every source with one
 warning. `info.fanIn` announces the policy and the protocol version is `1.2` (additive on `1.0`).
 
 ## The mix fan-in (`agent/mix/`)
+
+The mix is the default: `defaultAgentFanIn` gives it to a dial config that names no fan-in (`agent/dial.ts`), and
+per-source to one that asks for Opus, which cannot be mixed. The provisioning API applies the same rule at invite,
+so a dial config arrives without one only from the dev `?endpoint=` path or a provisioning API older than fan-ins.
 
 An agent invited with `fanIn: "mix"` gets one PCM stream on the tag `mix`: the sum of every source the bridge
 forwards. `AgentProxy.handleBridgeMedia` hands each packet to the `AgentMixer` and sends nothing on the source's

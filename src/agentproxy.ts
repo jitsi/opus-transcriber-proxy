@@ -17,7 +17,7 @@
 import { MediaPacer } from './MediaPacer';
 import { closeReason } from './agent/closeReason';
 import { describeClose } from './closeEvent';
-import { AgentFanIn, DEFAULT_AGENT_FAN_IN } from './agent/fanIn';
+import { AgentFanIn, defaultAgentFanIn } from './agent/fanIn';
 import { AgentMixer } from './agent/mix/Mixer';
 import { describeMixConfig, ResolvedMixConfig, resolveMixConfig } from './agent/mixConfig';
 import { AgentEncoding, opusPacketDurationMs } from './agent/mediaFormat';
@@ -103,7 +103,7 @@ export interface AgentProxyOptions {
 	paceLeadMs?: number;
 	/** The customer-leg encoding the invite asked for. Default `audio/l16`. */
 	encoding?: AgentEncoding;
-	/** Which participants' audio the agent hears (see [AgentFanIn]). Default `per-source`. */
+	/** Which participants' audio the agent hears (see [AgentFanIn]). Default: [defaultAgentFanIn]. */
 	fanIn?: AgentFanIn;
 	/** The `mix` fan-in's options in effect (see `agent/mixConfig.ts`). Default: every option at its default. */
 	mix?: ResolvedMixConfig;
@@ -247,7 +247,7 @@ export class AgentProxy extends Emitter {
 		// A mix is decoded audio. The dial resolution refuses `mix` with Opus, so this pair is a caller's mistake;
 		// per-source is then what is delivered, and so what `info` announces.
 		const mixWithOpus = options.fanIn === 'mix' && this.opus;
-		this.fanIn = mixWithOpus ? 'per-source' : (options.fanIn ?? DEFAULT_AGENT_FAN_IN);
+		this.fanIn = mixWithOpus ? 'per-source' : (options.fanIn ?? defaultAgentFanIn(options.encoding));
 		this.mediaFormat = this.opus ? AGENT_OPUS_MEDIA_FORMAT : AGENT_MEDIA_FORMAT;
 		this.pacer = new MediaPacer<AgentReturnFrame>({
 			leadMs: options.paceLeadMs,
