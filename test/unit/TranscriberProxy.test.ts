@@ -466,6 +466,20 @@ describe('TranscriberProxy', () => {
 			});
 		});
 
+		it('should reset the chunk tracking when a start event repeats for a tag', () => {
+			const proxy = new TranscriberProxy(mockWebSocket, options);
+
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+			const conn = vi.mocked(OutgoingConnection).mock.instances[0];
+			expect(conn.resetChunkTracking).not.toHaveBeenCalled();
+
+			// The bridge numbers the chunks of a stream from its start event, so a new start event
+			// with the same format still restarts the numbering.
+			proxy.handleStartEvent(validStart('tag1', { encoding: 'opus' }));
+
+			expect(conn.resetChunkTracking).toHaveBeenCalledTimes(1);
+		});
+
 		it('should create separate connections for different tags', () => {
 			const proxy = new TranscriberProxy(mockWebSocket, options);
 			vi.mocked(OutgoingConnection).mockClear();

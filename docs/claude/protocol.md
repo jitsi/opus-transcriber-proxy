@@ -10,12 +10,55 @@ _Split out of `CLAUDE.md`; see the task table there for which of these documents
   "event": "media",
   "media": {
     "tag": "participant-id",
-    "chunk": 0,
-    "timestamp": 1768341932,
+    "chunk": "31456",
+    "timestamp": "268460",
     "payload": "base64-encoded-opus"
   }
 }
 ```
+The bridge writes `chunk` and `timestamp` as decimal strings, as shown: jicoco-mediajson serializes both with
+`Int2StringSerializer` / `Long2StringSerializer` (the VoxImplant-derived format), and `resources/sample.jsonl` has
+them in that form. Other clients send JSON numbers. Read both fields only through `wireInteger`
+(`src/translate/wireInteger.ts`), which accepts the two forms. Do not test them with `Number.isInteger`: it is false
+for a string, so a reader that does sees no chunk and no timestamp on any bridge packet. That means no loss
+concealment, no out-of-order check, and timestamp 0 or no audio at all on the `/agent` paths.
+
+- `chunk` is the RTP sequence index of the stream (`MediaJsonSerializer` in the JVB). It starts at the RTP sequence
+  number of the first packet that the serializer sees for the stream, not at 0, and grows by one for each packet
+  that the bridge forwards. A gap is a packet that the bridge did not receive. A packet that arrives late has a
+  `chunk` below the last one.
+- Silence makes no gap, only a jump of `timestamp`. A sender in DTX sends no packet and uses no sequence number.
+  The bridge also discards some audio itself (silence, a muted sender, a source that its loudest filter
+  rejects), and renumbers the stream past the packets that it discards (`DiscardableDiscarder`, before the
+  exporter). In `resources/sample.jsonl` one source jumps 32 s with
+  consecutive chunks.
+- `timestamp` is on the 48 kHz RTP clock, offset so that the streams of one bridge socket share a timeline.
+- **A `start` event starts the numbering again.** The bridge sends `start` when it creates the state of a stream:
+  on the first packet of an SSRC, on a changed payload type, and for every stream on a new socket (the serializer
+  is per socket). The `chunk` of a new state is the 16-bit RTP sequence number of its first packet. For the same
+  SSRC that is below the old `chunk` by 65536 for each rollover that the old state counted. For a new SSRC under
+  the same source name it can be any number, above or below. A reader that keeps the last chunk across a `start`
+  discards the packets as out of order until the numbers catch up: about 22 minutes of audio (65536 packets of
+  20 ms) for each 65536 of distance. Each reader of `chunk` therefore handles the `start` for a tag:
+  - `/transcribe` and `/translate` forget the last chunk (`resetChunkTracking`). `/transcribe` does the same on
+    a session reattach.
+  - `/agent` with the `mix` fan-in restarts the track of the source (`AgentMixer.restart`).
+  - `/agent` in Opus mode sends `chunk` on to the customer, who is told that the numbering does not start
+    again. From such a `start` on, `forwardOpus` adds an offset that continues the customer's numbering after
+    the highest chunk it got.
+- **A numbering that starts again without a `start` is recognised too** (`ChunkOrder`,
+  `src/translate/chunkOrder.ts`, used by every reader above; the mix track has the same rules inline). One chunk
+  1000 or more below the last one, or more than ten packets in a row that are all at or below it, is a new
+  numbering, not late packets. The reader then goes on with the new numbers and warns once for the stream. This
+  bounds the loss from a missed `start` at ten packets. The bridge socket is ordered and the `start` comes before
+  the first packet of the new state, so this is a safety net, not the normal path. Its limits:
+  - It sees only a numbering that begins below the old one. A numbering that begins above it looks like a loss:
+    the decoders conceal at most 120 ms for it, and the `/agent` Opus path sends the customer a gap.
+  - A burst of more than ten late packets, or more than ten copies of one packet, is taken as a new numbering
+    too. The next packet in order then looks like a short loss.
+  - With a new numbering that begins less than 1000 below the old one, the first ten packets are handled as
+    late packets before the rule applies: dropped by the decoders, and sent to the `/agent` customer with their
+    lower numbers.
 
 **Ping:**
 ```json

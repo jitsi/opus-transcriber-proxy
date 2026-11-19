@@ -16,6 +16,7 @@
 
 import type { AudioDecoder, DecodedAudio } from './AudioDecoder';
 import { NO_CHUNK_INFO } from './AudioDecoder';
+import { ChunkOrder } from './translate/chunkOrder';
 import logger from './logger';
 
 const OGG_HEADER_MIN_SIZE = 27;
@@ -141,17 +142,19 @@ function readMagic(packet: Uint8Array, len: number): string {
 export class OggOpusDecapsulator implements AudioDecoder {
 	readonly ready: Promise<void> = Promise.resolve();
 	private _state: DecapsulatorState = 'expect_head';
-	private _lastChunkNo = NO_CHUNK_INFO;
+	onChunkRestart?: () => void;
+	private _order = new ChunkOrder();
 
 	decodeChunk(page: Uint8Array, chunkNo: number, _timestamp: number): DecodedAudio[] | null {
 		// Out-of-order / replayed page detection
-		if (chunkNo !== NO_CHUNK_INFO && this._lastChunkNo !== NO_CHUNK_INFO) {
-			if (chunkNo - this._lastChunkNo <= 0) {
+		if (chunkNo !== NO_CHUNK_INFO) {
+			const step = this._order.next(chunkNo);
+			if (step === 'old') {
 				return null;
 			}
-		}
-		if (chunkNo !== NO_CHUNK_INFO) {
-			this._lastChunkNo = chunkNo;
+			if (step.restarted) {
+				this.onChunkRestart?.();
+			}
 		}
 
 		const packets = parseOggPage(page);
@@ -213,7 +216,7 @@ export class OggOpusDecapsulator implements AudioDecoder {
 	 * stream — new OpusHead/OpusTags pages are not re-sent on reconnect.
 	 */
 	reset(): void {
-		this._lastChunkNo = NO_CHUNK_INFO;
+		this._order.reset();
 	}
 
 	free(): void {

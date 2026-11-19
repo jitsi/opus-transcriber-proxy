@@ -193,6 +193,9 @@ export class TranslatorProxy extends Emitter {
 				case 'media':
 					this.handleMediaEvent(parsedMessage);
 					break;
+				case 'start':
+					this.handleStart(parsedMessage.start?.tag);
+					break;
 				case 'sources':
 					this.handleSources(parsedMessage.exports ?? [], parsedMessage.requests ?? []);
 					break;
@@ -546,6 +549,18 @@ export class TranslatorProxy extends Emitter {
 
 		byLanguage.set(language, conn);
 		return conn;
+	}
+
+	/**
+	 * A source's `start` event: the bridge's chunk numbering starts again here and can begin below the old
+	 * numbers (docs/claude/protocol.md), so each direction of the source forgets its last chunk. The media
+	 * format is not read: a direction decodes Opus only.
+	 */
+	private handleStart(tag: unknown): void {
+		if (typeof tag !== 'string') {
+			return;
+		}
+		this.connections.get(tag)?.forEach((connection) => connection.resetChunkTracking());
 	}
 
 	private handleMediaEvent(parsedMessage: any): void {

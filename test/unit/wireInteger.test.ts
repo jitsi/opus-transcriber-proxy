@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { wireInteger } from '../../src/translate/wireInteger';
 
@@ -65,5 +67,22 @@ describe('wireInteger', () => {
 		expect(wireInteger('9007199254740993')).toBeUndefined();
 		expect(wireInteger(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
 		expect(wireInteger(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+	});
+
+	// resources/sample.jsonl is a recorded bridge session: what the bridge really sends.
+	it('reads chunk and timestamp of a media line that the bridge sent', () => {
+		const lines = readFileSync(join(__dirname, '../../resources/sample.jsonl'), 'utf8').split('\n');
+		const media = lines
+			.filter((line) => line.length > 0)
+			.map((line) => JSON.parse(JSON.parse(line).data))
+			.find((message) => message.event === 'media').media;
+
+		// The reason for wireInteger: both are strings, which Number.isInteger rejects.
+		expect(typeof media.chunk).toBe('string');
+		expect(typeof media.timestamp).toBe('string');
+		expect(wireInteger(media.chunk)).toBe(Number(media.chunk));
+		expect(wireInteger(media.timestamp)).toBe(Number(media.timestamp));
+		expect(Number.isSafeInteger(wireInteger(media.chunk))).toBe(true);
+		expect(Number.isSafeInteger(wireInteger(media.timestamp))).toBe(true);
 	});
 });

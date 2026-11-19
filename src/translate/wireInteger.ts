@@ -14,14 +14,18 @@
  * limitations under the License.
  */
 
-// Worker-safe, because TranslatorConnection needs it. OutgoingConnection and AgentProxy read the bridge's
-// numeric fields through the same copy.
+// Worker-safe, because TranslatorConnection needs it. OutgoingConnection and AgentProxy use the same function.
 
 /**
  * An integer from a bridge `media` message. The bridge writes `media.chunk` and `media.timestamp` as decimal
- * strings (`"chunk":"31456"`, the VoxImplant-derived format of jicoco-mediajson), and other clients send JSON
- * numbers, so both forms are read. Anything else (absent, a fraction, an empty or non-decimal string, a value
- * past the safe integer range) is `undefined`.
+ * strings (`"chunk":"31456"`, the VoxImplant-derived format of jicoco-mediajson) and `media.audioLevel` as a
+ * number, and other clients send JSON numbers, so both forms are read. Anything else (absent, a fraction, an
+ * empty or non-decimal string, a value past the safe integer range) is `undefined`.
+ *
+ * A negative value is accepted on purpose. The bridge's index of a packet can be negative: one that was sent
+ * before a wrap of the 16-bit sequence number and arrives after the first packet of the stream state. It is a
+ * late packet, and it must compare as one. The one exception is -1 on /transcribe, which is the decoders'
+ * NO_CHUNK_INFO: that packet is decoded without the order check.
  */
 export function wireInteger(value: unknown): number | undefined {
 	if (typeof value === 'number') {

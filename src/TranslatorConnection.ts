@@ -19,6 +19,8 @@ import { DEFAULT_PACE_LEAD_MS } from './translate/env';
 import { MediaPacer } from './MediaPacer';
 import { bytesToBase64, base64ToBytes } from './translate/base64';
 import { unrefTimer } from './translate/timers';
+import { ChunkOrder } from './translate/chunkOrder';
+import { wireInteger } from './translate/wireInteger';
 import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
@@ -177,8 +179,10 @@ export class TranslatorConnection {
 		return this._lastMediaTime;
 	}
 
-	private lastChunkNo: number = -1;
+	/** The order of the source's packets by `chunk`; it also recognises a numbering that started again. */
+	private chunkOrder = new ChunkOrder();
 	private lastTimestamp: number = -1;
+	private warnedChunkRestart = false;
 	private lastOpusFrameSize: number = -1;
 
 	private totalSamplesSent: number = 0;
@@ -561,24 +565,29 @@ export class TranslatorConnection {
 			worker: 'opus-transcriber-proxy',
 		});
 
-		if (Number.isInteger(mediaEvent.media?.chunk) && Number.isInteger(mediaEvent.media.timestamp)) {
-			if (this.lastChunkNo != -1 && mediaEvent.media.chunk != this.lastChunkNo + 1) {
-				const chunkDelta = mediaEvent.media.chunk - this.lastChunkNo;
-				if (chunkDelta <= 0) {
-					this.runtime.writeMetric({
-						name: 'audio_packet_discarded',
-						worker: 'opus-transcriber-proxy',
-					});
-					return;
-				}
-
-				if (this.decoderStatus == 'ready') {
-					const timestampDelta = mediaEvent.media.timestamp - this.lastTimestamp;
-					this.doConcealment(opusFrame, chunkDelta, timestampDelta);
-				}
+		const chunkNo = wireInteger(mediaEvent.media?.chunk);
+		const timestamp = wireInteger(mediaEvent.media?.timestamp);
+		if (chunkNo !== undefined && timestamp !== undefined) {
+			const step = this.chunkOrder.next(chunkNo);
+			if (step === 'old') {
+				this.runtime.writeMetric({
+					name: 'audio_packet_discarded',
+					worker: 'opus-transcriber-proxy',
+				});
+				return;
 			}
-			this.lastChunkNo = mediaEvent.media.chunk;
-			this.lastTimestamp = mediaEvent.media.timestamp;
+
+			if (step.restarted) {
+				// The old and the new numbers do not compare, so there is no gap to conceal.
+				if (!this.warnedChunkRestart) {
+					this.warnedChunkRestart = true;
+					this.runtime.logger.warn(`[${this.connectionId}] The chunk numbering started again for tag ${this.localTag} without a start event`);
+				}
+			} else if (step.lost > 0 && this.decoderStatus == 'ready') {
+				const timestampDelta = timestamp - this.lastTimestamp;
+				this.doConcealment(opusFrame, step.lost + 1, timestampDelta);
+			}
+			this.lastTimestamp = timestamp;
 		}
 
 		if (this.decoderStatus === 'ready' && this.opusDecoder) {
@@ -596,6 +605,15 @@ export class TranslatorConnection {
 		} else {
 			this.log(`Not queueing opus frame for tag: ${this.localTag}: decoder ${this.decoderStatus}`);
 		}
+	}
+
+	/**
+	 * Forget the last chunk and timestamp, so the next packet is taken as the first of its stream. Called
+	 * on the source's `start` event, where the bridge's numbering starts again (docs/claude/protocol.md).
+	 */
+	resetChunkTracking(): void {
+		this.chunkOrder.reset();
+		this.lastTimestamp = -1;
 	}
 
 	private doConcealment(opusFrame: Uint8Array, chunkDelta: number, timestampDelta: number) {

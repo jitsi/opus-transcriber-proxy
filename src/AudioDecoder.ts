@@ -81,6 +81,12 @@ export interface AudioDecoder {
 	reset(): void;
 
 	/**
+	 * Called when the decoder finds that the chunk numbering started again although nobody called reset()
+	 * (see ChunkOrder). The owner sets it, to report the event.
+	 */
+	onChunkRestart?: () => void;
+
+	/**
 	 * Free decoder resources
 	 */
 	free(): void;

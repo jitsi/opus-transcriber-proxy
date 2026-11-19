@@ -16,6 +16,7 @@
 
 import { computeAudioLevel } from '../../OpusEncoder/audioLevel';
 import type { IOpusDecoder } from '../../OpusDecoder/opusTypes';
+import { CHUNK_RESTART_DISTANCE, OLD_PACKETS_FOR_RESTART } from '../../translate/chunkOrder';
 import type { Logger } from '../../translate/runtime';
 import type { MixConfig } from '../mixConfig';
 
@@ -26,10 +27,6 @@ export const MIX_SAMPLES_PER_MS = MIX_SAMPLE_RATE / 1000;
 const RTP_TICKS_PER_SAMPLE = 2;
 /** Packets held while the decoder initialises (WASM instantiation is asynchronous). */
 const MAX_PENDING_PACKETS = 50;
-/** A `chunk` this far below the last one is a restarted stream, not an old packet. */
-const CHUNK_RESTART_DISTANCE = 1000;
-/** This many packets in a row that all look old are a restarted stream too, not stragglers. */
-const OLD_PACKETS_FOR_RESTART = 10;
 /** The span the cap's ranking averages a source's level over (ms). */
 const LEVEL_WINDOW_MS = 200;
 /** A source's repeated decode failures are said again at most this often (ms). */
@@ -39,8 +36,9 @@ const DECODE_WARN_INTERVAL_MS = 5000;
 export interface MixPacket {
 	frame: Uint8Array;
 	/**
-	 * The bridge's per-source packet index (the extended RTP sequence number). A gap is a packet the bridge did
-	 * not forward: one that was lost on the way to it, or one it dropped itself (a source outside the loudest).
+	 * The bridge's per-source packet index (the extended RTP sequence number). A gap is a packet that was lost on
+	 * the way to the bridge. Audio that the bridge discards itself (silence, a source outside the loudest) leaves
+	 * no gap: the bridge renumbers the stream past it (docs/claude/protocol.md).
 	 */
 	chunk?: number;
 	/** The packet's RTP timestamp (48 kHz). */

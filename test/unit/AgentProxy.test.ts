@@ -522,6 +522,37 @@ describe('AgentProxy', () => {
 		expect(Buffer.from(media[0].media.payload, 'base64')).toEqual(Buffer.from([1, 2, 3, 4]));
 	});
 
+	it('passes on the source timestamp when the bridge sends it as a decimal string', async () => {
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		// As the bridge writes them: "chunk":"31456","timestamp":"268460".
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31456', timestamp: '268460', payload: OPUS_B64 } });
+		await settle();
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31457', timestamp: '269420', payload: OPUS_B64 } });
+		await settle();
+
+		const media = endpointWs.sentJson().filter((m) => m.event === 'media');
+		expect(media.map((m) => m.media.timestamp)).toEqual([268460, 269420]);
+	});
+
+	it('keeps the last source timestamp for a packet whose timestamp is not an integer', async () => {
+		createProxy();
+		await settle();
+		endpointWs.fire('open', {});
+		await settle();
+		bridgeWs.receive({ event: 'sources', exports: [], requests: ['agent1-a0'] });
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31456', timestamp: '268460', payload: OPUS_B64 } });
+		await settle();
+		bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31457', timestamp: 'abc', payload: OPUS_B64 } });
+		await settle();
+
+		const media = endpointWs.sentJson().filter((m) => m.event === 'media');
+		expect(media.map((m) => m.media.timestamp)).toEqual([268460, 268460]);
+	});
+
 	it('does not forward the agent\'s own source back to the customer', async () => {
 		createProxy();
 		await settle();
@@ -677,6 +708,109 @@ describe('AgentProxy', () => {
 
 			expect(frames.length).toBe(0);
 			expect(bridgeWs.closed).toBe(false);
+		});
+
+		it('forwards a participant packet whose chunk and timestamp are decimal strings, as numbers', async () => {
+			await openOpusProxy();
+			// As the bridge writes them: "chunk":"31456","timestamp":"268460".
+			bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31456', timestamp: '268460', payload: OPUS_B64 } });
+			await settle();
+
+			const media = endpointWs.sentJson().filter((m) => m.event === 'media');
+			expect(media.map((m) => m.media)).toEqual([{ tag: 'user1-a0', chunk: 31456, timestamp: 268460, payload: OPUS_B64 }]);
+		});
+
+		it('forwards no participant packet whose chunk or timestamp is not a whole number', async () => {
+			await openOpusProxy();
+			bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: 'abc', timestamp: '268460', payload: OPUS_B64 } });
+			bridgeWs.receive({ event: 'media', media: { tag: 'user1-a0', chunk: '31456', timestamp: '', payload: OPUS_B64 } });
+			await settle();
+
+			// Nothing for the source: no media, and no start that announces it either.
+			expect(endpointWs.sentJson().filter((m) => m.event === 'media' || m.event === 'start')).toEqual([]);
+		});
+
+		describe('chunk numbering towards the agent', () => {
+			const bridgeMedia = (chunk: string, timestamp: string) => ({ event: 'media', media: { tag: 'user1-a0', chunk, timestamp, payload: OPUS_B64 } });
+			const bridgeStart = { event: 'start', start: { tag: 'user1-a0', mediaFormat: { encoding: 'opus', sampleRate: 48000, channels: 2 } } };
+			const sentChunks = () => endpointWs.sentJson().filter((m) => m.event === 'media').map((m) => m.media.chunk);
+
+			it('keeps the bridge numbering, with its gaps and its late packets', async () => {
+				await openOpusProxy();
+				// The bridge announces a source before its first packet: that start changes nothing.
+				bridgeWs.receive(bridgeStart);
+				for (const chunk of ['70000', '70002', '70001']) bridgeWs.receive(bridgeMedia(chunk, '268460'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70002, 70001]);
+			});
+
+			it('continues after the highest chunk when the bridge numbering starts again', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('70000', '268460'));
+				bridgeWs.receive(bridgeMedia('70001', '269420'));
+				// A new stream state in the bridge: the numbering starts again, here below the old numbers.
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('4464', '270380'));
+				// A gap in the new numbering is still a gap for the agent.
+				bridgeWs.receive(bridgeMedia('4466', '272300'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70001, 70002, 70004]);
+				// One customer-leg start for the source: the restart is not announced again.
+				expect(endpointWs.sentJson().filter((m) => m.event === 'start').length).toBe(1);
+			});
+
+			it('continues across more than one start', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeMedia('70000', '268460'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('10', '270380'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70001, 70002]);
+			});
+
+			it('continues after the highest chunk, not after a late packet', async () => {
+				await openOpusProxy();
+				for (const chunk of ['70000', '70002', '70001']) bridgeWs.receive(bridgeMedia(chunk, '268460'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				await settle();
+
+				expect(sentChunks()).toEqual([70000, 70002, 70001, 70003]);
+			});
+
+			// A start event that never arrived must not send the customer's numbering back.
+			it('continues when the numbering starts again with no start event, and says so once', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeMedia('70000', '268460'));
+				// Far below the last chunk: a new numbering.
+				bridgeWs.receive(bridgeMedia('4464', '269420'));
+				bridgeWs.receive(bridgeMedia('4466', '270380'));
+				// And once more.
+				bridgeWs.receive(bridgeMedia('20', '271340'));
+				await settle();
+
+				// The gap in the second numbering (4465) stays a gap.
+				expect(sentChunks()).toEqual([70000, 70001, 70003, 70004]);
+				const warnings = runtime.logger.warn.mock.calls.filter(([message]: [string]) => String(message).includes('numbering started again'));
+				expect(warnings.length).toBe(1);
+			});
+
+			it('also continues when the new numbering starts above the old one', async () => {
+				await openOpusProxy();
+				bridgeWs.receive(bridgeMedia('100', '268460'));
+				bridgeWs.receive(bridgeStart);
+				bridgeWs.receive(bridgeMedia('50000', '269420'));
+				bridgeWs.receive(bridgeMedia('50001', '270380'));
+				await settle();
+
+				expect(sentChunks()).toEqual([100, 101, 102]);
+			});
 		});
 
 		it('forwards no participant packet without the bridge\'s chunk and timestamp', async () => {

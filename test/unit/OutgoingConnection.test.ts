@@ -31,6 +31,8 @@ import { OutgoingConnection } from '../../src/OutgoingConnection';
 import { MockTranscriptionBackend } from '../helpers/backend-mock';
 import type { TranscriberProxyOptions } from '../../src/transcriberproxy';
 import { createBackend } from '../../src/backends/BackendFactory';
+import { writeMetric } from '../../src/metrics';
+import logger from '../../src/logger';
 
 // Mock logger
 vi.mock('../../src/logger', () => ({
@@ -347,6 +349,225 @@ describe('OutgoingConnection', () => {
 			conn.handleMediaEvent(event0);
 
 			// Packet 0 should be discarded (logged via metrics)
+		});
+
+		// The bridge writes chunk and timestamp as decimal strings ("chunk":"31456"), see docs/claude/protocol.md.
+		describe('chunk and timestamp as decimal strings', () => {
+			const payload = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			const media = (chunk: string, timestamp: string) => ({ media: { tag: 'test-tag', payload, chunk, timestamp } });
+			const metricCount = (name: string) => vi.mocked(writeMetric).mock.calls.filter(([, metric]) => (metric as any).name === name).length;
+
+			it('conceals a lost packet', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('31456', '268460'));
+				expect(mockBackend.getSentAudioCount()).toBe(1);
+				// Chunk 31457 never arrives.
+				conn.handleMediaEvent(media('31458', '270380'));
+
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+				// The concealed frame, then the packet itself.
+				expect(mockBackend.getSentAudioCount()).toBe(3);
+			});
+
+			it('conceals nothing when the chunks are consecutive', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				// "9" to "10": the values are compared as numbers, not as text.
+				conn.handleMediaEvent(media('9', '8640'));
+				conn.handleMediaEvent(media('10', '9600'));
+
+				expect(metricCount('audio_loss_concealment')).toBe(0);
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				expect(mockBackend.getSentAudioCount()).toBe(2);
+			});
+
+			it('discards a packet that arrives after a later one', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('31457', '269420'));
+				conn.handleMediaEvent(media('31456', '268460'));
+
+				expect(metricCount('audio_packet_discarded')).toBe(1);
+				expect(mockBackend.getSentAudioCount()).toBe(1);
+			});
+
+			it('limits the concealment to the timestamp gap', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('100', '96000'));
+				// Three chunks are missing, but the timestamp moved by one 20 ms frame only (960 ticks at 48 kHz).
+				conn.handleMediaEvent(media('104', '96960'));
+
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+				// 20 ms at the decoder's 24 kHz: 480 samples of 2 bytes. Without the timestamp it is 120 ms.
+				const concealed = Buffer.from(mockBackend.getSentAudio()[1], 'base64');
+				expect(concealed.length).toBe(480 * 2);
+			});
+
+			it('takes chunk "0" as a chunk number', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('0', '0'));
+				conn.handleMediaEvent(media('2', '1920'));
+
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+			});
+
+			it('compares a number with a string in one stream', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent({ media: { tag: 'test-tag', payload, chunk: 9, timestamp: 8640 } });
+				conn.handleMediaEvent(media('11', '10560'));
+
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+			});
+		});
+
+		// The bridge's numbering starts again, possibly lower, with a start event (docs/claude/protocol.md).
+		describe('resetChunkTracking', () => {
+			const payload = Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64');
+			const media = (chunk: string, timestamp: string) => ({ media: { tag: 'test-tag', payload, chunk, timestamp } });
+			const metricCount = (name: string) => vi.mocked(writeMetric).mock.calls.filter(([, metric]) => (metric as any).name === name).length;
+
+			it('decodes a lower chunk after the reset', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('70000', '268460'));
+				conn.resetChunkTracking();
+				conn.handleMediaEvent(media('4464', '269420'));
+
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				expect(metricCount('audio_loss_concealment')).toBe(0);
+				expect(mockBackend.getSentAudioCount()).toBe(2);
+			});
+
+			it('discards a chunk a little below the last one without the reset', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('70000', '268460'));
+				conn.handleMediaEvent(media('69990', '269420'));
+
+				expect(metricCount('audio_packet_discarded')).toBe(1);
+				expect(mockBackend.getSentAudioCount()).toBe(1);
+			});
+
+			// A start event that never arrived must not cost the audio until the numbers catch up.
+			it('takes a chunk far below the last one as a new numbering, and says so once', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('70000', '268460'));
+				conn.handleMediaEvent(media('4464', '269420'));
+				conn.handleMediaEvent(media('4466', '271340'));
+
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				// Nothing is concealed across the two numberings; the gap in the new one (4465) is.
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+				expect(mockBackend.getSentAudioCount()).toBe(4);
+				const restartWarnings = () => vi.mocked(logger.warn).mock.calls.filter(([message]) => String(message).includes('numbering started again'));
+				expect(restartWarnings().length).toBe(1);
+
+				// A second new numbering is not said again.
+				conn.handleMediaEvent(media('100', '272300'));
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				expect(restartWarnings().length).toBe(1);
+			});
+
+			it('takes a run of chunks a little below the last one as a new numbering', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+				await vi.runAllTimersAsync();
+
+				conn.handleMediaEvent(media('500', '268460'));
+				for (let i = 0; i < 12; i++) {
+					conn.handleMediaEvent(media(String(100 + i), String(269420 + i * 960)));
+				}
+
+				// The first ten look late and are dropped; then the numbering is taken as new.
+				expect(metricCount('audio_packet_discarded')).toBe(10);
+				expect(mockBackend.getSentAudioCount()).toBe(3);
+			});
+
+			describe('while the backend still connects', () => {
+				beforeEach(() => {
+					// The decoder is ready at once; the backend takes one second to connect.
+					mockBackend = new MockTranscriptionBackend({ autoConnect: true, connectDelay: 1000 });
+				});
+
+				it('decodes the frames that waited for the decoder before the frames that arrive later', async () => {
+					const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+					// Decoder not ready: queued.
+					conn.handleMediaEvent(media('100', '96000'));
+					conn.handleMediaEvent(media('101', '96960'));
+					await vi.advanceTimersByTimeAsync(10);
+					expect(mockBackend.getStatus()).toBe('pending');
+					// Decoder ready, backend not connected: these must not get ahead of the two above.
+					conn.handleMediaEvent(media('102', '97920'));
+					conn.handleMediaEvent(media('103', '98880'));
+					await vi.advanceTimersByTimeAsync(3000);
+
+					expect(metricCount('audio_packet_discarded')).toBe(0);
+					expect(metricCount('audio_loss_concealment')).toBe(0);
+					expect(mockBackend.getSentAudioCount()).toBe(4);
+				});
+
+				it('keeps a reset in its place between the frames', async () => {
+					const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+					conn.handleMediaEvent(media('70000', '96000'));
+					conn.handleMediaEvent(media('70001', '96960'));
+					await vi.advanceTimersByTimeAsync(10);
+					conn.resetChunkTracking();
+					// A little below the old numbers: without the reset in its place these are late packets.
+					conn.handleMediaEvent(media('69990', '97920'));
+					conn.handleMediaEvent(media('69991', '98880'));
+					await vi.advanceTimersByTimeAsync(3000);
+
+					expect(metricCount('audio_packet_discarded')).toBe(0);
+					expect(metricCount('audio_loss_concealment')).toBe(0);
+					expect(mockBackend.getSentAudioCount()).toBe(4);
+					expect(vi.mocked(logger.warn).mock.calls.filter(([message]) => String(message).includes('numbering started again'))).toEqual([]);
+				});
+			});
+
+			it('applies after the last frame that waits for the decoder when no frame follows it', async () => {
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+
+				conn.handleMediaEvent(media('70000', '268460'));
+				conn.resetChunkTracking();
+				await vi.runAllTimersAsync();
+				// A little below the old number: without the reset this is a late packet.
+				conn.handleMediaEvent(media('69990', '269420'));
+
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				expect(mockBackend.getSentAudioCount()).toBe(2);
+			});
+
+			it('applies to frames that wait for the decoder, in their order', async () => {
+				// No await: the decoder is not ready, so the frames are queued.
+				const conn = new OutgoingConnection('test-tag', { encoding: 'opus' }, options);
+
+				conn.handleMediaEvent(media('70000', '268460'));
+				conn.handleMediaEvent(media('70001', '269420'));
+				conn.resetChunkTracking();
+				// The new numbers are a little below the old ones: without the reset these are late packets.
+				conn.handleMediaEvent(media('69990', '270380'));
+				conn.handleMediaEvent(media('69992', '272300'));
+				await vi.runAllTimersAsync();
+
+				expect(metricCount('audio_packet_discarded')).toBe(0);
+				// The gap after the reset (69991) is still seen: the reset is at its place in the queue.
+				expect(metricCount('audio_loss_concealment')).toBe(1);
+				expect(mockBackend.getSentAudioCount()).toBe(5);
+			});
 		});
 	});
 

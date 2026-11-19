@@ -16,6 +16,7 @@
 
 import type { AudioDecoder, DecodedAudio } from './AudioDecoder';
 import { NO_CHUNK_INFO } from './AudioDecoder';
+import { ChunkOrder } from './translate/chunkOrder';
 import { resamplePCM16, RESAMPLER_SUPPORTED_SAMPLE_RATES } from './Resampler';
 
 /**
@@ -29,7 +30,8 @@ import { resamplePCM16, RESAMPLER_SUPPORTED_SAMPLE_RATES } from './Resampler';
  * out-of-order packets are discarded consistently across decoder types.
  */
 export class L16Decoder implements AudioDecoder {
-	private _lastChunkNo = NO_CHUNK_INFO;
+	onChunkRestart?: () => void;
+	private _order = new ChunkOrder();
 	private _ready = Promise.resolve();
 	private _inputSampleRate: number;
 	private _outputSampleRate: number;
@@ -54,14 +56,14 @@ export class L16Decoder implements AudioDecoder {
 	}
 
 	decodeChunk(frame: Uint8Array, chunkNo: number, _timestamp: number): DecodedAudio[] | null {
-		if (chunkNo !== NO_CHUNK_INFO && this._lastChunkNo !== NO_CHUNK_INFO) {
-			if (chunkNo - this._lastChunkNo <= 0) {
+		if (chunkNo !== NO_CHUNK_INFO) {
+			const step = this._order.next(chunkNo);
+			if (step === 'old') {
 				return null; // out-of-order or replayed packet — discard
 			}
-		}
-
-		if (chunkNo !== NO_CHUNK_INFO) {
-			this._lastChunkNo = chunkNo;
+			if (step.restarted) {
+				this.onChunkRestart?.();
+			}
 		}
 
 		if (frame.byteLength % 2 !== 0) {
@@ -73,7 +75,7 @@ export class L16Decoder implements AudioDecoder {
 	}
 
 	reset(): void {
-		this._lastChunkNo = NO_CHUNK_INFO;
+		this._order.reset();
 	}
 
 	free(): void {

@@ -431,6 +431,9 @@ export class TranscriberProxy extends EventEmitter {
 		if (connection) {
 			this.mediaFormats.set(tag, mediaFormat);
 			connection.updateInputFormat(mediaFormat);
+			// The bridge's chunk numbering starts again with a start event (docs/claude/protocol.md).
+			// An unchanged format keeps the decoder, so its chunk tracking is reset here.
+			connection.resetChunkTracking();
 		} else {
 			// An explicit start event is the client telling us to (re)open this stream now, so it
 			// clears any backoff left by an earlier failure.
@@ -736,7 +739,7 @@ export class TranscriberProxy extends EventEmitter {
 		this.firstFrameLoggedTags.clear();
 
 		// Reset chunk tracking on all connections so frames from the new client
-		// aren't discarded as "reordered" (chunk numbers restart from 0)
+		// aren't discarded as "reordered" (the chunk numbering starts again on a new socket)
 		this.outgoingConnections.forEach((connection, tag) => {
 			connection.resetChunkTracking();
 		});
