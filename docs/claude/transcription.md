@@ -96,7 +96,7 @@ When audio stops flowing, `OutgoingConnection` waits `FORCE_COMMIT_TIMEOUT` seco
 - Session resumption means a `TranscriberProxy` may exist without an active WebSocket connection.
 - Each participant creates its own `OutgoingConnection` and backend connection to the provider.
 - The `tag` field identifies a participant's media source within a session. Format is a sourceId — `{id}-{mediaType}` (e.g. `abc123-a0`, where the suffix encodes media type: `a`=audio, `v`=video) or just `{id}`. The hex `{id}` prefix is parsed out (via `/^([0-9a-fA-F]+)-/`) as the participant id, while the full tag is retained on `participant.tag`. Tags whose prefix isn't hex fall back to `id === tag === <whole tag>`.
-- `openai_custom` is a provider that reuses `OpenAIBackend` but with a per-request WebSocket URL (from the `openaiCustomUrl` URL query parameter) and API key (from the `X-Custom-Openai-Api-Key` HTTP header). It is gated by `ENABLE_OPENAI_CUSTOM_PROVIDER=true` (similar to `ENABLE_DUMMY_PROVIDER`). The URL and key are stored in `TranscriberProxyOptions` (`openaiCustomUrl`, `openaiCustomApiKey`) and passed to `BackendFactory.createBackend` via `OpenAICustomOptions`. `BackendFactory` instantiates `OpenAIBackend(tag, participantInfo, wsUrl, apiKey)` for this provider.
+- `openai_custom` is a provider that reuses `OpenAIBackend` but with a per-request WebSocket URL (from the `openaiCustomUrl` URL query parameter) and API key (from the `X-Custom-Openai-Api-Key` HTTP header). It is gated by `ENABLE_OPENAI_CUSTOM_PROVIDER=true` (similar to `ENABLE_DUMMY_PROVIDER`). The URL and key are stored in `TranscriberProxyOptions` (`openaiCustomUrl`, `openaiCustomApiKey`) and passed to `BackendFactory.createBackend` via `OpenAICustomOptions`. `BackendFactory` instantiates `OpenAIBackend(tag, participantInfo, wsUrl, apiKey)` for this provider. With `OPENAI_CUSTOM_PARTICIPANT_PARAM` set, `openaiCustomUrlFor` adds the participant's id to that URL as the query parameter it names, so the service at the URL can tell one participant's connection from another's.
 - `doClose()` is idempotent. Do not call it more than once expecting repeated side effects — the `isClosed` guard makes subsequent calls no-ops. Backend callbacks (`onClosed`, `onError`, etc.) are nulled before `close()` is called, so async backend events arriving after teardown are silently dropped.
 
 ## Key environment variables
@@ -108,6 +108,7 @@ See README.md for the complete list.
 - `MISTRAL_MODEL` - Mistral Voxtral realtime model (default: `voxtral-mini-transcribe-realtime-3`)
 - `ENABLE_OPENAI_CUSTOM_PROVIDER` - Enable the openai_custom provider (default: false)
 - `OPENAI_CUSTOM_REQUIRE_WSS` - Require wss:// for openaiCustomUrl (default: true; set false to allow ws://)
+- `OPENAI_CUSTOM_PARTICIPANT_PARAM` - Query parameter that carries the participant's id on the openai_custom URL (default: unset, the URL is used as given)
 - `PORT`, `HOST` - Server listen config
 - `FORCE_COMMIT_TIMEOUT` - Seconds before finalizing pending audio (default: 2)
 - `SESSION_RESUME_ENABLED` - Enable session resumption (default: true)
