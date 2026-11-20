@@ -127,6 +127,53 @@ function oneOf<T extends string>(name: string, raw: string | undefined, allowed:
 	return fallback;
 }
 
+/**
+ * A comma-separated list of TCP ports; unset or empty gives an empty list. An entry that is not a port is reported
+ * and dropped, and a value left with no port allows 443 only: a typo must not open every port.
+ */
+function portList(name: string, raw: string | undefined): number[] {
+	const entries = (raw || '').split(',').map(p => p.trim()).filter(p => p);
+	const ports = entries.filter(p => /^\d{1,5}$/.test(p) && Number(p) >= 1 && Number(p) <= 65535).map(Number);
+	if (ports.length === entries.length) return ports;
+	warnConfig(`${name}=${JSON.stringify(raw)} has an entry that is not a TCP port; ${ports.length > 0 ? 'ignoring it' : 'allowing port 443 only'}`);
+	return ports.length > 0 ? ports : [443];
+}
+
+/**
+ * The deny list, each entry spelled the way an endpoint URL's host is compared. An entry that is not a host is
+ * reported and dropped: unlike a bad allowlist entry it would deny nothing, and without a sign.
+ */
+function deniedHostList(name: string, raw: string | undefined): string[] {
+	const hosts: string[] = [];
+	for (const entry of (raw || '').split(',').map(h => h.trim()).filter(h => h)) {
+		const bare = entry.replace(/^\./, '').replace(/\.+$/, '');
+		// A colon is an IPv6 literal's, which a URL spells in brackets; a host:port entry then fails to parse.
+		const literal = bare.includes(':') && !bare.startsWith('[') ? `[${bare}]` : bare;
+		let host = '';
+		try {
+			const url = new URL(`wss://${literal}`);
+			if (!/[\s/?#@*\\]/.test(bare) && url.port === '') host = url.hostname;
+		} catch {
+			// Reported below.
+		}
+		if (host === '') {
+			warnConfig(`${name} entry ${JSON.stringify(entry)} is not a host name or address, so it denies nothing; ignoring it`);
+			continue;
+		}
+		hosts.push(entry.startsWith('.') ? `.${host}` : host);
+	}
+	return hosts;
+}
+
+/** A whole number of milliseconds above zero; anything else is reported and the default used. */
+function positiveMs(name: string, raw: string | undefined, fallback: number): number {
+	if (raw === undefined || raw.trim() === '') return fallback;
+	const value = /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+	if (Number.isSafeInteger(value) && value > 0) return value;
+	warnConfig(`${name}=${JSON.stringify(raw)} is not a whole number of milliseconds above 0; using ${fallback}`);
+	return fallback;
+}
+
 function parseIntOrDefault(value: string | undefined, defaultValue: number): number {
 	if (!value) return defaultValue;
 	const parsed = parseInt(value, 10);
@@ -333,6 +380,14 @@ export const config = {
 		// non-empty, the endpoint host must match. Empty = allow any PUBLIC host (private ranges always blocked).
 		allowedHosts: (process.env.AGENT_ALLOWED_HOSTS || '').split(',').map(h => h.trim().toLowerCase())
 			.filter(h => h),
+		// Optional denylist of customer endpoint hosts, in the allowlist's syntax. A matching host is refused even
+		// when the allowlist accepts it, and before any lookup; a hosted deployment lists its own zones here.
+		deniedHosts: deniedHostList('AGENT_DENIED_HOSTS', process.env.AGENT_DENIED_HOSTS),
+		// Optional list of the TCP ports a customer endpoint may use (comma-separated). A URL without a port counts
+		// as its scheme's default, 443 for wss. Empty = any port.
+		allowedPorts: portList('AGENT_ALLOWED_PORTS', process.env.AGENT_ALLOWED_PORTS),
+		// How long (ms) the WebSocket handshake with the customer endpoint may go without progress before the dial fails.
+		dialTimeoutMs: positiveMs('AGENT_DIAL_TIMEOUT_MS', process.env.AGENT_DIAL_TIMEOUT_MS, 30000),
 		// Dev/same-host opt-in: skip the private/internal-address SSRF denylist so the agent endpoint may be on
 		// localhost or an internal IP. Removes SSRF protection - never enable where untrusted callers can reach
 		// the /agent endpoint.

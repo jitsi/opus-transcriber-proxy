@@ -26,6 +26,8 @@ import ipaddr from 'ipaddr.js';
  * This is the pre-dial check, which fails fast with a clear reason. The address actually connected to is checked
  * again by the request-filtering agent on the outbound socket (server.ts), which closes the DNS-rebinding gap: a
  * name that resolves public here and private at connect time.
+ *
+ * The host deny list and the port list are a deployment's own limits on top of that, checked without a lookup.
  */
 
 /**
@@ -59,11 +61,46 @@ export function hostAllowed(host: string, allowedHosts: string[]): boolean {
 	});
 }
 
+/**
+ * Whether a host is on the deny list, which has the allowlist's syntax: an entry matches its host and subdomains.
+ *
+ * @param {string} host - The endpoint hostname, lower-cased.
+ * @param {string[]} deniedHosts - The deny list; empty denies nothing.
+ * @returns {boolean}
+ */
+export function hostDenied(host: string, deniedHosts: string[]): boolean {
+	// A trailing dot names the same host, so it must not get past the list.
+	return deniedHosts.length > 0 && hostAllowed(host.replace(/\.+$/, ''), deniedHosts);
+}
+
+/**
+ * Why an endpoint URL's port is refused, or null when it may be used.
+ *
+ * @param {URL} url - The endpoint URL; without a port it counts as its scheme's default (443 for wss).
+ * @param {number[]} allowedPorts - The ports an endpoint may use; empty allows every port.
+ * @returns {string | null}
+ */
+export function endpointPortError(url: URL, allowedPorts: number[]): string | null {
+	const port = url.port !== '' ? Number(url.port) : url.protocol === 'ws:' ? 80 : 443;
+
+	if (allowedPorts.length === 0 || allowedPorts.includes(port)) {
+		return null;
+	}
+
+	return `Agent endpoint port ${port} is not in the configured port list`;
+}
+
 export async function assertPublicEndpointHost(
 		host: string,
 		allowedHosts: string[],
-		allowPrivate = false): Promise<string | null> {
+		allowPrivate = false,
+		deniedHosts: string[] = []): Promise<string | null> {
 	const lower = host.toLowerCase();
+
+	// Before the allowlist and before any lookup: a denied host wins over both.
+	if (hostDenied(lower, deniedHosts)) {
+		return 'Agent endpoint host is in the configured denylist';
+	}
 
 	if (!hostAllowed(lower, allowedHosts)) {
 		return 'Agent endpoint host is not in the configured allowlist';

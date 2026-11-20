@@ -59,6 +59,9 @@ describe('config', () => {
 		delete process.env.ENABLE_AGENT;
 		delete process.env.AGENT_PROVISIONING_URL;
 		delete process.env.AGENT_PROVISIONING_ROUTING;
+		delete process.env.AGENT_DENIED_HOSTS;
+		delete process.env.AGENT_ALLOWED_PORTS;
+		delete process.env.AGENT_DIAL_TIMEOUT_MS;
 	});
 
 	// Restore original env after all tests
@@ -247,6 +250,96 @@ describe('config', () => {
 			vi.resetModules();
 			process.env.AGENT_PROVISIONING_ROUTING = 'HAProxy';
 			expect((await import('../../src/config')).config.agent.provisioningRouting).toBe('haproxy');
+		});
+	});
+
+	describe('agent dial limits', () => {
+		it('limits nothing when the variables are unset or empty, and times the handshake out after 30 s', async () => {
+			for (const empty of [undefined, '', ' , ']) {
+				vi.resetModules();
+				if (empty !== undefined) {
+					process.env.AGENT_DENIED_HOSTS = empty;
+					process.env.AGENT_ALLOWED_PORTS = empty;
+					process.env.AGENT_DIAL_TIMEOUT_MS = empty.replace(',', '');
+				}
+				const { config, configWarnings } = await import('../../src/config');
+				expect(config.agent.deniedHosts).toEqual([]);
+				expect(config.agent.allowedPorts).toEqual([]);
+				expect(config.agent.dialTimeoutMs).toBe(30000);
+				expect(configWarnings).toEqual([]);
+			}
+		});
+
+		it('reads AGENT_DENIED_HOSTS as it reads AGENT_ALLOWED_HOSTS', async () => {
+			process.env.AGENT_DENIED_HOSTS = ' .Example.com, meet.example.org ,';
+			process.env.AGENT_ALLOWED_HOSTS = ' .Example.com, meet.example.org ,';
+			const { config } = await import('../../src/config');
+			expect(config.agent.deniedHosts).toEqual(['.example.com', 'meet.example.org']);
+			expect(config.agent.deniedHosts).toEqual(config.agent.allowedHosts);
+		});
+
+		it('spells AGENT_DENIED_HOSTS entries the way an endpoint host is compared', async () => {
+			process.env.AGENT_DENIED_HOSTS = 'Corp.Example., .b\u00fccher.de, 2001:db8::1, [2001:db8::2], 0x7f.1';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.deniedHosts).toEqual(['corp.example', '.xn--bcher-kva.de', '[2001:db8::1]', '[2001:db8::2]', '127.0.0.1']);
+			expect(configWarnings).toEqual([]);
+		});
+
+		it('drops an AGENT_DENIED_HOSTS entry that is not a host, which would deny nothing, and says so', async () => {
+			process.env.AGENT_DENIED_HOSTS = '*.corp.example, https://corp.example, corp.example:443, 10.0.0.0/8, user@corp.example, ., meet.example.org';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.deniedHosts).toEqual(['meet.example.org']);
+			expect(configWarnings).toHaveLength(6);
+			for (const warning of configWarnings) {
+				expect(warning).toContain('AGENT_DENIED_HOSTS');
+			}
+		});
+
+		it('reads AGENT_ALLOWED_PORTS as a list of ports', async () => {
+			process.env.AGENT_ALLOWED_PORTS = '443, 8443 ,';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.allowedPorts).toEqual([443, 8443]);
+			expect(configWarnings).toEqual([]);
+		});
+
+		it('drops an AGENT_ALLOWED_PORTS entry that is not a port, with a warning, and keeps the others', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.AGENT_ALLOWED_PORTS = '443,84x3,0,70000,-1';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.allowedPorts).toEqual([443]);
+			expect(configWarnings).toEqual([expect.stringMatching(/AGENT_ALLOWED_PORTS.*ignoring it/)]);
+			warn.mockRestore();
+		});
+
+		it('allows port 443 only, and not every port, when no AGENT_ALLOWED_PORTS entry is a port', async () => {
+			for (const bad of ['https', '8443;9443', '0', '65536']) {
+				vi.resetModules();
+				const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+				process.env.AGENT_ALLOWED_PORTS = bad;
+				const { config, configWarnings } = await import('../../src/config');
+				expect(config.agent.allowedPorts, bad).toEqual([443]);
+				expect(configWarnings).toEqual([expect.stringMatching(/AGENT_ALLOWED_PORTS.*allowing port 443 only/)]);
+				warn.mockRestore();
+			}
+		});
+
+		it('reads AGENT_DIAL_TIMEOUT_MS', async () => {
+			process.env.AGENT_DIAL_TIMEOUT_MS = ' 2500 ';
+			const { config, configWarnings } = await import('../../src/config');
+			expect(config.agent.dialTimeoutMs).toBe(2500);
+			expect(configWarnings).toEqual([]);
+		});
+
+		it('uses the default for an AGENT_DIAL_TIMEOUT_MS that is not a whole number above 0, which would time nothing out, and says so', async () => {
+			for (const bad of ['0', '-5', '10s', '1.5', 'never']) {
+				vi.resetModules();
+				const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+				process.env.AGENT_DIAL_TIMEOUT_MS = bad;
+				const { config, configWarnings } = await import('../../src/config');
+				expect(config.agent.dialTimeoutMs, bad).toBe(30000);
+				expect(configWarnings).toEqual([expect.stringContaining('AGENT_DIAL_TIMEOUT_MS')]);
+				warn.mockRestore();
+			}
 		});
 	});
 

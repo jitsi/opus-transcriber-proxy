@@ -90,6 +90,9 @@ describe('the variable table', () => {
 			'AGENT_ALLOW_PRIVATE_ENDPOINTS',
 			'AGENT_ALLOW_UNAUTHENTICATED',
 			'AGENT_PROVISIONING_URL',
+			'AGENT_DENIED_HOSTS',
+			'AGENT_ALLOWED_PORTS',
+			'AGENT_DIAL_TIMEOUT_MS',
 		]) {
 			expect(CONFIG_OVERRIDABLE_NAMES).not.toContain(name);
 		}
