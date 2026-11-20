@@ -95,6 +95,7 @@ export function createTextTranslator(provider: TextTranslationProvider): TextTra
 				apiKey: config.textTranslation.openai.apiKey,
 				model: config.textTranslation.openai.model,
 				...shared,
+				reasoningEffort: shared.reasoningEffort ?? config.textTranslation.openai.defaultReasoningEffort,
 			});
 		case 'xai':
 			// xAI's API is OpenAI-shaped, so it is the same client with a different URL/key/model.

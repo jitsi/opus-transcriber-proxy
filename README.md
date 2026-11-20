@@ -214,7 +214,7 @@ addition to the session, and it must not stop transcription.
 | `TEXT_TRANSLATION_REASONING_EFFORT` | (unset) | `reasoning_effort` for the `openai` and `xai` providers. Use it if the configured model does reasoning by default |
 | `TEXT_TRANSLATION_MAX_OUTPUT_TOKENS` | (unset) | `max_completion_tokens` for the `openai` and `xai` providers. Be careful: a reasoning model can use a small limit for reasoning tokens only, and then return no text |
 | `TEXT_TRANSLATION_OPENAI_API_KEY` | (falls back to `OPENAI_API_KEY`) | Key for the `openai` provider |
-| `TEXT_TRANSLATION_OPENAI_MODEL` | `gpt-4o-mini` | Model for the `openai` provider. Measured against the API: 0.5 s to 1.2 s for one translation, and no reasoning tokens. `gpt-5-nano` costs less per token, but it used ~750 reasoning tokens for the same prompt (~6 s) |
+| `TEXT_TRANSLATION_OPENAI_MODEL` | `gpt-6-luna` | Model for the first-party OpenAI provider. If no model is configured, the built-in OpenAI endpoint uses Luna with reasoning disabled unless `TEXT_TRANSLATION_REASONING_EFFORT` is set. A custom OpenAI-compatible endpoint keeps the previous default (`gpt-4o-mini`); set a model ID supported by that endpoint. |
 | `TEXT_TRANSLATION_OPENAI_URL` | `https://api.openai.com/v1/chat/completions` | Endpoint for the `openai` provider |
 | `TEXT_TRANSLATION_XAI_API_KEY` | (falls back to `XAI_API_KEY`) | Key for the `xai` provider |
 | `TEXT_TRANSLATION_XAI_MODEL` | `grok-4.20-0309-non-reasoning` | Model for the `xai` provider. This is the variant that does no reasoning. The Grok 4 reasoning models used 3 s to 17 s for one translation |
