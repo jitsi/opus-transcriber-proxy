@@ -27,8 +27,8 @@ import type { ISessionParameters } from '../../src/utils';
 // State that the config mock reads. vi.hoisted makes it available to the hoisted vi.mock factory.
 const providerState = vi.hoisted(() => ({ defaultProvider: 'openai' as string | null }));
 
-// The /agent proxies server.ts created, with the handlers it registered on each.
-const agentSessions = vi.hoisted(() => [] as Array<{ handlers: Record<string, (...args: any[]) => void> }>);
+// The /agent proxies server.ts created, with the options it gave each and the handlers it registered on it.
+const agentSessions = vi.hoisted(() => [] as Array<{ options: any; handlers: Record<string, (...args: any[]) => void> }>);
 
 // ── Mock all server.ts dependencies before the module loads ──────────────────
 // Note: vi.mock() factories are hoisted – no references to outer variables allowed.
@@ -145,7 +145,7 @@ vi.mock('../../src/agentproxy', () => ({
 	// Plain class (not vi.fn) so mockReset doesn't clear the implementation.
 	AgentProxy: class {
 		handlers: Record<string, (...args: any[]) => void> = {};
-		constructor() {
+		constructor(_ws: unknown, public options: any) {
 			agentSessions.push(this);
 		}
 		on(event: string, handler: (...args: any[]) => void) {
@@ -165,8 +165,9 @@ import { handleWebSocketConnection } from '../../src/server';
 import { config as mockedConfig } from '../../src/config';
 import { TranscriberProxy } from '../../src/transcriberproxy';
 import http from 'http';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { sessionManager } from '../../src/SessionManager';
+import { getInstruments } from '../../src/telemetry/instruments';
 import logger from '../../src/logger';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -605,6 +606,9 @@ describe('HTTP request handler', () => {
 			allowEndpointParam: true,
 			requireWss: true,
 			allowedHosts: [],
+			deniedHosts: [],
+			allowedPorts: [],
+			dialTimeoutMs: 10000,
 			allowPrivateEndpoints: true, // skips the endpoint guard's DNS lookup
 			paceLeadMs: 0,
 		};
@@ -629,6 +633,99 @@ describe('HTTP request handler', () => {
 			(mockedConfig as any).agent = original.agent;
 			wss.handleUpgrade = original.handleUpgrade;
 		}
+	});
+
+	describe('the limits on the /agent dial', () => {
+		/**
+		 * Upgrades /agent for `endpoint` (the dev parameter) under the given agent settings, runs `check` with the
+		 * bridge socket the upgrade was answered with, and puts the config back.
+		 */
+		async function upgradeAgent(agent: Record<string, unknown>, endpoint: string, check: (bridgeWs: ReturnType<typeof makeMockWs>) => Promise<void>) {
+			const original = {
+				enableAgent: (mockedConfig as any).enableAgent,
+				agent: (mockedConfig as any).agent,
+				handleUpgrade: wss.handleUpgrade,
+			};
+			(mockedConfig as any).enableAgent = true;
+			(mockedConfig as any).agent = {
+				sharedSecret: '',
+				allowUnauthenticated: true,
+				allowEndpointParam: true,
+				requireWss: true,
+				allowedHosts: [],
+				deniedHosts: [],
+				allowedPorts: [],
+				dialTimeoutMs: 10000,
+				allowPrivateEndpoints: true, // skips the endpoint guard's DNS lookup
+				paceLeadMs: 0,
+				...agent,
+			};
+			const bridgeWs = makeMockWs();
+			wss.handleUpgrade = (_req: unknown, _socket: unknown, _head: unknown, done: (ws: unknown) => void) => done(bridgeWs);
+			// mockReset (vitest config) clears the instruments mock before each test; a refused dial is counted.
+			vi.mocked(getInstruments).mockReturnValue({ agentDialFailuresTotal: { add: vi.fn() } } as any);
+			agentSessions.length = 0;
+
+			try {
+				upgradeHandler(
+					{ url: `/agent?sessionId=s1&endpoint=${encodeURIComponent(endpoint)}`, method: 'GET', headers: { host: 'localhost' } },
+					{ write: vi.fn(), destroy: vi.fn() },
+					Buffer.alloc(0),
+				);
+				await check(bridgeWs);
+			} finally {
+				agentSessions.forEach((session) => session.handlers.closed?.());
+				(mockedConfig as any).enableAgent = original.enableAgent;
+				(mockedConfig as any).agent = original.agent;
+				wss.handleUpgrade = original.handleUpgrade;
+			}
+		}
+
+		it('gives the endpoint socket the dial timeout as its handshake timeout', async () => {
+			await upgradeAgent({ dialTimeoutMs: 4321 }, 'wss://agent.example/ws', async () => {
+				await vi.waitFor(() => expect(agentSessions).toHaveLength(1));
+
+				agentSessions[0].options.createEndpointWebSocket('wss://agent.example/ws');
+
+				expect(WebSocket).toHaveBeenCalledWith('wss://agent.example/ws', expect.objectContaining({ handshakeTimeout: 4321 }));
+			});
+		});
+
+		it('closes the bridge leg with the terminal code for a port outside the list, naming the port, and dials nothing', async () => {
+			await upgradeAgent({ allowedPorts: [443] }, 'wss://agent.example:8443/ws', async (bridgeWs) => {
+				await vi.waitFor(() => expect(bridgeWs.close).toHaveBeenCalled());
+
+				expect(bridgeWs.close).toHaveBeenCalledWith(4002, 'Agent endpoint port 8443 is not in the configured port list (host=agent.example)');
+				expect(agentSessions).toHaveLength(0);
+			});
+		});
+
+		it('dials an endpoint without a port when the list has 443', async () => {
+			await upgradeAgent({ allowedPorts: [443] }, 'wss://agent.example/ws', async (bridgeWs) => {
+				await vi.waitFor(() => expect(agentSessions).toHaveLength(1));
+
+				expect(bridgeWs.close).not.toHaveBeenCalled();
+			});
+		});
+
+		it('closes the bridge leg with the terminal code for a denied host that the allowlist accepts', async () => {
+			await upgradeAgent({ allowedHosts: ['agent.example'], deniedHosts: ['agent.example'] }, 'wss://agent.example/ws', async (bridgeWs) => {
+				await vi.waitFor(() => expect(bridgeWs.close).toHaveBeenCalled());
+
+				expect(bridgeWs.close).toHaveBeenCalledWith(4002, 'Agent endpoint host is in the configured denylist (host=agent.example)');
+				expect(agentSessions).toHaveLength(0);
+			});
+		});
+
+		it('closes the bridge leg with the terminal code for an endpoint URL with credentials, without repeating them', async () => {
+			await upgradeAgent({}, 'wss://user:s3cret@agent.example/ws', async (bridgeWs) => {
+				await vi.waitFor(() => expect(bridgeWs.close).toHaveBeenCalled());
+
+				expect(bridgeWs.close).toHaveBeenCalledWith(4002, 'agent endpoint URL must not contain credentials (use endpoint.authorization)');
+				expect(agentSessions).toHaveLength(0);
+				expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain('s3cret');
+			});
+		});
 	});
 
 	it('still returns OK on GET /health', () => {

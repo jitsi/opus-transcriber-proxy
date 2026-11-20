@@ -32,9 +32,20 @@ describe('closeReason', () => {
 		expect(closeReason('a'.repeat(200))).toHaveLength(MAX_CLOSE_REASON_BYTES);
 	});
 
-	it('keeps a dial failure with non-ASCII text within the limit', () => {
-		const reason = dialFailureReason(`connect ECONNREFUSED ${'ü'.repeat(120)}`);
-		expect(bytes(reason)).toBeLessThanOrEqual(MAX_CLOSE_REASON_BYTES);
-		expect(reason.startsWith('endpoint unreachable: connect ECONNREFUSED')).toBe(true);
+	it('gives an unreachable endpoint one reason, with nothing of the error in it', () => {
+		for (const message of [
+			'connect ECONNREFUSED 10.0.0.5:6379',
+			'getaddrinfo ENOTFOUND bot.internal.example',
+			'Opening handshake has timed out',
+			`connect ECONNREFUSED ${'ü'.repeat(120)}`,
+			'endpoint closed before the handshake completed',
+		]) {
+			expect(dialFailureReason(message), message).toBe('endpoint unreachable');
+		}
+	});
+
+	it('keeps the HTTP status of a refused dial, within the limit', () => {
+		expect(dialFailureReason('Unexpected server response: 401')).toBe('endpoint refused: HTTP 401');
+		expect(bytes(dialFailureReason(`Unexpected server response: ${'9'.repeat(200)}`))).toBeLessThanOrEqual(MAX_CLOSE_REASON_BYTES);
 	});
 });

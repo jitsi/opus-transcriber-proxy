@@ -15,13 +15,16 @@
  */
 
 /**
- * Tests for the /agent SSRF guard: private-range classification, host allowlist matching, and the
- * combined resolve-and-check for IP literals. (Hostname DNS resolution is exercised via IP literals;
- * the lookup path is a thin wrapper over node:dns.)
+ * Tests for the /agent SSRF guard: private-range classification, host allowlist and denylist matching, the
+ * port list, and the combined resolve-and-check for IP literals. (Hostname DNS resolution is exercised via
+ * IP literals; the lookup is mocked, so a test can tell whether a host name was resolved at all.)
  */
 
-import { describe, it, expect } from 'vitest';
-import { assertPublicEndpointHost, hostAllowed, isPrivateAddress } from '../../src/agent/endpointGuard';
+import { describe, it, expect, vi } from 'vitest';
+import { lookup } from 'node:dns/promises';
+import { assertPublicEndpointHost, endpointPortError, hostAllowed, hostDenied, isPrivateAddress } from '../../src/agent/endpointGuard';
+
+vi.mock('node:dns/promises', () => ({ lookup: vi.fn() }));
 
 describe('endpointGuard.isPrivateAddress', () => {
 	it('flags IPv4 private, loopback, link-local and metadata addresses', () => {
@@ -97,6 +100,56 @@ describe('endpointGuard.hostAllowed', () => {
 	});
 });
 
+describe('endpointGuard.hostDenied', () => {
+	it('denies nothing when the list is empty', () => {
+		expect(hostDenied('anything.example.com', [])).toBe(false);
+	});
+
+	it('matches an exact host and its subdomains, with a dot boundary, as the allowlist does', () => {
+		for (const list of [ [ 'example.com' ], [ '.example.com' ] ]) {
+			expect(hostDenied('example.com', list)).toBe(true);
+			expect(hostDenied('meet.example.com', list)).toBe(true);
+			expect(hostDenied('evilexample.com', list)).toBe(false);
+			expect(hostDenied('example.com.attacker.net', list)).toBe(false);
+		}
+	});
+
+	it('matches a host written with a trailing dot, which names the same host', () => {
+		expect(hostDenied('meet.example.com.', [ 'example.com' ])).toBe(true);
+		expect(hostDenied('example.com..', [ 'example.com' ])).toBe(true);
+	});
+});
+
+describe('endpointGuard.endpointPortError', () => {
+	const error = (url: string, ports: number[]) => endpointPortError(new URL(url), ports);
+
+	it('allows every port when the list is empty', () => {
+		expect(error('wss://bot.example.com/ws', [])).toBeNull();
+		expect(error('wss://bot.example.com:8443/ws', [])).toBeNull();
+		expect(error('wss://bot.example.com:1/ws', [])).toBeNull();
+	});
+
+	it('counts a URL without a port as 443', () => {
+		expect(error('wss://bot.example.com/ws', [ 443 ])).toBeNull();
+		expect(error('wss://bot.example.com:443/ws', [ 443 ])).toBeNull();
+		expect(error('wss://bot.example.com/ws', [ 8443 ])).toBe('Agent endpoint port 443 is not in the configured port list');
+	});
+
+	it('allows a listed port', () => {
+		expect(error('wss://bot.example.com:8443/ws', [ 443, 8443 ])).toBeNull();
+	});
+
+	it('refuses a port that is not listed, naming it', () => {
+		expect(error('wss://bot.example.com:6379/ws', [ 443, 8443 ])).toBe('Agent endpoint port 6379 is not in the configured port list');
+		expect(error('wss://bot.example.com:4430/ws', [ 443 ])).toMatch(/port 4430 /);
+	});
+
+	it('counts a ws:// URL without a port as 80, the port it connects to', () => {
+		expect(error('ws://bot.example.com/ws', [ 443 ])).toMatch(/port 80 /);
+		expect(error('ws://bot.example.com/ws', [ 80 ])).toBeNull();
+	});
+});
+
 describe('endpointGuard.assertPublicEndpointHost', () => {
 	it('rejects an IP-literal endpoint in a private range', async () => {
 		expect(await assertPublicEndpointHost('169.254.169.254', [])).toMatch(/non-public/);
@@ -117,5 +170,27 @@ describe('endpointGuard.assertPublicEndpointHost', () => {
 
 	it('still enforces the allowlist even when allowPrivate is set', async () => {
 		expect(await assertPublicEndpointHost('10.0.0.5', [ 'agents.example.com' ], true)).toMatch(/allowlist/);
+	});
+
+	it('resolves a host name that no list refuses', async () => {
+		vi.mocked(lookup).mockResolvedValue([ { address: '93.184.216.34', family: 4 } ] as never);
+
+		expect(await assertPublicEndpointHost('agents.example.com', [ 'example.com' ], false, [ 'internal.example.net' ])).toBeNull();
+		expect(lookup).toHaveBeenCalledTimes(1);
+	});
+
+	it('refuses a denied host although the allowlist accepts it, without resolving it', async () => {
+		expect(await assertPublicEndpointHost('meet.example.com', [ 'example.com' ], false, [ 'meet.example.com' ])).toMatch(/denylist/);
+		expect(await assertPublicEndpointHost('Meet.Example.COM.', [], false, [ '.example.com' ])).toMatch(/denylist/);
+		expect(lookup).not.toHaveBeenCalled();
+	});
+
+	it('refuses a denied host even when allowPrivate is set', async () => {
+		expect(await assertPublicEndpointHost('meet.example.com', [], true, [ 'example.com' ])).toMatch(/denylist/);
+	});
+
+	it('denies no host when the denylist is empty or left out', async () => {
+		expect(await assertPublicEndpointHost('8.8.8.8', [], false, [])).toBeNull();
+		expect(await assertPublicEndpointHost('8.8.8.8', [])).toBeNull();
 	});
 });

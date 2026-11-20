@@ -176,17 +176,55 @@ describe('AgentProxy', () => {
 		expect(bridgeWs.closeReason).toBe('endpoint refused: HTTP 401');
 	});
 
-	it('an unreachable endpoint reports failed with the error text', async () => {
+	it('an unreachable endpoint reports failed with no detail of the error, which goes to the log', async () => {
+		const proxy = createProxy();
+		const lifecycle: any[] = [];
+		const errors: string[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', (message: string) => errors.push(message));
+		await settle();
+
+		endpointWs.fire('error', { message: 'connect ECONNREFUSED 127.0.0.1:9094' });
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable' } ]);
+		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		expect(bridgeWs.closeReason).toBe('endpoint unreachable');
+		// What the host logs: the proxy's own line, and the session's error event.
+		expect(runtime.logger.error).toHaveBeenCalledWith('agent: endpoint WebSocket error: connect ECONNREFUSED 127.0.0.1:9094');
+		expect(errors).toEqual([ 'connect ECONNREFUSED 127.0.0.1:9094' ]);
+	});
+
+	it('a handshake that times out fails the dial as any unreachable endpoint does', async () => {
 		const proxy = createProxy();
 		const lifecycle: any[] = [];
 		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
 		proxy.on('error', () => undefined);
 		await settle();
 
-		endpointWs.fire('error', { message: 'connect ECONNREFUSED 127.0.0.1:9094' });
+		// What `ws` does when its handshakeTimeout expires: an error, then the close.
+		endpointWs.fire('error', { message: 'Opening handshake has timed out' });
+		endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
 
-		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: connect ECONNREFUSED 127.0.0.1:9094' } ]);
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable' } ]);
 		expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
+		expect(bridgeWs.closeReason).toBe('endpoint unreachable');
+		expect(runtime.logger.error).toHaveBeenCalledWith('agent: endpoint WebSocket error: Opening handshake has timed out');
+	});
+
+	it('an endpoint socket that cannot be created fails the dial the same way, and the cause is logged', async () => {
+		const proxy = createProxy({
+			createEndpointWebSocket: () => {
+				throw new Error('getaddrinfo ENOTFOUND bot.internal.example');
+			},
+		});
+		const lifecycle: any[] = [];
+		proxy.on('lifecycle', (e: any) => lifecycle.push(e));
+		proxy.on('error', () => undefined);
+		await settle();
+
+		expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable' } ]);
+		expect(bridgeWs.closeReason).toBe('endpoint unreachable');
+		expect(runtime.logger.error).toHaveBeenCalledWith('agent: failed to open endpoint WebSocket: getaddrinfo ENOTFOUND bot.internal.example');
 	});
 
 	it('a mid-session endpoint loss closes normally so the bridge may redial', async () => {
@@ -386,7 +424,7 @@ describe('AgentProxy', () => {
 
 			endpointWs.fire('close', { code: 1006, reason: '', wasClean: false });
 
-			expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable: endpoint closed before the handshake completed' } ]);
+			expect(lifecycle).toEqual([ { state: 'failed', reason: 'endpoint unreachable' } ]);
 			expect(errors).toEqual([ 'endpoint closed before the handshake completed' ]);
 			expect(bridgeWs.closeCode).toBe(CLOSE_CODE_ENDPOINT_UNREACHABLE);
 		});
