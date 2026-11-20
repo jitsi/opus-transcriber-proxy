@@ -27,16 +27,27 @@ upgrade with 503 unless `AGENT_ALLOW_UNAUTHENTICATED=true` (dev only), and eithe
 upgrade. The dial config is resolved by `agent/dial.ts` into a `DialResolution`: a transient failure (the provisioning API
 unreachable, 5xx, or answering without JSON or `endpoint.url`, all the API's problem rather than the agent's) refuses the upgrade
 with HTTP 400, which the bridge retries up to its agent reconnect cap; a permanent one (the agent gone, a conference haproxy routing cannot place, an agent config the relay
-cannot act on: a non-wss URL, an unknown encoding or fan-in, or the SSRF guard) accepts the upgrade,
+cannot act on: a non-wss URL, a URL with credentials, an unknown encoding or fan-in, or the endpoint guard) accepts the upgrade,
 reports `failed` once (not for a gone or unroutable agent) and closes with 4002, so the bridge stops redialing instead of retrying for
 minutes with nothing reported. The SSRF guard classifies addresses with `ipaddr.js` (private, loopback, link-local, CGNAT,
 multicast, reserved, and the NAT64/6to4/Teredo embeddings all count as non-public) and the outbound socket uses a
 `request-filtering-agent`, which checks the address actually connected to, closing the DNS-rebinding gap of the pre-dial
-lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Logs name the customer endpoint by host only, and the debug header dumps mask credential headers, as does the session-parameters line (`redactCredentials`). Lifecycle reports for one session are chained so they post in order, a
+lookup; `AGENT_ALLOW_PRIVATE_ENDPOINTS` relaxes both. Two more limits are the deployment's own, checked by the same guard
+before any lookup (`agent/endpointGuard.ts`): a port outside `AGENT_ALLOWED_PORTS` (a URL without a port counts as its
+scheme's default, 443 for `wss`), and a host in `AGENT_DENIED_HOSTS`, which is refused even when the allowlist or
+`AGENT_ALLOW_PRIVATE_ENDPOINTS` would accept it. The deny list matches the hostname as the URL writes it, with or without a
+trailing dot, and not what the name resolves to. A URL with a username or password is refused by `agent/dial.ts`: `ws`
+would send it as Basic auth, and the secret's place is `endpoint.authorization`. Logs name the customer endpoint by host only, and the debug header dumps mask credential headers, as does the session-parameters line (`redactCredentials`). Lifecycle reports for one session are chained so they post in order, a
 session reports a terminal state (`failed` or `ended`) once, and `AgentProxy` ignores customer messages once closed.
 It only notes the endpoint socket's `error` at debug then too, and fails no dial: `ws` reports a handshake that the proxy's own close
 aborted (the bridge left, or a shutdown, while the dial was pending) as an error, which used to report `failed` and so
 ended an agent the bridge would have redialled.
+The handshake with the customer endpoint has `AGENT_DIAL_TIMEOUT_MS` (`ws`'s `handshakeTimeout`, which counts the time
+the handshake's socket is idle). Its expiry is an `error` on the pending socket, so it fails the dial as any unreachable
+endpoint does. The reason of a failed dial that leaves the relay (the bridge leg's close reason and the status report) is
+`endpoint refused: HTTP <status>` or `endpoint unreachable` and nothing more (`dialFailureReason`): the raw error names
+the addresses and ports the relay tried, so it goes to the relay's log only, as `agent: endpoint WebSocket error: ...`
+and as the session's `error` event, which `server.ts` logs with the endpoint host.
 Status reports retry five times with doubling backoff, with a hard deadline and a 64 KiB body cap per request, and count a
 give-up in `otp_agent_status_reports_given_up_total`; permanent dial failures count in `otp_agent_dial_failures_total`.
 
@@ -191,6 +202,9 @@ locked design decisions (multi-speaker fan-in, teardown, RTVI) are in `AGENT_PRO
 - `AGENT_SHARED_SECRET` - Shared secret gating the /agent WS upgrade; the caller (the bridge, via jicofo's `agent.http-headers`) must send a matching `X-Agent-Token`. Unset, `/agent` refuses every upgrade (503) unless `AGENT_ALLOW_UNAUTHENTICATED=true`
 - `AGENT_ALLOW_UNAUTHENTICATED` - Dev opt-in to serve /agent with no shared secret (default: false). An open /agent lets anyone reaching the proxy dial any agent with the customer's credentials and drive its lifecycle reports; never enable it outside a bridge-only network
 - `AGENT_ALLOWED_HOSTS` - Comma-separated allowlist of customer endpoint hosts (exact or `.suffix`). Empty = allow any public host (private ranges blocked)
+- `AGENT_DENIED_HOSTS` - Comma-separated denylist of customer endpoint hosts, in the syntax of `AGENT_ALLOWED_HOSTS` (an entry matches its host and subdomains). A matching host is refused even when the allowlist accepts it, and before any DNS lookup; a hosted deployment lists its own zones here. Empty = deny none. An entry that is not a host name or address (a wildcard, a URL, a host with a port, an address range) is reported at start and ignored, since it would deny nothing. Environment only, like the two below: no KV override
+- `AGENT_ALLOWED_PORTS` - Comma-separated TCP ports a customer endpoint may use. A URL without a port counts as 443 (80 for `ws://`). Empty = any port. An entry that is not a port from 1 to 65535 is reported at start and ignored, and a value left with no port allows 443 only, so that a typo does not allow every port
+- `AGENT_DIAL_TIMEOUT_MS` - How long (ms) the WebSocket handshake with the customer endpoint may go without progress (default: 30000). On expiry the dial fails as for an unreachable endpoint. A value that is not a whole number above 0 is reported at start and the default used
 - `AGENT_ALLOW_PRIVATE_ENDPOINTS` - Dev/same-host opt-in that skips the private/internal-address SSRF denylist so the agent endpoint may be on localhost or an internal IP (default: false). Removes SSRF protection — never enable where untrusted callers can reach `/agent`
 - `AGENT_ALLOW_ENDPOINT_PARAM` - Honor the dev-only `?endpoint=` query param instead of fetching the dial config from the provisioning API (default: false)
 - `AGENT_PROVISIONING_ROUTING` - `direct` (default: `<url>/<route>`) or `haproxy`: the API sits behind a sharded deployment's HAProxy, reached through its signal-api host; the client puts the tenant before the base path and the room in `?room=`, spelled as jitsi-meet spells its own (decoded, lower-cased, form-encoded: HAProxy compares the bytes), which is what HAProxy picks the shard from; a breakout room's JID cannot be placed this way (warned, routed by its own id). A `404` saying the room is unknown then means the call reached a shard without it: logged with the path, a dial counts as the API being unavailable (the bridge retries) and a status report gives up at once (counted as given up; a meeting that has just ended on the right shard answers the same, so the count is approximate); a conference that cannot be routed at all fails the dial permanently, unreported

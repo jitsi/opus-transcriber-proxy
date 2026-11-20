@@ -160,7 +160,7 @@ src/
 ├── agent/
 │   ├── ProvisioningClient.ts  # Fetches an agent's dial config and reports its lifecycle to the provisioning API
 │   ├── dial.ts                # Dial config -> what to dial, or why not (transient / permanent)
-│   ├── endpointGuard.ts       # Refuses customer endpoints on private or internal addresses
+│   ├── endpointGuard.ts       # Refuses customer endpoints on private or internal addresses, denied hosts and ports not allowed
 │   ├── closeReason.ts         # Cuts a WebSocket close reason to its 123 bytes
 │   ├── mediaFormat.ts         # audio/l16 | audio/opus, and the duration of an Opus packet
 │   ├── fanIn.ts               # per-source | dominant | mix

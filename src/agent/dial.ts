@@ -96,6 +96,10 @@ export function resolveDialConfig(dial: AgentDialConfig, requireWss: boolean): D
 	if (parsed.protocol !== 'wss:' && !(parsed.protocol === 'ws:' && !requireWss)) {
 		return permanent('agent endpoint must be wss:// (set AGENT_REQUIRE_WSS=false to allow ws:// in dev)');
 	}
+	if (parsed.username !== '' || parsed.password !== '') {
+		// `ws` would send it as Basic auth; the secret's place is endpoint.authorization.
+		return permanent('agent endpoint URL must not contain credentials (use endpoint.authorization)');
+	}
 	return {
 		kind: 'dial',
 		dial: {
