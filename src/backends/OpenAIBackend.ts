@@ -25,6 +25,7 @@ import { config } from '../config';
 import { getTurnDetectionConfig } from '../utils';
 import { writeMetric } from '../metrics';
 import logger from '../logger';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 
@@ -222,7 +223,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			logger.error(`Failed to parse OpenAI message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse OpenAI message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, data)}`);
 			return;
 		}
 
@@ -252,7 +253,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 			);
 			this.onCompleteTranscription?.(transcription);
 		} else if (parsedMessage.type === 'conversation.item.input_audio_transcription.failed') {
-			logger.error(`OpenAI failed to transcribe audio for tag ${this.tag}: ${data}`);
+			logger.error(`OpenAI failed to transcribe audio for tag ${this.tag}: ${describeErrorFrame(parsedMessage)}`);
 			writeMetric(undefined, {
 				name: 'transcription_failure',
 				worker: 'opus-transcriber-proxy',
@@ -267,13 +268,13 @@ export class OpenAIBackend implements TranscriptionBackend {
 				logger.debug(`OpenAI reported empty audio buffer commit for ${this.tag}, ignoring.`);
 				return;
 			}
-			logger.error(`OpenAI sent error message for ${this.tag}: ${data}`);
+			logger.error(`OpenAI sent error message for ${this.tag}: ${describeErrorFrame(parsedMessage)}`);
 			writeMetric(undefined, {
 				name: 'openai_api_error',
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.error?.message || data);
+			this.onError?.('api_error', boundErrorText(parsedMessage.error?.message || describeErrorFrame(parsedMessage)));
 			this.close();
 		} else if (
 			parsedMessage.type !== 'input_audio_buffer.committed' &&

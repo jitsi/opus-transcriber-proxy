@@ -45,15 +45,16 @@ const EXPIRY_MARGIN_MS = 60_000;
 /**
  * Parse the service-account JSON from configuration.
  *
- * Throws with a message that names the missing field but never contains the key material, because
- * this runs at translator-creation time and the message is logged.
+ * Throws with a message that names the missing field or the kind of parse error, and never quotes the
+ * input, because the input is the service account and the message is logged at translator-creation time.
  */
 export function parseServiceAccount(json: string): GoogleServiceAccount {
 	let parsed: any;
 	try {
 		parsed = JSON.parse(json);
 	} catch (error) {
-		throw new Error(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+		// The message of a parse error can quote the input, which is the service account.
+		throw new Error(`not valid JSON (${error instanceof Error ? error.name : 'Error'})`);
 	}
 	if (typeof parsed?.client_email !== 'string' || typeof parsed?.private_key !== 'string') {
 		throw new Error('missing client_email or private_key');

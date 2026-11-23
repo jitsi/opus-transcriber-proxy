@@ -27,6 +27,7 @@ import type { IncomingMessage } from 'http';
 import WsWebSocket from 'ws';
 import { config } from '../config';
 import logger from '../logger';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -1330,8 +1331,8 @@ export class XAIBackend implements TranscriptionBackend {
 
 	private async handleMessage(data: any): Promise<void> {
 		let parsedMessage: any;
+		let messageText: string | undefined;
 		try {
-			let messageText: string | undefined;
 			if (typeof data === 'string') {
 				messageText = data;
 			} else if (data instanceof ArrayBuffer) {
@@ -1353,7 +1354,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 			logger.debug(`xAI event for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
 		} catch (parseError) {
-			logger.error(`Failed to parse xAI message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse xAI message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, messageText)}`);
 			return;
 		}
 
@@ -1367,7 +1368,7 @@ export class XAIBackend implements TranscriptionBackend {
 		} else if (type === 'transcript.done') {
 			this.handleDone(parsedMessage);
 		} else if (type === 'error') {
-			const message: string = parsedMessage.message || JSON.stringify(parsedMessage);
+			const message: string = parsedMessage.message || describeErrorFrame(parsedMessage);
 			const utteranceFailed = XAI_UTTERANCE_FAILED_RE.test(message);
 			if (utteranceFailed && ++this.consecutiveUtteranceFailures < XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES) {
 				// xAI says the session continues, so keep it: closing it ourselves throws away the
@@ -1376,7 +1377,7 @@ export class XAIBackend implements TranscriptionBackend {
 				// the same way as after any turn xAI drops. If xAI closes the socket after all, the
 				// 'close' listener reports it as a remote close and the next media frame reopens it.
 				logger.warn(
-					`xAI failed an utterance for ${this.tag} (requestId=${this.requestId ?? 'none'}, ${this.consecutiveUtteranceFailures}/${XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES} in a row); keeping the stream open: ${message}`,
+					`xAI failed an utterance for ${this.tag} (requestId=${this.requestId ?? 'none'}, ${this.consecutiveUtteranceFailures}/${XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES} in a row); keeping the stream open: ${boundErrorText(message)}`,
 				);
 				writeMetric(undefined, {
 					name: 'xai_api_error',
@@ -1385,7 +1386,7 @@ export class XAIBackend implements TranscriptionBackend {
 				});
 				return;
 			}
-			logger.error(`xAI API error for ${this.tag} (requestId=${this.requestId ?? 'none'}): ${JSON.stringify(parsedMessage)}`);
+			logger.error(`xAI API error for ${this.tag} (requestId=${this.requestId ?? 'none'}): ${describeErrorFrame(parsedMessage)}`);
 			// xAI closes the ASR stream after a stretch of silence/inactivity. The exact
 			// message observed on wss://api.x.ai/v1/stt (2026-06-16) is:
 			//   {type:"error", message:"ASR stream timed out"}
@@ -1393,7 +1394,7 @@ export class XAIBackend implements TranscriptionBackend {
 			// so we flag it recoverable and OutgoingConnection reopens the stream in place
 			// instead of dropping the participant (JIT-15901).
 			// NOTE: the match is on the message text. If xAI changes the wording this
-			// silently reverts to the fatal path. The full parsedMessage is logged at
+			// silently reverts to the fatal path. The type, code and message of the frame are logged at
 			// error level just above, so if the "ASR stream timed out" error rate climbs
 			// after an xAI API change, audit that log and update this matcher.
 			//
@@ -1408,7 +1409,7 @@ export class XAIBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: utteranceFailed ? 'utterance_failed' : recoverable ? 'stream_timeout' : 'api_error',
 			});
-			this.onError?.('api_error', message, recoverable);
+			this.onError?.('api_error', boundErrorText(message), recoverable);
 			this.close();
 		} else {
 			logger.debug(`Unhandled xAI message type for ${this.tag}: ${type}`);

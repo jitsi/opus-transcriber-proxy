@@ -1076,6 +1076,38 @@ describe('XAIBackend', () => {
 			expect(backend.getStatus()).toBe('closed');
 		});
 
+		it('logs the type and message of an error frame, not the whole frame', () => {
+			backend.onError = vi.fn();
+
+			getMockWs().simulateMessage(JSON.stringify({ type: 'error', message: 'invalid api key', transcript: 'what she said' }));
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => String(args[0])).join('\n');
+			expect(logged).toContain('invalid api key');
+			expect(logged).not.toContain('what she said');
+		});
+
+		it('does not log the text of a parse error for a frame that is not JSON', () => {
+			getMockWs().simulateMessage('she said it was fine');
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('Failed to parse xAI message as JSON');
+			expect(logged).toContain('SyntaxError');
+			expect(logged).not.toContain('she said');
+		});
+
+		it('bounds the message it passes on, and still matches "timed out" on the whole message', () => {
+			const errorSpy = vi.fn();
+			backend.onError = errorSpy;
+			const message = `${'word '.repeat(80)}\n\n stream timed out`;
+
+			getMockWs().simulateMessage(JSON.stringify({ type: 'error', message }));
+
+			const [, passed, recoverable] = errorSpy.mock.calls[0];
+			expect(recoverable).toBe(true);
+			expect(passed.length).toBeLessThanOrEqual(201);
+			expect(passed).not.toContain('\n');
+		});
+
 		it('should flag "ASR stream timed out" as recoverable (JIT-15901)', () => {
 			const errorSpy = vi.fn();
 			backend.onError = errorSpy;

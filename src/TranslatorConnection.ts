@@ -25,6 +25,7 @@ import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
+import { describeErrorFrame, describeParseFailure } from './errorFrame';
 import {
 	defaultTranslationProvider,
 	getTranslationProvider,
@@ -777,7 +778,7 @@ export class TranslatorConnection {
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			this.logError(`Failed to parse ${provider.name} message as JSON for tag ${this.localTag}:`, parseError);
+			this.logError(`Failed to parse ${provider.name} message as JSON for tag ${this.localTag}: ${describeParseFailure(parseError, data)}`);
 			return;
 		}
 
@@ -905,7 +906,7 @@ export class TranslatorConnection {
 		this.log(`[${this.options.targetLanguage}] Received event: ${parsedMessage.type}`);
 
 		if (parsedMessage.type === 'error') {
-			this.logError(`${provider.name} sent error message for ${this.localTag}: ${data}`);
+			this.logError(`${provider.name} sent error message for ${this.localTag}: ${describeErrorFrame(parsedMessage)}`);
 			// xAI names a voice it does not know when answering session.update; learn it so the directions
 			// that would use it fall back from their reopen on (see translate/voices.ts for the chain).
 			const refusedVoice = provider.takesVoice ? refusedVoiceOf(String(parsedMessage.error?.message ?? '')) : undefined;
@@ -922,7 +923,7 @@ export class TranslatorConnection {
 				errorType: refusedVoice !== undefined ? 'unknown_voice' : 'api_error',
 			});
 			// Notify before doClose() detaches the callbacks.
-			this.onError?.(this.localTag, `${provider.name} service sent error message: ${data}`);
+			this.onError?.(this.localTag, `${provider.name} service sent error message: ${describeErrorFrame(parsedMessage)}`);
 			this.doClose(true, 'error');
 		}
 	}

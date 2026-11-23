@@ -35,6 +35,7 @@ import {
 	type TextTranslationProvider,
 } from './textTranslate/factory';
 import { buildTextTranslationMessage, transcriptionText } from './textTranslate/messages';
+import { describeParseFailure } from './errorFrame';
 import { ConversationHistory } from './textTranslate/ConversationHistory';
 
 /**
@@ -213,8 +214,8 @@ export class TranscriberProxy extends EventEmitter {
 			try {
 				parsedMessage = JSON.parse(event.data as string);
 			} catch (parseError) {
-				logger.error('Failed to parse message as JSON:', parseError);
-				parsedMessage = { raw: event.data, parseError: true };
+				logger.error(`Failed to parse message as JSON: ${describeParseFailure(parseError, event.data)}`);
+				parsedMessage = { parseError: true };
 			}
 
 			if (parsedMessage && parsedMessage.event === 'ping') {
@@ -644,7 +645,7 @@ export class TranscriberProxy extends EventEmitter {
 						// current prompt (0 occurrences across 96 adversarial calls), so if it ever fires
 						// the prompt or a model has changed and we want to know, not to paper over it.
 						logger.warn(
-							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed: ${JSON.stringify(translated.slice(0, 80))}`,
+							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed (${translated.length} characters)`,
 						);
 					}
 					this.translationCount++;

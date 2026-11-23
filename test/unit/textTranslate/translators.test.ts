@@ -122,6 +122,37 @@ describe('ChatCompletionsTextTranslator', () => {
 		await expect(translator().translate(REQUEST)).resolves.toBe('elle a dit');
 	});
 
+	it('puts only the status and a short error code in the error of a non-2xx response', async () => {
+		respondJson({ error: { code: 'unsupported_country_region_territory', message: 'she said it was fine' } }, 403);
+
+		const error = await translator().translate(REQUEST).catch((e: Error) => e);
+
+		expect(error.message).toMatch(/HTTP 403 \(unsupported_country_region_territory\)/);
+		expect(error.message).not.toContain('she said');
+	});
+
+	it('leaves out an error code that is not a plain identifier', async () => {
+		respondJson({ error: { code: 'she said it was fine', type: 'x'.repeat(100) } }, 400);
+
+		const error = await translator().translate(REQUEST).catch((e: Error) => e);
+
+		expect(error.message).toMatch(/HTTP 400$/);
+	});
+
+	it('does not repeat the text of a JSON parse error', async () => {
+		fetchMock.mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => JSON.parse('elle a dit que tout allait bien'),
+			text: async () => '',
+		});
+
+		const error = await translator().translate(REQUEST).catch((e: Error) => e);
+
+		expect(error.message).toMatch(/could not parse response as JSON/);
+		expect(error.message).not.toContain('elle a dit');
+	});
+
 	it('rejects on a non-2xx response, naming the provider and the status', async () => {
 		respondJson({ error: { message: 'model not found' } }, 404);
 

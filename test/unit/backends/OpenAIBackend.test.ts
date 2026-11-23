@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OpenAIBackend } from '../../../src/backends/OpenAIBackend';
+import logger from '../../../src/logger';
 import { mockGlobalWebSocket, MockWebSocket, type MockWebSocketInstance } from '../../helpers/websocket-mock';
 import type { BackendConfig } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
@@ -517,6 +518,40 @@ describe('OpenAIBackend', () => {
 
 			expect(onErrorSpy).toHaveBeenCalledWith('api_error', 'Invalid request');
 			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('does not log the text of a parse error for a frame that is not JSON', async () => {
+			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
+			const connectPromise = backend.connect({ model: 'gpt-4o-transcribe', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage('she said it was fine');
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('Failed to parse OpenAI message as JSON');
+			expect(logged).not.toContain('she said');
+		});
+
+		it('logs the type and message of an error frame, not the whole frame', async () => {
+			const backend = new OpenAIBackend('test-tag', { id: 'participant-1' });
+			backend.onError = vi.fn();
+			const config: BackendConfig = {
+				model: 'gpt-4o-transcribe',
+				language: undefined,
+				prompt: undefined,
+			};
+			const connectPromise = backend.connect(config);
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage(
+				JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Invalid request' }, item: { transcript: 'what she said' } }),
+			);
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => String(args[0])).join('\n');
+			expect(logged).toContain('Invalid request');
+			expect(logged).not.toContain('what she said');
 		});
 
 		it('should ignore empty buffer commit errors', async () => {
