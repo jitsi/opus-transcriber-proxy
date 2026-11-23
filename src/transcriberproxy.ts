@@ -644,7 +644,7 @@ export class TranscriberProxy extends EventEmitter {
 						// current prompt (0 occurrences across 96 adversarial calls), so if it ever fires
 						// the prompt or a model has changed and we want to know, not to paper over it.
 						logger.warn(
-							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed: ${JSON.stringify(translated.slice(0, 80))}`,
+							`Session ${this.sessionId}: ${language} translation came back with a speaker label — the prompt or the model may have changed (${translated.length} characters)`,
 						);
 					}
 					this.translationCount++;

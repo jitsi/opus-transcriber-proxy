@@ -24,6 +24,7 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
+import { describeErrorFrame } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -336,13 +337,13 @@ export class DeepgramBackend implements TranscriptionBackend {
 		} else if (parsedMessage.type === 'Metadata') {
 			logger.debug(`Received metadata for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
 		} else if (parsedMessage.type === 'Error') {
-			logger.error(`Deepgram API error for ${this.tag}:`, JSON.stringify(parsedMessage));
+			logger.error(`Deepgram API error for ${this.tag}: ${describeErrorFrame(parsedMessage)}`);
 			writeMetric(undefined, {
 				name: 'deepgram_api_error',
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.message || JSON.stringify(parsedMessage));
+			this.onError?.('api_error', parsedMessage.message || describeErrorFrame(parsedMessage));
 		} else {
 			logger.debug(`Unhandled Deepgram message type for ${this.tag}: ${parsedMessage.type}`);
 		}

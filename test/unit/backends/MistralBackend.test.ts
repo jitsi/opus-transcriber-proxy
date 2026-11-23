@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MistralBackend } from '../../../src/backends/MistralBackend';
 import type { BackendConfig } from '../../../src/backends/TranscriptionBackend';
 import { writeMetric } from '../../../src/metrics';
+import logger from '../../../src/logger';
 
 // The last WsWebSocket instance created by the ws mock. Module scope so the
 // (hoisted) vi.mock factory can reference it.
@@ -293,6 +294,17 @@ describe('MistralBackend', () => {
 
 			expect(onError).toHaveBeenCalledWith('api_error', 'Invalid model', false);
 			expect(backend.getStatus()).toBe('closed');
+		});
+
+		it('logs the code and message of an error frame, not the whole frame', async () => {
+			const { backend, ws } = await connectBackend();
+			backend.onError = vi.fn();
+
+			ws.simulateMessage({ type: 'error', error: { message: 'Invalid model', code: 1000 }, item: { text: 'what she said' } });
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => String(args[0])).join('\n');
+			expect(logged).toContain('Invalid model');
+			expect(logged).not.toContain('what she said');
 		});
 
 		it('emits the pending text as a final before reporting an error', async () => {

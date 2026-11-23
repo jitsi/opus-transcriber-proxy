@@ -1076,6 +1076,16 @@ describe('XAIBackend', () => {
 			expect(backend.getStatus()).toBe('closed');
 		});
 
+		it('logs the type and message of an error frame, not the whole frame', () => {
+			backend.onError = vi.fn();
+
+			getMockWs().simulateMessage(JSON.stringify({ type: 'error', message: 'invalid api key', transcript: 'what she said' }));
+
+			const logged = (logger.error as any).mock.calls.map((args: any[]) => String(args[0])).join('\n');
+			expect(logged).toContain('invalid api key');
+			expect(logged).not.toContain('what she said');
+		});
+
 		it('should flag "ASR stream timed out" as recoverable (JIT-15901)', () => {
 			const errorSpy = vi.fn();
 			backend.onError = errorSpy;

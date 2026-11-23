@@ -17,6 +17,8 @@ _Split out of `CLAUDE.md`; see the task table there for which of these documents
 - Levels: error, warn, info, debug
 - Set `LOG_LEVEL=debug` or `DEBUG=true` for verbose output
 
+- **Log lines carry no conversation text above debug level.** Transcript text, translated text and raw provider frames are logged only at `debug` (`LOG_LEVEL=debug`, or `DEBUG=true`). A line at `info`, `warn` or `error` names the language, a length, a status or an error code instead. Use `describeErrorFrame` (`src/errorFrame.ts`) to log a provider error frame: it keeps the `type`, `code` and a short `message`, and nothing else. An error of a text translation carries the HTTP status and a short provider error code (`src/textTranslate/http.ts`), never a slice of the response body.
+
 ## Debugging tools
 
 ### WebSocket Message Dumping

@@ -23,6 +23,7 @@
 
 import { config } from '../config';
 import logger from '../logger';
+import { describeErrorFrame } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -295,13 +296,13 @@ export class GeminiBackend implements TranscriptionBackend {
 
 		// Handle errors
 		if (parsedMessage.error) {
-			logger.error(`Gemini API error for ${this.tag}:`, JSON.stringify(parsedMessage.error));
+			logger.error(`Gemini API error for ${this.tag}: ${describeErrorFrame(parsedMessage)}`);
 			writeMetric(undefined, {
 				name: 'gemini_api_error',
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.error.message || JSON.stringify(parsedMessage.error));
+			this.onError?.('api_error', parsedMessage.error.message || describeErrorFrame(parsedMessage));
 
 			if (reject) {
 				reject(new Error(parsedMessage.error.message || 'Gemini API error'));

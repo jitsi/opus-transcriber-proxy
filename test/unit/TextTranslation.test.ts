@@ -361,6 +361,10 @@ describe('text translation', () => {
 
 			// Reported so a prompt or model regression is visible...
 			expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('came back with a speaker label'));
+			// The line names the language and the length. It never holds the text itself.
+			const line = (logger.warn as any).mock.calls.map((call: any[]) => String(call[0])).join('\n');
+			expect(line).not.toContain('bonjour');
+			expect(line).toContain('fr translation');
 			// ...but never repaired: editing the text means recognising a label in an arbitrary human
 			// language, which mangles ordinary sentences. The prompt is what keeps labels out.
 			expect(translations).toHaveBeenCalledTimes(1);
