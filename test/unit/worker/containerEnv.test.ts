@@ -86,6 +86,11 @@ describe('buildContainerEnvVars', () => {
 		expect(set).toMatchObject({ GEMINI_MODEL: 'g', SESSION_RESUME_GRACE_PERIOD: '30', SLEEP_AFTER: '10m' });
 	});
 
+	it('forwards OPENAI_CUSTOM_PARTICIPANT_PARAM only when set', () => {
+		expect(buildContainerEnvVars(env())).not.toHaveProperty('OPENAI_CUSTOM_PARTICIPANT_PARAM');
+		expect(buildContainerEnvVars(env({ OPENAI_CUSTOM_PARTICIPANT_PARAM: 'participant' })).OPENAI_CUSTOM_PARTICIPANT_PARAM).toBe('participant');
+	});
+
 	it('forwards a JSON object binding as JSON, not as "[object Object]"', () => {
 		// A wrangler `vars` entry can be an object, and KV accepts one for these variables too.
 		const set = buildContainerEnvVars(

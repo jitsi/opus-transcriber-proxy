@@ -358,6 +358,7 @@ export const WORKER_VARS = {
 	FORCE_COMMIT_TIMEOUT: { container: def('2'), kv: int(0) },
 	ENABLE_OPENAI_CUSTOM_PROVIDER: { container: def('false') },
 	OPENAI_CUSTOM_REQUIRE_WSS: { container: def('true') },
+	OPENAI_CUSTOM_PARTICIPANT_PARAM: { container: IF_SET },
 	SESSION_RESUME_ENABLED: tunable(bool()),
 	SESSION_RESUME_GRACE_PERIOD: tunable(int(0)),
 	// Debug dumps inside the container (written under DUMP_BASE_PATH, /tmp by default). Not
