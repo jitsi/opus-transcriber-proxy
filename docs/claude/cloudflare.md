@@ -363,7 +363,8 @@ namespace only to the people who may deploy the Worker.
   traffic to another xAI endpoint (a region, a new path) but cannot send it anywhere else.
 - The security posture of `openai_custom` and `/agent` (`ENABLE_OPENAI_CUSTOM_PROVIDER`,
   `OPENAI_CUSTOM_REQUIRE_WSS`, `AGENT_REQUIRE_WSS`, `AGENT_ALLOW_PRIVATE_ENDPOINTS`,
-  `AGENT_ALLOW_UNAUTHENTICATED`): loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is
+  `AGENT_ALLOW_UNAUTHENTICATED`, `AGENT_DENIED_HOSTS`, `AGENT_ALLOWED_PORTS`, `AGENT_DIAL_TIMEOUT_MS`):
+  loosening it must be a reviewed release. `AGENT_ALLOWED_HOSTS` is
   overridable, as an incident lever to tighten the allowlist.
 - The debug dumps (`DUMP_WEBSOCKET_MESSAGES`, `DUMP_TRANSCRIPTS`, `DUMP_BASE_PATH`): they record
   every conference's audio and transcripts. `DEEPGRAM_MIP_OPT_OUT` is overridable, but only to

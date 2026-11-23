@@ -13,7 +13,8 @@ that depends on separate streams names `per-source` in its invite.
 ## Roles and transport
 
 - The **gateway** is the opus proxy `/agent` endpoint. It dials **out** to the **agent** server
-  (the customer's WebSocket).
+  (the customer's WebSocket). The agent has to keep the WebSocket handshake moving: a dial that makes no
+  progress for the deployment's dial timeout (30 s by default) fails as one to an unreachable endpoint does.
 - Transport is a single **WebSocket**. Every message is one **JSON text frame** (`event`-tagged).
 - Audio is **L16 PCM, signed 16-bit little-endian, mono**, base64-encoded in `payload`. The sample
   rate is announced per stream in `mediaFormat.sampleRate` (default **24000**); consumers read it
@@ -257,7 +258,7 @@ which the bridge treats as terminal: no redial.
 | Code | Meaning | Bridge behaviour |
 | --- | --- | --- |
 | 4001 | `agent ended`: the agent sent `end` | terminal, no redial |
-| 4002 | `endpoint unreachable` / `endpoint refused: HTTP <status>`: the dial to the agent endpoint failed; or the agent broke the media contract (see **Opus**); or the dial config could not be acted on at all (the agent no longer exists, an unsupported format or fan-in, a non-`wss` or private endpoint), in which case the gateway accepts the bridge's upgrade only to close it with this code | terminal, no redial |
+| 4002 | `endpoint unreachable` / `endpoint refused: HTTP <status>`: the dial to the agent endpoint failed; or the agent broke the media contract (see **Opus**); or the dial config could not be acted on at all (the agent no longer exists, an unsupported format or fan-in, a non-`wss` or private endpoint, an endpoint URL with credentials, a port or host the deployment does not dial), in which case the gateway accepts the bridge's upgrade only to close it with this code | terminal, no redial |
 | other | transport loss mid-session | the bridge redials; the agent sees a fresh `info`/`start` |
 
 A refused upgrade (HTTP 400) is reserved for transient failures on the gateway's side (its provisioning API

@@ -64,6 +64,22 @@ describe('agent dial resolution', () => {
 		expect(resolveDialConfig({ endpoint: { url: 'ws://bot.example.com/ws' } }, true)).toMatchObject({ kind: 'permanent', report: true });
 	});
 
+	it('is permanent with a report for an endpoint URL with a username or password, and does not repeat either', () => {
+		for (const url of ['wss://user:s3cret@bot.example.com/ws', 'wss://user@bot.example.com/ws', 'wss://:s3cret@bot.example.com/ws']) {
+			expect(resolveDialConfig({ ...ok, endpoint: { url } }, true), url).toEqual({
+				kind: 'permanent',
+				reason: 'agent endpoint URL must not contain credentials (use endpoint.authorization)',
+				report: true,
+			});
+		}
+		// Also where ws:// is allowed.
+		expect(resolveDialConfig({ endpoint: { url: 'ws://user:s3cret@127.0.0.1:9091/ws' } }, false)).toMatchObject({ kind: 'permanent', report: true });
+	});
+
+	it('dials a URL whose userinfo is empty, without it', () => {
+		expect(resolveDialConfig({ endpoint: { url: 'wss://@bot.example.com/ws' } }, true)).toMatchObject({ kind: 'dial', dial: { url: 'wss://bot.example.com/ws' } });
+	});
+
 	describe('the mix fan-in', () => {
 		it('carries the inline options the dial config sets, checked', () => {
 			expect(resolveDialConfig({ ...ok, fanIn: 'mix', mix: { bufferMs: 80, continuous: true } }, true)).toMatchObject({

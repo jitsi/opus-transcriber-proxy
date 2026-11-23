@@ -68,7 +68,8 @@ export const CLOSE_CODE_ENDPOINT_UNREACHABLE = 4002;
 /** A short, stable reason for a failed dial, fitting the 123-byte WebSocket close reason. */
 export function dialFailureReason(message: string): string {
 	const refused = /Unexpected server response: (\d+)/.exec(message);
-	return closeReason(refused ? `endpoint refused: HTTP ${refused[1]}` : `endpoint unreachable: ${message}`);
+	// The raw error names the addresses and ports the relay tried, so it stays in the local log.
+	return closeReason(refused ? `endpoint refused: HTTP ${refused[1]}` : 'endpoint unreachable');
 }
 
 // Bounds on buffering while the codecs / customer socket initialise (mirrors TranslatorConnection).

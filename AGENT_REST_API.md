@@ -91,7 +91,7 @@ Request:
 | `conference` | string | yes | The room's name as in the meeting URL: `<room>`, or `<tenant>/<room>` on a multi-tenant deployment. Any case, plain (`Sales Standup`) or percent-encoded (`sales%20standup`). A room JID is accepted too, and is the only way to name a breakout room. Responses, webhooks and the agent's `info` always use the public name, spelled as the meeting URL does (lower-case, percent-encoded), never a JID. |
 | `displayName` | string | yes | Roster name; length-bounded. |
 | `agentId` | string | no | Suffix or full `agent-` id; charset/length-bounded; normalized to the namespace. **Idempotency key** (see below). Auto-generated if omitted. |
-| `endpoint.url` | string | yes | Agent media WS; **`wss://` required** (prod). Stays in the control plane; the media relay fetches it at dial time. |
+| `endpoint.url` | string | yes | Agent media WS; **`wss://` required** (prod), with no username or password in it (a secret goes in `endpoint.authorization`). A deployment may limit the hosts and ports its media relay dials (`AGENT_ALLOWED_HOSTS`, `AGENT_DENIED_HOSTS`, `AGENT_ALLOWED_PORTS`). Stays in the control plane; the media relay fetches it at dial time. |
 | `endpoint.authorization` | string | no | Sent as the `Authorization` header on the media dial. Leaves the control plane only for that dial; never in room metadata, jicofo or the bridge. |
 | `customParameters` | object(string→string) | no | Opaque; bounded, control chars rejected; echoed to the agent in the media `info`/`start` (`customParameters`). |
 | `callbackUrl` | string | no | HTTPS webhook for this agent's lifecycle events (see **Webhooks**). |
@@ -143,7 +143,8 @@ The transitions are reported through an **internal** route, `POST <base>/status`
 never exposes it), by the two components that can see them. jicofo reports `connecting` when the synthetic
 endpoint allocation is submitted and `failed` when that allocation errors. The media relay (the opus proxy)
 reports the media leg: `active` when the agent's socket opens, `failed` when the dial to the agent endpoint
-fails (`endpoint refused: HTTP 401`, `endpoint unreachable: ...`), and `ended` when the agent sends `end`.
+fails (`endpoint refused: HTTP 401`, or `endpoint unreachable` with no further detail: what the relay's network
+answered stays in the relay's log), and `ended` when the agent sends `end`.
 It finds the agent through the `conference` and `agentId` query parameters jicofo puts on the dial URL and
 is configured with the API's base URL and bearer (`AGENT_PROVISIONING_URL`, `AGENT_PROVISIONING_TOKEN`). On a sharded deployment the base URL is on the environment's signal-api host (the `/voice-agent` path kept) and `AGENT_PROVISIONING_ROUTING=haproxy` puts the tenant before the path and the room in `?room=`, spelled as jitsi-meet spells its own (decoded, lower-cased, form-encoded), so HAProxy delivers each call to the shard holding the room; a `404` for the room then means the call reached a shard without it. A client library does the same (`routing: 'haproxy'` in `@jitsi/voice-agent-client`). Because jicofo cannot mint ASAP tokens, the status route also accepts a deployment shared
 secret as the bearer (`voice_agent_status_secret` on the component / `jicofo.agent.status.token` on
@@ -159,7 +160,7 @@ which reporters take as done.
 
 The dial config never travels through room metadata, jicofo or the bridge. The connect jicofo sends carries only
 `conference` and `agentId`; when the bridge connects, the media relay fetches the agent's dial config from a second
-**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn, mix }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a `mix` option it cannot use, a non-`wss` or private endpoint) is reported as `failed` once, with the reason, and the bridge stops redialing; an answer that is not a dial config at all
+**internal** route, `GET <base>/dial?conference=<id>&agentId=<id>` → `{ agentId, conference, endpoint, customParameters, mediaFormat, fanIn, mix }`. A dial config the relay cannot act on (an unsupported `mediaFormat` or `fanIn`, a `mix` option it cannot use, a non-`wss` or private endpoint, an endpoint URL with credentials, a port or host the deployment does not dial) is reported as `failed` once, with the reason, and the bridge stops redialing; an answer that is not a dial config at all
 (not JSON, no `endpoint.url`) counts as the API being unavailable, and the bridge retries (`404` once the agent is gone), authenticated like `status`. Its `conference` is the public room name, which the relay
 passes to the agent in the media `info`; the internal identifiers on the dial URL never reach the agent. On JaaS the
 gateway serves it from its own store.
@@ -246,7 +247,9 @@ deployments simply omit this layer.
    - **Endpoint allowlist (SSRF).** OSS has one global `AGENT_ALLOWED_HOSTS`; on JaaS this becomes
      **per-tenant** — a tenant may only dial its own registered agent hosts. The gateway validates
      `endpoint.url`'s host against the tenant's allowlist before forwarding (defense in depth on top
-     of the component's own private-range denylist).
+     of the component's own private-range denylist). The media relay's own limits stay global and
+     apply to every tenant: `AGENT_DENIED_HOSTS` (a hosted deployment lists its own zones, which no
+     tenant's allowlist can bring back), `AGENT_ALLOWED_PORTS` and `AGENT_DIAL_TIMEOUT_MS`.
    - **Quotas / rate limits.** Max concurrent agents per tenant and per room, invite rate limits.
      (OSS relies on the component's per-room cap only.)
    - **Webhook secret + callback allowlist.** Per-tenant signing secret; optional allowlist of
@@ -291,7 +294,8 @@ the frozen schema is what both the tenant and the component see.
 A self-hosted operator exposes the prosody component behind their own reverse proxy / network
 policy and issues ASAP tokens to their backend. There is no tenant layer: the deployment *is* the
 tenant. `AGENT_ALLOWED_HOSTS`, the per-room cap, and a single webhook secret are configured on the
-component/env. Everything in the **Endpoints**, **Webhooks** and **Error model** sections works
+component/env; the media relay also reads `AGENT_DENIED_HOSTS`, `AGENT_ALLOWED_PORTS` and
+`AGENT_DIAL_TIMEOUT_MS` from its environment. Everything in the **Endpoints**, **Webhooks** and **Error model** sections works
 identically; the operator simply owns the policy the JaaS gateway would otherwise apply per tenant.
 
 ## Conformance

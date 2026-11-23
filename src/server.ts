@@ -29,7 +29,7 @@ import { DialResolution, ResolvedDial, resolveDial } from './agent/dial';
 import type { MixStats } from './agent/mix/SourceTrack';
 import { mixEventCounts } from './agent/mix/metrics';
 import { resolveMixConfig } from './agent/mixConfig';
-import { assertPublicEndpointHost } from './agent/endpointGuard';
+import { assertPublicEndpointHost, endpointPortError } from './agent/endpointGuard';
 import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-filtering-agent';
 import { normalizeTargetLanguage } from './TranslatorConnection';
 import { resolveTranslationProvider } from './translate/provider';
@@ -252,11 +252,13 @@ async function handleAgentUpgrade(
 		return;
 	}
 	const dial = resolution.dial;
-	const host = new URL(dial.url).hostname;
+	const dialUrl = new URL(dial.url);
+	const host = dialUrl.hostname;
 
-	// SSRF guard: reject endpoints that resolve to private/internal addresses (and enforce the optional host
-	// allowlist) before dialing out. The outbound agent checks the connected address again (filteringAgent).
-	const ssrfError = await assertPublicEndpointHost(host, config.agent.allowedHosts, config.agent.allowPrivateEndpoints);
+	// SSRF guard: reject endpoints that resolve to private/internal addresses (and enforce the optional port list and
+	// host lists) before dialing out. The outbound agent checks the connected address again (filteringAgent).
+	const ssrfError = endpointPortError(dialUrl, config.agent.allowedPorts)
+		?? await assertPublicEndpointHost(host, config.agent.allowedHosts, config.agent.allowPrivateEndpoints, config.agent.deniedHosts);
 
 	if (ssrfError) {
 		failAgentPermanently(request, socket, head, ids, `${ssrfError} (host=${host})`, true, 'ssrf');
@@ -298,6 +300,8 @@ function handleAgentConnection(ws: WebSocket, endpoint: AgentEndpoint) {
 				new WebSocket(url, {
 					headers: endpoint.headers,
 					maxPayload: AGENT_ENDPOINT_MAX_MESSAGE_BYTES,
+					// Expiry is an `error` on the socket, so AgentProxy fails the dial as for any unreachable endpoint.
+					handshakeTimeout: config.agent.dialTimeoutMs,
 					agent: filteringAgent(url),
 				}) as unknown as IWebSocket,
 			customParameters: endpoint.customParameters,

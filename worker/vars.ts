@@ -484,6 +484,10 @@ export const WORKER_VARS = {
 	// Tightening the allowlist is an incident lever. An empty value allows any public host, so an
 	// override may not set it empty or unset it; delete the KV entry to restore the Worker value.
 	AGENT_ALLOWED_HOSTS: tunable(hostList('AGENT_ALLOWED_HOSTS')),
+	// The other limits on what /agent dials. Not overridable: a KV write could remove a denied host or add a port.
+	AGENT_DENIED_HOSTS: { container: IF_SET },
+	AGENT_ALLOWED_PORTS: { container: IF_SET },
+	AGENT_DIAL_TIMEOUT_MS: { container: IF_SET },
 	AGENT_ALLOW_PRIVATE_ENDPOINTS: { container: IF_SET },
 	AGENT_SHARED_SECRET: { container: IF_SET },
 	AGENT_ALLOW_UNAUTHENTICATED: { container: IF_SET },

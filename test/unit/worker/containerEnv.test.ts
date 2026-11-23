@@ -43,7 +43,8 @@ describe('buildContainerEnvVars', () => {
 	it('forwards the optional knobs only when set', () => {
 		const unset = buildContainerEnvVars(env());
 		for (const key of ['XAI_ENDPOINTING', 'XAI_STT_URL', 'XAI_STT_ENDPOINTS', 'ENABLE_TEXT_TRANSLATION', 'OPENAI_TRANSLATION_MODEL', 'ENABLE_AGENT',
-			'AGENT_SHARED_SECRET', 'AGENT_PROVISIONING_URL', 'AGENT_PROVISIONING_TOKEN', 'AGENT_PROVISIONING_HOST', 'AGENT_PROVISIONING_ROUTING']) {
+			'AGENT_SHARED_SECRET', 'AGENT_PROVISIONING_URL', 'AGENT_PROVISIONING_TOKEN', 'AGENT_PROVISIONING_HOST', 'AGENT_PROVISIONING_ROUTING',
+			'AGENT_ALLOWED_HOSTS', 'AGENT_DENIED_HOSTS', 'AGENT_ALLOWED_PORTS', 'AGENT_DIAL_TIMEOUT_MS']) {
 			expect(unset).not.toHaveProperty(key);
 		}
 		const set = buildContainerEnvVars(env({
@@ -53,6 +54,10 @@ describe('buildContainerEnvVars', () => {
 			ENABLE_AGENT: 'true',
 			AGENT_PROVISIONING_URL: 'https://signal-api.example/voice-agent',
 			AGENT_PROVISIONING_ROUTING: 'haproxy',
+			AGENT_ALLOWED_HOSTS: '.example.com',
+			AGENT_DENIED_HOSTS: '.example.net',
+			AGENT_ALLOWED_PORTS: '443,8443',
+			AGENT_DIAL_TIMEOUT_MS: '5000',
 		}));
 		expect(set.XAI_ENDPOINTING).toBe('850');
 		expect(set.XAI_STT_ENDPOINTS).toBe('{"eu":"wss://eu-west-1.api.x.ai/v1/stt"}');
@@ -60,6 +65,10 @@ describe('buildContainerEnvVars', () => {
 		expect(set.ENABLE_AGENT).toBe('true');
 		expect(set.AGENT_PROVISIONING_URL).toBe('https://signal-api.example/voice-agent');
 		expect(set.AGENT_PROVISIONING_ROUTING).toBe('haproxy');
+		expect(set.AGENT_ALLOWED_HOSTS).toBe('.example.com');
+		expect(set.AGENT_DENIED_HOSTS).toBe('.example.net');
+		expect(set.AGENT_ALLOWED_PORTS).toBe('443,8443');
+		expect(set.AGENT_DIAL_TIMEOUT_MS).toBe('5000');
 	});
 
 	it('forwards "0" for the talk-silence timeout (a non-empty string disables, it must not be dropped)', () => {
