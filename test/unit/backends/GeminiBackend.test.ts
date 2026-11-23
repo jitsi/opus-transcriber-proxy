@@ -487,7 +487,38 @@ describe('GeminiBackend', () => {
 		});
 	});
 
+	describe('handleMessage - parse failure', () => {
+		it('does not log the text of a parse error for a frame that is not JSON', async () => {
+			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
+			const connectPromise = backend.connect({ model: 'gemini-2.0-flash-exp', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({ setupComplete: {} }));
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage('she said it was fine');
+
+			const logged = vi.mocked(logger.error).mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('Failed to parse Gemini message as JSON');
+			expect(logged).not.toContain('she said');
+		});
+	});
+
 	describe('handleMessage - error', () => {
+		it('logs the message of an error frame, not the whole frame', async () => {
+			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
+			backend.onError = vi.fn();
+			const connectPromise = backend.connect({ model: 'gemini-2.0-flash-exp', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({ setupComplete: {} }));
+			await connectPromise;
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({ error: { message: 'Rate limit exceeded', details: 'what she said' } }));
+
+			const logged = vi.mocked(logger.error).mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('Rate limit exceeded');
+			expect(logged).not.toContain('what she said');
+		});
+
 		it('should call onError for error messages', async () => {
 			const backend = new GeminiBackend('test-tag', { id: 'participant-1' });
 			const onErrorSpy = vi.fn();

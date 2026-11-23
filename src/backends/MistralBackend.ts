@@ -30,7 +30,7 @@ import WsWebSocket from 'ws';
 import { config } from '../config';
 import { writeMetric } from '../metrics';
 import logger from '../logger';
-import { describeErrorFrame, describeRawErrorFrame } from '../errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { endsSentence } from './sentenceEnd';
@@ -203,7 +203,7 @@ export class MistralBackend implements TranscriptionBackend {
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			logger.error(`Failed to parse Mistral message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse Mistral message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, data)}`);
 			return;
 		}
 
@@ -227,7 +227,7 @@ export class MistralBackend implements TranscriptionBackend {
 		} else if (parsedMessage.type === 'session.updated') {
 			logger.debug(`Received session.updated for tag ${this.tag}:`, data);
 		} else if (parsedMessage.type === 'error') {
-			const message = parsedMessage.error?.message || describeRawErrorFrame(data);
+			const message = boundErrorText(parsedMessage.error?.message || describeErrorFrame(parsedMessage));
 			// The idle timeout is not a provider failure: reopen the stream in place
 			const recoverable = parsedMessage.error?.code === MISTRAL_TIMEOUT_ERROR_CODE;
 			logger.error(`Mistral sent error message for ${this.tag}: ${describeErrorFrame(parsedMessage)}`);

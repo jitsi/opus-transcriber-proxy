@@ -27,7 +27,7 @@ import type { IncomingMessage } from 'http';
 import WsWebSocket from 'ws';
 import { config } from '../config';
 import logger from '../logger';
-import { describeErrorFrame } from '../errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -1331,8 +1331,8 @@ export class XAIBackend implements TranscriptionBackend {
 
 	private async handleMessage(data: any): Promise<void> {
 		let parsedMessage: any;
+		let messageText: string | undefined;
 		try {
-			let messageText: string | undefined;
 			if (typeof data === 'string') {
 				messageText = data;
 			} else if (data instanceof ArrayBuffer) {
@@ -1354,7 +1354,7 @@ export class XAIBackend implements TranscriptionBackend {
 
 			logger.debug(`xAI event for ${this.tag}: ${JSON.stringify(parsedMessage)}`);
 		} catch (parseError) {
-			logger.error(`Failed to parse xAI message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse xAI message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, messageText)}`);
 			return;
 		}
 
@@ -1377,7 +1377,7 @@ export class XAIBackend implements TranscriptionBackend {
 				// the same way as after any turn xAI drops. If xAI closes the socket after all, the
 				// 'close' listener reports it as a remote close and the next media frame reopens it.
 				logger.warn(
-					`xAI failed an utterance for ${this.tag} (requestId=${this.requestId ?? 'none'}, ${this.consecutiveUtteranceFailures}/${XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES} in a row); keeping the stream open: ${message}`,
+					`xAI failed an utterance for ${this.tag} (requestId=${this.requestId ?? 'none'}, ${this.consecutiveUtteranceFailures}/${XAI_MAX_CONSECUTIVE_UTTERANCE_FAILURES} in a row); keeping the stream open: ${boundErrorText(message)}`,
 				);
 				writeMetric(undefined, {
 					name: 'xai_api_error',
@@ -1409,7 +1409,7 @@ export class XAIBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: utteranceFailed ? 'utterance_failed' : recoverable ? 'stream_timeout' : 'api_error',
 			});
-			this.onError?.('api_error', message, recoverable);
+			this.onError?.('api_error', boundErrorText(message), recoverable);
 			this.close();
 		} else {
 			logger.debug(`Unhandled xAI message type for ${this.tag}: ${type}`);

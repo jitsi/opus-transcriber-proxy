@@ -23,7 +23,7 @@
 
 import { config } from '../config';
 import logger from '../logger';
-import { describeErrorFrame } from '../errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -210,9 +210,9 @@ export class GeminiBackend implements TranscriptionBackend {
 
 	private async handleMessage(data: any, resolve?: (value: void) => void, reject?: (reason?: any) => void): Promise<void> {
 		let parsedMessage;
+		let messageText: string | undefined;
 		try {
 			// Handle different message formats (string, ArrayBuffer, Buffer, Blob)
-			let messageText: string | undefined;
 			if (typeof data === 'string') {
 				messageText = data;
 			} else if (data instanceof ArrayBuffer) {
@@ -252,7 +252,7 @@ export class GeminiBackend implements TranscriptionBackend {
 			);
 			logger.debug(`Gemini event for ${this.tag}: ${JSON.stringify(sanitized)}`);
 		} catch (parseError) {
-			logger.error(`Failed to parse Gemini message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse Gemini message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, messageText)}`);
 			return;
 		}
 
@@ -302,10 +302,10 @@ export class GeminiBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.error.message || describeErrorFrame(parsedMessage));
+			this.onError?.('api_error', boundErrorText(parsedMessage.error.message || describeErrorFrame(parsedMessage)));
 
 			if (reject) {
-				reject(new Error(parsedMessage.error.message || 'Gemini API error'));
+				reject(new Error(boundErrorText(parsedMessage.error.message || 'Gemini API error')));
 			}
 			return;
 		}

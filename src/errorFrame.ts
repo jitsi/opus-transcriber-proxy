@@ -16,15 +16,41 @@
 
 const MESSAGE_MAX_LENGTH = 200;
 const FIELD_MAX_LENGTH = 64;
+const IDENTIFIER_RE = /^[A-Za-z0-9_.:-]+$/;
 
-function shortField(value: unknown): string | undefined {
-	if (typeof value === 'number') {
+/** A `type` or `code` value: a number, or a short plain identifier. Anything else is free text and is left out. */
+function identifierField(value: unknown): string | undefined {
+	if (typeof value === 'number' && Number.isFinite(value)) {
 		return String(value);
 	}
-	if (typeof value !== 'string' || value.length === 0) {
+	if (typeof value !== 'string' || value.length === 0 || value.length > FIELD_MAX_LENGTH || !IDENTIFIER_RE.test(value)) {
 		return undefined;
 	}
-	return value.replace(/\s+/g, ' ').trim().slice(0, FIELD_MAX_LENGTH);
+	return value;
+}
+
+/**
+ * Bounds the text of a provider error for a log line or an `onError` message: whitespace collapsed,
+ * cut to a short length. Match on the raw string, and pass this one on.
+ */
+export function boundErrorText(value: unknown): string {
+	const text = (typeof value === 'string' ? value : String(value ?? '')).replace(/\s+/g, ' ').trim();
+	return text.length > MESSAGE_MAX_LENGTH ? `${text.slice(0, MESSAGE_MAX_LENGTH)}…` : text;
+}
+
+/**
+ * Describes a failed `JSON.parse` for a log line: the name of the error and the length of the frame. The
+ * message of a parse error can quote the start of the input, so it is never part of the description.
+ */
+export function describeParseFailure(error: unknown, raw?: unknown): string {
+	const name = error instanceof Error ? error.name : 'Error';
+	let length: number | undefined;
+	if (typeof raw === 'string') {
+		length = raw.length;
+	} else if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
+		length = raw.byteLength;
+	}
+	return length === undefined ? name : `${name}, frame of ${length} characters`;
 }
 
 /**
@@ -39,18 +65,18 @@ export function describeErrorFrame(frame: unknown): string {
 	const outer = frame !== null && typeof frame === 'object' ? (frame as Record<string, any>) : {};
 	const inner = outer.error !== null && typeof outer.error === 'object' ? (outer.error as Record<string, any>) : {};
 	const parts: string[] = [];
-	const type = shortField(inner.type) ?? shortField(outer.type);
-	const code = shortField(inner.code) ?? shortField(outer.code) ?? shortField(outer.err_code);
-	const rawMessage = inner.message ?? outer.message ?? (typeof outer.error === 'string' ? outer.error : undefined) ?? outer.err_msg;
+	const type = identifierField(inner.type) ?? identifierField(outer.type);
+	const code = identifierField(inner.code) ?? identifierField(outer.code) ?? identifierField(outer.err_code);
+	const candidates = [inner.message, outer.message, typeof outer.error === 'string' ? outer.error : undefined, outer.err_msg];
+	const rawMessage = candidates.find((candidate) => typeof candidate === 'string' && candidate.length > 0);
 	if (type) {
 		parts.push(`type=${type}`);
 	}
 	if (code) {
 		parts.push(`code=${code}`);
 	}
-	if (typeof rawMessage === 'string' && rawMessage.length > 0) {
-		const message = rawMessage.replace(/\s+/g, ' ').trim();
-		parts.push(`message=${JSON.stringify(message.length > MESSAGE_MAX_LENGTH ? `${message.slice(0, MESSAGE_MAX_LENGTH)}…` : message)}`);
+	if (rawMessage !== undefined) {
+		parts.push(`message=${JSON.stringify(boundErrorText(rawMessage))}`);
 	}
 	return parts.length > 0 ? parts.join(' ') : 'no type, code or message';
 }

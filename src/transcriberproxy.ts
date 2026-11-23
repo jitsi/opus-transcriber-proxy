@@ -35,6 +35,7 @@ import {
 	type TextTranslationProvider,
 } from './textTranslate/factory';
 import { buildTextTranslationMessage, transcriptionText } from './textTranslate/messages';
+import { describeParseFailure } from './errorFrame';
 import { ConversationHistory } from './textTranslate/ConversationHistory';
 
 /**
@@ -213,8 +214,8 @@ export class TranscriberProxy extends EventEmitter {
 			try {
 				parsedMessage = JSON.parse(event.data as string);
 			} catch (parseError) {
-				logger.error('Failed to parse message as JSON:', parseError);
-				parsedMessage = { raw: event.data, parseError: true };
+				logger.error(`Failed to parse message as JSON: ${describeParseFailure(parseError, event.data)}`);
+				parsedMessage = { parseError: true };
 			}
 
 			if (parsedMessage && parsedMessage.event === 'ping') {

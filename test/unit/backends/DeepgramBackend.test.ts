@@ -24,6 +24,7 @@ import { mockGlobalWebSocket, MockWebSocket, type MockWebSocketInstance } from '
 import type { BackendConfig, AudioFormat } from '../../../src/backends/TranscriptionBackend';
 import type { TranscriptionMessage } from '../../../src/transcriberproxy';
 import { config } from '../../../src/config';
+import logger from '../../../src/logger';
 
 // Mock logger
 vi.mock('../../../src/logger', () => ({
@@ -69,6 +70,37 @@ describe('DeepgramBackend', () => {
 	afterEach(() => {
 		mockWsManager.unmock();
 		vi.useRealTimers();
+	});
+
+	describe('error logging', () => {
+		async function connected() {
+			const backend = new DeepgramBackend('test-tag', { id: 'participant-1' });
+			backend.onError = vi.fn();
+			const connectPromise = backend.connect({ model: 'nova-2', language: undefined, prompt: undefined });
+			mockWsManager.mockWs.simulateOpen();
+			await connectPromise;
+			return backend;
+		}
+
+		it('logs the message of an error frame, not the whole frame', async () => {
+			await connected();
+
+			mockWsManager.mockWs.simulateMessage(JSON.stringify({ type: 'Error', message: 'bad request', transcript: 'what she said' }));
+
+			const logged = vi.mocked(logger.error).mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('bad request');
+			expect(logged).not.toContain('what she said');
+		});
+
+		it('does not log the text of a parse error for a frame that is not JSON', async () => {
+			await connected();
+
+			mockWsManager.mockWs.simulateMessage('she said it was fine');
+
+			const logged = vi.mocked(logger.error).mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+			expect(logged).toContain('Failed to parse Deepgram message as JSON');
+			expect(logged).not.toContain('she said');
+		});
 	});
 
 	describe('Constructor', () => {

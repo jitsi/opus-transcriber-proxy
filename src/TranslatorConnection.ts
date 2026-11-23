@@ -25,7 +25,7 @@ import { markVoiceRefused, refusedVoiceOf } from './translate/voices';
 import type { IOpusDecoder } from './OpusDecoder/opusTypes';
 import type { IOpusEncoder, EncodedFrame } from './OpusEncoder/opusEncoderTypes';
 import type { IWebSocket, MetricBatcher, TranslationRuntime } from './translate/runtime';
-import { describeErrorFrame } from './errorFrame';
+import { describeErrorFrame, describeParseFailure } from './errorFrame';
 import {
 	defaultTranslationProvider,
 	getTranslationProvider,
@@ -778,7 +778,7 @@ export class TranslatorConnection {
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			this.logError(`Failed to parse ${provider.name} message as JSON for tag ${this.localTag}:`, parseError);
+			this.logError(`Failed to parse ${provider.name} message as JSON for tag ${this.localTag}: ${describeParseFailure(parseError, data)}`);
 			return;
 		}
 

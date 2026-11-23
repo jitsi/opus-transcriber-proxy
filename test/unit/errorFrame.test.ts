@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { describeErrorFrame, describeRawErrorFrame } from '../../src/errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure, describeRawErrorFrame } from '../../src/errorFrame';
 
 describe('describeErrorFrame', () => {
 	it('reads type, code and message from the error member', () => {
@@ -59,5 +59,33 @@ describe('describeRawErrorFrame', () => {
 		const text = describeRawErrorFrame('she said it was fine');
 
 		expect(text).toBe('unparsable frame of 20 characters');
+	});
+});
+
+describe('describeErrorFrame fields', () => {
+	it('leaves out a type or code that is free text', () => {
+		expect(describeErrorFrame({ type: 'she said it was fine', code: 'what she said', message: 'failed' })).toBe('message="failed"');
+	});
+
+	it('falls back to the outer message when the inner one is not a string', () => {
+		expect(describeErrorFrame({ type: 'error', message: 'outer', error: { message: { text: 'what she said' } } })).toBe(
+			'type=error message="outer"',
+		);
+	});
+});
+
+describe('boundErrorText', () => {
+	it('collapses whitespace and cuts the text', () => {
+		expect(boundErrorText('a  b\n\tc')).toBe('a b c');
+		expect(boundErrorText('x'.repeat(500)).length).toBe(201);
+	});
+});
+
+describe('describeParseFailure', () => {
+	it('names the error and gives the length, never the message', () => {
+		const error = new SyntaxError('Unexpected token \'s\', "she said"... is not valid JSON');
+
+		expect(describeParseFailure(error, 'she said it was fine')).toBe('SyntaxError, frame of 20 characters');
+		expect(describeParseFailure(error)).toBe('SyntaxError');
 	});
 });

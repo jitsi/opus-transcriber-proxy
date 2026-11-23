@@ -73,6 +73,24 @@ describe('parseServiceAccount', () => {
 		expect(() => parseServiceAccount('not json')).toThrow(/not valid JSON/);
 	});
 
+	it('does not quote the input in the message of a parse error', () => {
+		const error = (() => {
+			try {
+				parseServiceAccount('{"client_email": "a@b.c", "private_key": "KEYMATERIAL" oops');
+			} catch (e) {
+				return e as Error;
+			}
+		})();
+
+		expect(error?.message).toMatch(/not valid JSON/);
+		expect(error?.message).not.toContain('KEYMATERIAL');
+		expect(error?.message).not.toContain('a@b.c');
+	});
+
+	it('rejects text that starts like no JSON, without quoting it', () => {
+		expect(() => parseServiceAccount('KEYMATERIAL')).toThrow(/^not valid JSON \(SyntaxError\)$/);
+	});
+
 	it('rejects JSON that is missing the fields it needs', () => {
 		expect(() => parseServiceAccount('{"project_id":"x"}')).toThrow(/client_email or private_key/);
 	});

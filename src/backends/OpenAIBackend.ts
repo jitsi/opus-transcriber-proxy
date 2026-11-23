@@ -25,7 +25,7 @@ import { config } from '../config';
 import { getTurnDetectionConfig } from '../utils';
 import { writeMetric } from '../metrics';
 import logger from '../logger';
-import { describeErrorFrame } from '../errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 
@@ -223,7 +223,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 		try {
 			parsedMessage = JSON.parse(data);
 		} catch (parseError) {
-			logger.error(`Failed to parse OpenAI message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse OpenAI message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, data)}`);
 			return;
 		}
 
@@ -274,7 +274,7 @@ export class OpenAIBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.error?.message || describeErrorFrame(parsedMessage));
+			this.onError?.('api_error', boundErrorText(parsedMessage.error?.message || describeErrorFrame(parsedMessage)));
 			this.close();
 		} else if (
 			parsedMessage.type !== 'input_audio_buffer.committed' &&

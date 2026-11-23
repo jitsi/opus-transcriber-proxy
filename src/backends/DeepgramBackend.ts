@@ -24,7 +24,7 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import logger from '../logger';
-import { describeErrorFrame } from '../errorFrame';
+import { boundErrorText, describeErrorFrame, describeParseFailure } from '../errorFrame';
 import type { TranscriptionBackend, BackendConfig, AudioFormat } from './TranscriptionBackend';
 import type { TranscriptionMessage } from '../transcriberproxy';
 import { writeMetric } from '../metrics';
@@ -287,9 +287,9 @@ export class DeepgramBackend implements TranscriptionBackend {
 
 	private async handleMessage(data: any): Promise<void> {
 		let parsedMessage;
+		let messageText: string | undefined;
 		try {
 			// Handle different message formats (string, ArrayBuffer, Buffer, Blob)
-			let messageText: string | undefined;
 			if (typeof data === 'string') {
 				messageText = data;
 			} else if (data instanceof ArrayBuffer) {
@@ -323,7 +323,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 			);
 			logger.debug(`Deepgram event for ${this.tag}: ${JSON.stringify(sanitized)}`);
 		} catch (parseError) {
-			logger.error(`Failed to parse Deepgram message as JSON for tag ${this.tag}:`, parseError);
+			logger.error(`Failed to parse Deepgram message as JSON for tag ${this.tag}: ${describeParseFailure(parseError, messageText)}`);
 			return;
 		}
 
@@ -343,7 +343,7 @@ export class DeepgramBackend implements TranscriptionBackend {
 				worker: 'opus-transcriber-proxy',
 				errorType: 'api_error',
 			});
-			this.onError?.('api_error', parsedMessage.message || describeErrorFrame(parsedMessage));
+			this.onError?.('api_error', boundErrorText(parsedMessage.message || describeErrorFrame(parsedMessage)));
 		} else {
 			logger.debug(`Unhandled Deepgram message type for ${this.tag}: ${parsedMessage.type}`);
 		}
