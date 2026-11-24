@@ -157,6 +157,12 @@ function parseAndValidateTags(value: string | undefined): string[] {
 
 export type Provider = 'openai' | 'openai_custom' | 'gemini' | 'deepgram' | 'xai' | 'mistral' | 'dummy';
 
+const DEFAULT_OPENAI_TEXT_TRANSLATION_URL = 'https://api.openai.com/v1/chat/completions';
+const openaiTextTranslationUrl = process.env.TEXT_TRANSLATION_OPENAI_URL || DEFAULT_OPENAI_TEXT_TRANSLATION_URL;
+const openaiTextTranslationModel = process.env.TEXT_TRANSLATION_OPENAI_MODEL;
+const useBuiltInOpenaiTextTranslationModel =
+	openaiTextTranslationUrl === DEFAULT_OPENAI_TEXT_TRANSLATION_URL && !openaiTextTranslationModel;
+
 export const config = {
 	// Provider priority list (comma-separated, first available is default)
 	// Example: "openai,gemini,deepgram" means try openai first, then gemini, then deepgram
@@ -403,11 +409,13 @@ export const config = {
 		// translation separately or to use a key with different scopes.
 		openai: {
 			apiKey: process.env.TEXT_TRANSLATION_OPENAI_API_KEY || process.env.OPENAI_API_KEY || '',
-			url: process.env.TEXT_TRANSLATION_OPENAI_URL || 'https://api.openai.com/v1/chat/completions',
-			// Measured against the real API with the production prompt: ~0.5-0.9s per translation and
-			// no reasoning tokens. gpt-5-nano spends ~750 reasoning tokens on the same prompt (~6s),
-			// so it is a poor default despite the lower per-token price.
-			model: process.env.TEXT_TRANSLATION_OPENAI_MODEL || 'gpt-4o-mini',
+			url: openaiTextTranslationUrl,
+			// Only migrate the built-in OpenAI configuration. A custom endpoint can still expose
+			// the legacy model ID, and an explicit model is an operator choice.
+			model: openaiTextTranslationModel || (useBuiltInOpenaiTextTranslationModel ? 'gpt-6-luna' : 'gpt-4o-mini'),
+			// Luna defaults to reasoning; disable it for the built-in model to avoid spending
+			// time and tokens on reasoning for short live subtitles.
+			defaultReasoningEffort: useBuiltInOpenaiTextTranslationModel ? 'none' : undefined,
 		},
 		xai: {
 			apiKey: process.env.TEXT_TRANSLATION_XAI_API_KEY || process.env.XAI_API_KEY || '',

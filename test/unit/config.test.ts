@@ -66,6 +66,94 @@ describe('config', () => {
 		process.env = { ...originalEnv };
 	});
 
+	describe('OpenAI text translation model defaults', () => {
+		beforeEach(() => {
+			vi.stubEnv('TEXT_TRANSLATION_OPENAI_URL', undefined);
+			vi.stubEnv('TEXT_TRANSLATION_OPENAI_MODEL', undefined);
+			vi.stubEnv('TEXT_TRANSLATION_REASONING_EFFORT', undefined);
+			vi.stubEnv('TEXT_TRANSLATION_OPENAI_API_KEY', 'test-key');
+		});
+
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
+		const directUrl = 'https://api.openai.com/v1/chat/completions';
+		const gatewayUrl = 'https://provider.example/v1/chat/completions';
+		it.each([
+			{
+				name: 'the first-party default',
+				url: undefined,
+				model: undefined,
+				effort: undefined,
+				expectedUrl: directUrl,
+				expectedModel: 'gpt-6-luna',
+				expectedEffort: 'none',
+			},
+			{
+				name: 'an explicit pin',
+				url: undefined,
+				model: 'gpt-4o-mini',
+				effort: undefined,
+				expectedUrl: directUrl,
+				expectedModel: 'gpt-4o-mini',
+				expectedEffort: undefined,
+			},
+			{
+				name: 'a custom endpoint',
+				url: gatewayUrl,
+				model: undefined,
+				effort: undefined,
+				expectedUrl: gatewayUrl,
+				expectedModel: 'gpt-4o-mini',
+				expectedEffort: undefined,
+			},
+			{
+				name: 'explicit tuning',
+				url: undefined,
+				model: undefined,
+				effort: 'low',
+				expectedUrl: directUrl,
+				expectedModel: 'gpt-6-luna',
+				expectedEffort: 'low',
+			},
+			{
+				name: 'a custom model on a custom endpoint',
+				url: gatewayUrl,
+				model: 'custom-model',
+				effort: undefined,
+				expectedUrl: gatewayUrl,
+				expectedModel: 'custom-model',
+				expectedEffort: undefined,
+			},
+		])('uses the expected request for $name', async ({ url, model, effort, expectedUrl, expectedModel, expectedEffort }) => {
+			vi.stubEnv('TEXT_TRANSLATION_OPENAI_URL', url);
+			vi.stubEnv('TEXT_TRANSLATION_OPENAI_MODEL', model);
+			vi.stubEnv('TEXT_TRANSLATION_REASONING_EFFORT', effort);
+			const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'bonjour' } }] })));
+			vi.stubGlobal('fetch', fetch);
+
+			const { createTextTranslator } = await import('../../src/textTranslate/factory');
+			await expect(
+				createTextTranslator('openai').translate({
+					turn: { speaker: 'Speaker 1', text: 'hello' },
+					targetLanguage: 'fr',
+					history: [],
+				}),
+			).resolves.toBe('bonjour');
+
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(fetch.mock.calls[0][0]).toBe(expectedUrl);
+			const payload = JSON.parse(fetch.mock.calls[0][1].body);
+			expect(payload.model).toBe(expectedModel);
+			if (expectedEffort === undefined) {
+				expect(payload).not.toHaveProperty('reasoning_effort');
+			} else {
+				expect(payload.reasoning_effort).toBe(expectedEffort);
+			}
+		});
+	});
+
 	describe('Environment Variable Parsing', () => {
 		it('should parse integer values with defaults', async () => {
 			vi.stubEnv('PORT', '3000');
